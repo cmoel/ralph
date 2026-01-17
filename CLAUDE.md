@@ -24,3 +24,7 @@ devbox run fmt      # format
 ## Specs
 
 Read `specs/README.md` before implementing any feature.
+
+## Testing
+
+See `TESTING.md` for testing philosophy.
