@@ -29,6 +29,12 @@ Spawn parallel subagents to:
 
 Select ONE spec (or one slice within a spec) to work on. The slice you find most interesting is fine.
 
+**Immediately after selecting a spec:**
+1. Mark its status as **In Progress** in `specs/README.md`
+2. Commit this change before doing any implementation work
+
+Only one spec should be In Progress at a time.
+
 ## 2. Understand
 
 Spawn a subagent to read and summarize the selected spec. Have it identify:
