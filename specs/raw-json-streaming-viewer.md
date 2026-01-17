@@ -31,7 +31,7 @@ User can watch streaming JSON output from the `claude` CLI in a scrollable TUI.
 - [x] Starting a new run prints a visual divider before appending new output
 
 ### Scrolling
-- [x] Output auto-scrolls to follow new content while running
+- [ ] Output auto-scrolls to follow new content while running
 - [x] User can scroll up with `k`, mouse wheel up
 - [x] User can scroll down with `j`, mouse wheel down
 - [x] `ctrl-u` scrolls up half page
@@ -49,7 +49,7 @@ User can watch streaming JSON output from the `claude` CLI in a scrollable TUI.
 
 ### Architecture
 - Async event loop with tokio
-- Ratatui 0.30 for TUI rendering
+- Ratatui 0.30 for TUI rendering with `unstable-rendered-line-info` feature
 - Crossterm for terminal manipulation and events
 - Enable mouse capture for scroll support
 
@@ -60,6 +60,12 @@ Auto-follow is not built into Ratatui. Implement manually:
 - When user scrolls up, set `is_auto_following` to false
 - When user scrolls to bottom, set `is_auto_following` to true
 
+**Critical: Account for line wrapping.** JSON lines are long and wrap to multiple visual lines.
+- Use `Paragraph::line_count(width)` to get actual visual line count after wrapping
+- `max_scroll = visual_line_count - viewport_height`
+- Do NOT use logical line count (items in Vec) for scroll calculations
+- Cache the pane width during render for scroll calculations
+
 ### Command Execution
 - Spawn command as async child process
 - Read stdout line by line, append each line to content buffer
@@ -68,7 +74,7 @@ Auto-follow is not built into Ratatui. Implement manually:
 ### Widgets
 - Use `Paragraph` widget with `.scroll((offset, 0))` for main pane
 - Use `Block` for title bar and footer areas
-- Calculate visible lines based on pane height for page scrolling
+- Use `Paragraph::line_count(width)` to calculate visual lines for scrolling
 
 ## Error Cases
 
