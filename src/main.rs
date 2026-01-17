@@ -456,9 +456,16 @@ impl App {
         self.current_line.clear();
 
         // Spawn the command using shell to handle the pipe
+        // Expand $HOME in Rust since it may not be set in the spawned shell
+        let home = std::env::var("HOME").unwrap_or_default();
+        let claude_path = format!("{}/.claude/local/claude", home);
+        let command = format!(
+            "cat PROMPT.md | {} --output-format=stream-json --verbose --print",
+            claude_path
+        );
         let child = Command::new("sh")
             .arg("-c")
-            .arg("cat PROMPT.md | $HOME/.claude/local/claude --output-format=stream-json --verbose --print")
+            .arg(&command)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn();
