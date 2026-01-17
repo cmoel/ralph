@@ -14,7 +14,7 @@ Single source of truth for specification status.
 | Spec | Status | Summary | Depends On |
 |------|--------|---------|------------|
 | [raw-json-streaming-viewer](raw-json-streaming-viewer.md) | Done | TUI displays streaming JSON from claude CLI | — |
-| [formatted-output-display](formatted-output-display.md) | Ready | Formatted text, tool use, and usage summary | raw-json-streaming-viewer |
+| [formatted-output-display](formatted-output-display.md) | In Progress | Formatted text, tool use, and usage summary (Slice 1 done) | raw-json-streaming-viewer |
 
 ## Notes
 

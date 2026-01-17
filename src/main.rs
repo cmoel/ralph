@@ -1,3 +1,6 @@
+mod events;
+
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -18,6 +21,9 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Terminal};
+use tracing::{debug, warn};
+
+use crate::events::{ClaudeEvent, ContentBlock, Delta};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppStatus {
@@ -48,6 +54,17 @@ enum OutputMessage {
     Line(String),
 }
 
+/// Tracks accumulated state for a content block being streamed.
+#[derive(Debug, Default)]
+struct ContentBlockState {
+    /// For text blocks: accumulated text content.
+    text: String,
+    /// For tool_use blocks: the tool name.
+    tool_name: Option<String>,
+    /// For tool_use blocks: accumulated JSON input string.
+    input_json: String,
+}
+
 struct App {
     status: AppStatus,
     output_lines: Vec<String>,
@@ -58,6 +75,10 @@ struct App {
     main_pane_width: u16,
     child_process: Option<Child>,
     output_receiver: Option<Receiver<OutputMessage>>,
+    /// Tracks content blocks by index during streaming.
+    content_blocks: HashMap<usize, ContentBlockState>,
+    /// Current line being accumulated (text that hasn't hit a newline yet).
+    current_line: String,
 }
 
 impl App {
@@ -72,6 +93,8 @@ impl App {
             main_pane_width: 0,
             child_process: None,
             output_receiver: None,
+            content_blocks: HashMap::new(),
+            current_line: String::new(),
         }
     }
 
@@ -79,7 +102,11 @@ impl App {
         if self.main_pane_width == 0 {
             return 0;
         }
-        let content: Vec<Line> = self.output_lines.iter().map(Line::raw).collect();
+        // Include both completed lines and the current partial line
+        let mut content: Vec<Line> = self.output_lines.iter().map(Line::raw).collect();
+        if !self.current_line.is_empty() {
+            content.push(Line::raw(&self.current_line));
+        }
         let paragraph = Paragraph::new(content)
             .block(Block::default().borders(Borders::ALL))
             .wrap(Wrap { trim: false });
@@ -118,6 +145,130 @@ impl App {
         }
     }
 
+    /// Appends text to the current line, flushing complete lines to output.
+    fn append_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            if ch == '\n' {
+                // Flush current line to output
+                let line = std::mem::take(&mut self.current_line);
+                self.add_line(line);
+            } else {
+                self.current_line.push(ch);
+            }
+        }
+        // Update display with partial line if auto-following
+        if self.is_auto_following {
+            self.scroll_to_bottom();
+        }
+    }
+
+    /// Flushes any remaining text in current_line to output.
+    fn flush_current_line(&mut self) {
+        if !self.current_line.is_empty() {
+            let line = std::mem::take(&mut self.current_line);
+            self.add_line(line);
+        }
+    }
+
+    /// Parses and processes a single NDJSON line.
+    fn process_line(&mut self, line: &str) {
+        // Skip empty lines
+        if line.trim().is_empty() {
+            return;
+        }
+
+        // Handle stderr lines (pass through as-is)
+        if line.starts_with("[stderr]") {
+            self.add_line(line.to_string());
+            return;
+        }
+
+        // Try to parse as JSON
+        match serde_json::from_str::<ClaudeEvent>(line) {
+            Ok(event) => self.process_event(event),
+            Err(e) => {
+                // Check if this is an unknown event type by trying to parse as generic JSON
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                    if let Some(event_type) = json.get("type").and_then(|v| v.as_str()) {
+                        warn!(event_type, "Unknown event type, skipping");
+                    } else {
+                        warn!(?e, "Failed to parse JSON line (no type field)");
+                    }
+                } else {
+                    warn!(?e, "Malformed JSON line, skipping");
+                }
+            }
+        }
+    }
+
+    /// Processes a parsed Claude event.
+    fn process_event(&mut self, event: ClaudeEvent) {
+        match event {
+            ClaudeEvent::Ping => {
+                // Silently ignore ping events
+                debug!("Received ping");
+            }
+            ClaudeEvent::System(sys) => {
+                debug!(?sys, "System event");
+            }
+            ClaudeEvent::Assistant(asst) => {
+                debug!(?asst, "Assistant event");
+            }
+            ClaudeEvent::MessageStart(msg) => {
+                debug!(?msg, "Message start");
+                // Clear content blocks for new message
+                self.content_blocks.clear();
+            }
+            ClaudeEvent::ContentBlockStart(block_start) => {
+                let index = block_start.index;
+                let mut state = ContentBlockState::default();
+
+                match block_start.content_block {
+                    ContentBlock::Text { text } => {
+                        state.text = text;
+                    }
+                    ContentBlock::ToolUse { name, .. } => {
+                        state.tool_name = Some(name);
+                    }
+                }
+
+                self.content_blocks.insert(index, state);
+                debug!(index, "Content block started");
+            }
+            ClaudeEvent::ContentBlockDelta(delta_event) => {
+                let index = delta_event.index;
+                let state = self.content_blocks.entry(index).or_default();
+
+                match delta_event.delta {
+                    Delta::TextDelta { text } => {
+                        state.text.push_str(&text);
+                        // Display text immediately as it streams
+                        self.append_text(&text);
+                    }
+                    Delta::InputJsonDelta { partial_json } => {
+                        state.input_json.push_str(&partial_json);
+                    }
+                }
+            }
+            ClaudeEvent::ContentBlockStop(stop) => {
+                debug!(index = stop.index, "Content block stopped");
+                // Content block finished - could process tool_use here in Slice 2
+            }
+            ClaudeEvent::MessageDelta(delta) => {
+                debug!(?delta, "Message delta");
+            }
+            ClaudeEvent::MessageStop => {
+                debug!("Message stopped");
+                // Flush any remaining text
+                self.flush_current_line();
+            }
+            ClaudeEvent::Result(result) => {
+                debug!(?result, "Result event");
+                // Will display usage summary in Slice 3
+            }
+        }
+    }
+
     fn start_command(&mut self) -> Result<()> {
         if self.status == AppStatus::Running {
             self.show_already_running_popup = true;
@@ -135,6 +286,10 @@ impl App {
         if !self.output_lines.is_empty() {
             self.add_line("─".repeat(40));
         }
+
+        // Reset streaming state for new command
+        self.content_blocks.clear();
+        self.current_line.clear();
 
         // Spawn the command using shell to handle the pipe
         let child = Command::new("sh")
@@ -219,7 +374,7 @@ impl App {
         // Process collected messages
         for msg in messages {
             let OutputMessage::Line(line) = msg;
-            self.add_line(line);
+            self.process_line(&line);
         }
 
         // Check if the channel disconnected (all senders dropped = readers finished)
@@ -362,7 +517,11 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     f.render_widget(title_bar, chunks[0]);
 
     // Main pane with scrolling
-    let content: Vec<Line> = app.output_lines.iter().map(Line::raw).collect();
+    // Include both completed lines and the current partial line
+    let mut content: Vec<Line> = app.output_lines.iter().map(Line::raw).collect();
+    if !app.current_line.is_empty() {
+        content.push(Line::raw(&app.current_line));
+    }
 
     let main_pane = Paragraph::new(content)
         .block(Block::default().borders(Borders::ALL))

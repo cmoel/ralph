@@ -23,13 +23,13 @@ Hello
 
 ### Acceptance Criteria
 
-- [ ] Parse NDJSON lines into typed Rust structs
-- [ ] Handle event types: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`
-- [ ] Handle Claude CLI wrapper events: `system` (init), `assistant`, `result`
-- [ ] Extract and display `text_delta` content as plain text
-- [ ] Accumulate text deltas into continuous output (no line break per delta)
-- [ ] Handle `ping` events silently (no display)
-- [ ] Unknown event types are logged but don't crash the app
+- [x] Parse NDJSON lines into typed Rust structs
+- [x] Handle event types: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`
+- [x] Handle Claude CLI wrapper events: `system` (init), `assistant`, `result`
+- [x] Extract and display `text_delta` content as plain text
+- [x] Accumulate text deltas into continuous output (no line break per delta)
+- [x] Handle `ping` events silently (no display)
+- [x] Unknown event types are logged but don't crash the app
 
 ### Technical Constraints
 
