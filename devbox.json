@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": [
+    "rustup@latest",
+    "libiconv@latest",
+    "rust-analyzer@latest"
+  ],
+  "shell": {
+    "init_hook": [
+      "if ! rustup show active-toolchain &>/dev/null; then",
+      "  echo 'Installing Rust stable toolchain...'",
+      "  rustup install stable",
+      "  rustup default stable",
+      "  rustup component add clippy rustfmt",
+      "fi"
+    ],
+    "scripts": {
+      "build": ["cargo build"],
+      "run": ["cargo run"],
+      "test": ["cargo test"],
+      "check": ["cargo clippy -- -D warnings"],
+      "fmt": ["cargo fmt"],
+      "fmt:check": ["cargo fmt -- --check"]
+    }
+  }
+}
