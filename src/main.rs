@@ -460,7 +460,7 @@ impl App {
         let home = std::env::var("HOME").unwrap_or_default();
         let claude_path = format!("{}/.claude/local/claude", home);
         let command = format!(
-            "cat PROMPT.md | {} --output-format=stream-json --verbose --print",
+            "cat PROMPT.md | {} --output-format=stream-json --verbose --print --include-partial-messages",
             claude_path
         );
         let child = Command::new("sh")
