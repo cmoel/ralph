@@ -16,8 +16,29 @@ pub enum ClaudeEvent {
     Assistant(AssistantEvent),
     #[serde(rename = "result")]
     Result(ResultEvent),
+    #[serde(rename = "stream_event")]
+    StreamEvent { event: StreamInnerEvent },
+    #[serde(rename = "user")]
+    #[allow(dead_code)]
+    User(UserEvent),
 
-    // Anthropic API streaming events
+    // Heartbeat
+    #[serde(rename = "ping")]
+    Ping,
+}
+
+/// User event (tool results, etc.) - we skip these.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct UserEvent {
+    #[serde(default)]
+    pub message: Option<serde_json::Value>,
+}
+
+/// Inner streaming events wrapped by stream_event.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum StreamInnerEvent {
     #[serde(rename = "message_start")]
     MessageStart(MessageStartEvent),
     #[serde(rename = "content_block_start")]
@@ -30,10 +51,6 @@ pub enum ClaudeEvent {
     MessageDelta(MessageDeltaEvent),
     #[serde(rename = "message_stop")]
     MessageStop,
-
-    // Heartbeat
-    #[serde(rename = "ping")]
-    Ping,
 }
 
 /// System initialization event from Claude CLI.

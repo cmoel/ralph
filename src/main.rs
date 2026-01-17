@@ -23,7 +23,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, warn};
 
-use crate::events::{ClaudeEvent, ContentBlock, Delta};
+use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppStatus {
@@ -368,12 +368,34 @@ impl App {
             ClaudeEvent::Assistant(asst) => {
                 debug!(?asst, "Assistant event");
             }
-            ClaudeEvent::MessageStart(msg) => {
+            ClaudeEvent::User(_) => {
+                // Skip user events (tool results, etc.)
+                debug!("User event (skipped)");
+            }
+            ClaudeEvent::StreamEvent { event: inner } => {
+                // Unwrap and process the inner streaming event
+                self.process_stream_event(inner);
+            }
+            ClaudeEvent::Result(result) => {
+                debug!(?result, "Result event");
+                // Display usage summary
+                let summary = format_usage_summary(&result);
+                for line in summary.lines() {
+                    self.add_line(line.to_string());
+                }
+            }
+        }
+    }
+
+    /// Processes inner streaming events (unwrapped from stream_event).
+    fn process_stream_event(&mut self, event: StreamInnerEvent) {
+        match event {
+            StreamInnerEvent::MessageStart(msg) => {
                 debug!(?msg, "Message start");
                 // Clear content blocks for new message
                 self.content_blocks.clear();
             }
-            ClaudeEvent::ContentBlockStart(block_start) => {
+            StreamInnerEvent::ContentBlockStart(block_start) => {
                 let index = block_start.index;
                 let mut state = ContentBlockState::default();
 
@@ -389,7 +411,7 @@ impl App {
                 self.content_blocks.insert(index, state);
                 debug!(index, "Content block started");
             }
-            ClaudeEvent::ContentBlockDelta(delta_event) => {
+            StreamInnerEvent::ContentBlockDelta(delta_event) => {
                 let index = delta_event.index;
                 let state = self.content_blocks.entry(index).or_default();
 
@@ -404,7 +426,7 @@ impl App {
                     }
                 }
             }
-            ClaudeEvent::ContentBlockStop(stop) => {
+            StreamInnerEvent::ContentBlockStop(stop) => {
                 debug!(index = stop.index, "Content block stopped");
                 // Process tool_use blocks when they complete
                 if let Some(state) = self.content_blocks.get(&stop.index)
@@ -414,21 +436,13 @@ impl App {
                     self.add_line(summary);
                 }
             }
-            ClaudeEvent::MessageDelta(delta) => {
+            StreamInnerEvent::MessageDelta(delta) => {
                 debug!(?delta, "Message delta");
             }
-            ClaudeEvent::MessageStop => {
+            StreamInnerEvent::MessageStop => {
                 debug!("Message stopped");
                 // Flush any remaining text
                 self.flush_current_line();
-            }
-            ClaudeEvent::Result(result) => {
-                debug!(?result, "Result event");
-                // Display usage summary
-                let summary = format_usage_summary(&result);
-                for line in summary.lines() {
-                    self.add_line(line.to_string());
-                }
             }
         }
     }
