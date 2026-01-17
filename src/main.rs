@@ -428,7 +428,9 @@ impl App {
             }
             StreamInnerEvent::ContentBlockStop(stop) => {
                 debug!(index = stop.index, "Content block stopped");
-                // Process tool_use blocks when they complete
+                // Always flush any pending text first to maintain order
+                self.flush_current_line();
+                // Then process tool_use blocks
                 if let Some(state) = self.content_blocks.get(&stop.index)
                     && let Some(tool_name) = &state.tool_name
                 {
