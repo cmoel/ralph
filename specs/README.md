@@ -15,6 +15,8 @@ Single source of truth for specification status.
 |------|--------|---------|------------|
 | [raw-json-streaming-viewer](raw-json-streaming-viewer.md) | Done | TUI displays streaming JSON from claude CLI | — |
 | [formatted-output-display](formatted-output-display.md) | Done | Formatted text, tool use, and usage summary | raw-json-streaming-viewer |
+| [logging](logging.md) | Ready | Structured file logging with rotation and retention | — |
+| [status-panel](status-panel.md) | Ready | Visual status panel replacing title bar | — (slice 2: logging feature) |
 
 ## Notes
 
