@@ -129,7 +129,7 @@ impl App {
         // Spawn the command using shell to handle the pipe
         let child = Command::new("sh")
             .arg("-c")
-            .arg("cat PROMPT.md | claude --output-format=stream-json --verbose --print")
+            .arg("cat PROMPT.md | $HOME/.claude/local/claude --output-format=stream-json --verbose --print")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn();
