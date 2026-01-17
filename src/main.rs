@@ -55,6 +55,7 @@ struct App {
     is_auto_following: bool,
     show_already_running_popup: bool,
     main_pane_height: u16,
+    main_pane_width: u16,
     child_process: Option<Child>,
     output_receiver: Option<Receiver<OutputMessage>>,
 }
@@ -68,17 +69,26 @@ impl App {
             is_auto_following: true,
             show_already_running_popup: false,
             main_pane_height: 0,
+            main_pane_width: 0,
             child_process: None,
             output_receiver: None,
         }
     }
 
-    fn total_lines(&self) -> u16 {
-        self.output_lines.len() as u16
+    fn visual_line_count(&self) -> u16 {
+        if self.main_pane_width == 0 {
+            return 0;
+        }
+        let content: Vec<Line> = self.output_lines.iter().map(Line::raw).collect();
+        let paragraph = Paragraph::new(content)
+            .block(Block::default().borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        paragraph.line_count(self.main_pane_width) as u16
     }
 
     fn max_scroll(&self) -> u16 {
-        self.total_lines().saturating_sub(self.main_pane_height)
+        self.visual_line_count()
+            .saturating_sub(self.main_pane_height)
     }
 
     fn scroll_up(&mut self, amount: u16) {
@@ -339,8 +349,9 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
-    // Update main pane height for scroll calculations
+    // Update main pane dimensions for scroll calculations
     app.main_pane_height = chunks[1].height.saturating_sub(2); // Account for borders
+    app.main_pane_width = chunks[1].width;
 
     // Title bar
     let title_bar = Paragraph::new(Line::from(vec![

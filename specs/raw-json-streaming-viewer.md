@@ -31,7 +31,7 @@ User can watch streaming JSON output from the `claude` CLI in a scrollable TUI.
 - [x] Starting a new run prints a visual divider before appending new output
 
 ### Scrolling
-- [ ] Output auto-scrolls to follow new content while running
+- [x] Output auto-scrolls to follow new content while running
 - [x] User can scroll up with `k`, mouse wheel up
 - [x] User can scroll down with `j`, mouse wheel down
 - [x] `ctrl-u` scrolls up half page
