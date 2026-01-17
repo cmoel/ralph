@@ -17,18 +17,18 @@ If logging initialization fails, Ralph continues to function—the error is stor
 
 ### Acceptance Criteria
 
-- [ ] `directories` crate added to Cargo.toml
-- [ ] Tracing subscriber initialized in `main()` with rolling daily file appender
-- [ ] Non-blocking writes via `tracing_appender::non_blocking`
-- [ ] `WorkerGuard` held for application lifetime (ensures flush on shutdown)
-- [ ] Session ID (6 random hex chars) generated at startup
-- [ ] Session ID included in all log entries via tracing span or fields
-- [ ] `session_start` logged at INFO with session ID
-- [ ] `session_end` logged at INFO with session ID and duration
-- [ ] Log format: `TIMESTAMP LEVEL target session_id=X message key=value...`
-- [ ] Initialization errors stored in `App` state (for future status panel)
-- [ ] Initialization errors printed to stderr as fallback
-- [ ] `RUST_LOG` environment variable controls log level filtering
+- [x] `directories` crate added to Cargo.toml
+- [x] Tracing subscriber initialized in `main()` with rolling daily file appender
+- [x] Non-blocking writes via `tracing_appender::non_blocking`
+- [x] `WorkerGuard` held for application lifetime (ensures flush on shutdown)
+- [x] Session ID (6 random hex chars) generated at startup
+- [x] Session ID included in all log entries via tracing span or fields
+- [x] `session_start` logged at INFO with session ID
+- [x] `session_end` logged at INFO with session ID and duration
+- [x] Log format: `TIMESTAMP LEVEL target session_id=X message key=value...`
+- [x] Initialization errors stored in `App` state (for future status panel)
+- [x] Initialization errors printed to stderr as fallback
+- [x] `RUST_LOG` environment variable controls log level filtering
 
 ### Technical Constraints
 

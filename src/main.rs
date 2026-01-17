@@ -1,7 +1,9 @@
 mod events;
+mod logging;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -233,10 +235,23 @@ struct App {
     content_blocks: HashMap<usize, ContentBlockState>,
     /// Current line being accumulated (text that hasn't hit a newline yet).
     current_line: String,
+    /// Session ID for this Ralph invocation.
+    #[allow(dead_code)] // Used by future status-panel spec
+    session_id: Option<String>,
+    /// Directory where logs are written.
+    #[allow(dead_code)] // Used by future status-panel spec
+    log_directory: Option<PathBuf>,
+    /// Error that occurred during logging initialization.
+    #[allow(dead_code)] // Used by future status-panel spec
+    logging_error: Option<String>,
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(
+        session_id: Option<String>,
+        log_directory: Option<PathBuf>,
+        logging_error: Option<String>,
+    ) -> Self {
         Self {
             status: AppStatus::Stopped,
             output_lines: Vec::new(),
@@ -249,6 +264,9 @@ impl App {
             output_receiver: None,
             content_blocks: HashMap::new(),
             current_line: String::new(),
+            session_id,
+            log_directory,
+            logging_error,
         }
     }
 
@@ -591,23 +609,57 @@ impl App {
 }
 
 fn main() -> Result<()> {
+    use std::time::Instant;
+    use tracing::info;
+
+    let start_time = Instant::now();
+
+    // Initialize logging before anything else
+    let (session_id, log_directory, logging_error, _guard) = match logging::init() {
+        Ok(ctx) => (
+            Some(ctx.session_id),
+            Some(ctx.log_directory),
+            None,
+            Some(ctx._guard),
+        ),
+        Err(e) => {
+            eprintln!("Warning: Failed to initialize logging: {}", e);
+            (None, None, Some(e.message), None)
+        }
+    };
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
 
-    let result = run_app(terminal);
+    let result = run_app(terminal, session_id.clone(), log_directory, logging_error);
 
     // Restore terminal
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
+    // Log session end
+    if let Some(sid) = session_id {
+        let duration = start_time.elapsed();
+        info!(
+            session_id = %sid,
+            duration_secs = duration.as_secs_f64(),
+            "session_end"
+        );
+    }
+
     result
 }
 
-fn run_app(mut terminal: DefaultTerminal) -> Result<()> {
-    let mut app = App::new();
+fn run_app(
+    mut terminal: DefaultTerminal,
+    session_id: Option<String>,
+    log_directory: Option<PathBuf>,
+    logging_error: Option<String>,
+) -> Result<()> {
+    let mut app = App::new(session_id, log_directory, logging_error);
 
     loop {
         // Poll for output from child process
