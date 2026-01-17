@@ -18,32 +18,32 @@ User can watch streaming JSON output from the `claude` CLI in a scrollable TUI.
 ## Acceptance Criteria
 
 ### Layout
-- [ ] Title bar shows "RALPH" on left, status on right
-- [ ] Status displays "STOPPED" when idle, "RUNNING" when command is active
-- [ ] Main pane fills available space between title bar and footer
-- [ ] Footer shows keybindings: `[s] Start  [q] Quit`
+- [x] Title bar shows "RALPH" on left, status on right
+- [x] Status displays "STOPPED" when idle, "RUNNING" when command is active
+- [x] Main pane fills available space between title bar and footer
+- [x] Footer shows keybindings: `[s] Start  [q] Quit`
 
 ### Command Execution
-- [ ] Pressing `s` when idle runs `cat PROMPT.md | claude --output-format=stream-json --verbose --print`
-- [ ] App state transitions from idle to running when command starts
-- [ ] App state transitions from running to idle when command exits
-- [ ] Each JSON line from stdout appears as a new line in main pane
-- [ ] Starting a new run prints a visual divider before appending new output
+- [x] Pressing `s` when idle runs `cat PROMPT.md | claude --output-format=stream-json --verbose --print`
+- [x] App state transitions from idle to running when command starts
+- [x] App state transitions from running to idle when command exits
+- [x] Each JSON line from stdout appears as a new line in main pane
+- [x] Starting a new run prints a visual divider before appending new output
 
 ### Scrolling
-- [ ] Output auto-scrolls to follow new content while running
-- [ ] User can scroll up with `k`, mouse wheel up
-- [ ] User can scroll down with `j`, mouse wheel down
-- [ ] `ctrl-u` scrolls up half page
-- [ ] `ctrl-d` scrolls down half page
-- [ ] `ctrl-b` scrolls up full page
-- [ ] `ctrl-f` scrolls down full page
-- [ ] Scrolling up pauses auto-scroll
-- [ ] Scrolling to bottom resumes auto-scroll
+- [x] Output auto-scrolls to follow new content while running
+- [x] User can scroll up with `k`, mouse wheel up
+- [x] User can scroll down with `j`, mouse wheel down
+- [x] `ctrl-u` scrolls up half page
+- [x] `ctrl-d` scrolls down half page
+- [x] `ctrl-b` scrolls up full page
+- [x] `ctrl-f` scrolls down full page
+- [x] Scrolling up pauses auto-scroll
+- [x] Scrolling to bottom resumes auto-scroll
 
 ### Quit
-- [ ] Pressing `q` exits the application
-- [ ] If command is running when `q` is pressed, terminate the command before exiting
+- [x] Pressing `q` exits the application
+- [x] If command is running when `q` is pressed, terminate the command before exiting
 
 ## Technical Constraints
 
