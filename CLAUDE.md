@@ -15,6 +15,13 @@ devbox run check    # clippy (must pass before commit)
 devbox run fmt      # format
 ```
 
+## Deleting Files
+
+Never use `rm`. To delete a file:
+1. Commit any pending changes first
+2. Use `git rm <file>` to remove and stage the deletion
+3. Commit the deletion
+
 ## Architecture
 
 - Async event loop with tokio
