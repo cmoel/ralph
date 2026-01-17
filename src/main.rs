@@ -155,6 +155,58 @@ fn format_unknown_tool(input: &serde_json::Value) -> String {
     truncate_str(&json_str, TOOL_INPUT_MAX_LEN)
 }
 
+/// Formats a number with thousands separators (e.g., 7371 -> "7,371").
+fn format_with_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let chars: Vec<char> = s.chars().collect();
+    let mut result = String::new();
+
+    for (i, c) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(*c);
+    }
+    result
+}
+
+/// Formats the usage summary from a Result event.
+///
+/// Returns a two-line string: a separator line followed by the summary.
+/// Example: "───────────────────────────────────\nCost: $0.05 | Tokens: 7,371 in / 9 out | Duration: 2.3s"
+fn format_usage_summary(result: &crate::events::ResultEvent) -> String {
+    let mut parts = Vec::new();
+
+    // Format cost
+    if let Some(cost) = result.total_cost_usd {
+        parts.push(format!("Cost: ${:.2}", cost));
+    }
+
+    // Format tokens
+    if let Some(usage) = &result.usage {
+        let input = usage
+            .input_tokens
+            .map(format_with_thousands)
+            .unwrap_or_else(|| "?".to_string());
+        let output = usage
+            .output_tokens
+            .map(format_with_thousands)
+            .unwrap_or_else(|| "?".to_string());
+        parts.push(format!("Tokens: {} in / {} out", input, output));
+    }
+
+    // Format duration
+    if let Some(duration_ms) = result.duration_ms {
+        let seconds = duration_ms as f64 / 1000.0;
+        parts.push(format!("Duration: {:.1}s", seconds));
+    }
+
+    // Build the summary line
+    let separator = "─".repeat(35);
+    let summary = parts.join(" | ");
+    format!("{}\n{}", separator, summary)
+}
+
 /// Truncates a string to the given maximum length, appending "..." if truncated.
 fn truncate_str(s: &str, max_len: usize) -> String {
     // Replace newlines with spaces for single-line display
@@ -372,7 +424,11 @@ impl App {
             }
             ClaudeEvent::Result(result) => {
                 debug!(?result, "Result event");
-                // Will display usage summary in Slice 3
+                // Display usage summary
+                let summary = format_usage_summary(&result);
+                for line in summary.lines() {
+                    self.add_line(line.to_string());
+                }
             }
         }
     }

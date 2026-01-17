@@ -96,13 +96,13 @@ Cost: $0.05 | Tokens: 7,371 in / 9 out | Duration: 2.3s
 
 ### Acceptance Criteria
 
-- [ ] Parse `result` event from Claude CLI wrapper
-- [ ] Extract `total_cost_usd`, `duration_ms`, and `usage` fields
-- [ ] Display formatted summary after command completes
-- [ ] Format cost with 2 decimal places and $ prefix
-- [ ] Format token counts with thousands separators
-- [ ] Format duration in seconds with 1 decimal place
-- [ ] Visual separator before summary (horizontal line)
+- [x] Parse `result` event from Claude CLI wrapper
+- [x] Extract `total_cost_usd`, `duration_ms`, and `usage` fields
+- [x] Display formatted summary after command completes
+- [x] Format cost with 2 decimal places and $ prefix
+- [x] Format token counts with thousands separators
+- [x] Format duration in seconds with 1 decimal place
+- [x] Visual separator before summary (horizontal line)
 
 ### Technical Constraints
 
