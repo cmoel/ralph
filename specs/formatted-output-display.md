@@ -60,13 +60,13 @@ Example display:
 
 ### Acceptance Criteria
 
-- [ ] Parse `tool_use` content blocks
-- [ ] Display tool name when `content_block_start` has type `tool_use`
-- [ ] Accumulate `input_json_delta` events to build complete input
-- [ ] Parse tool input JSON at `content_block_stop`
-- [ ] Display concise summary of tool input (not full JSON)
-- [ ] Handle common tools: Bash (show command), Read (show path), Edit (show path), Write (show path), Grep (show pattern), Glob (show pattern)
-- [ ] Fallback for unknown tools: show tool name + truncated input
+- [x] Parse `tool_use` content blocks
+- [x] Display tool name when `content_block_start` has type `tool_use`
+- [x] Accumulate `input_json_delta` events to build complete input
+- [x] Parse tool input JSON at `content_block_stop`
+- [x] Display concise summary of tool input (not full JSON)
+- [x] Handle common tools: Bash (show command), Read (show path), Edit (show path), Write (show path), Grep (show pattern), Glob (show pattern)
+- [x] Fallback for unknown tools: show tool name + truncated input
 
 ### Technical Constraints
 

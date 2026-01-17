@@ -65,6 +65,108 @@ struct ContentBlockState {
     input_json: String,
 }
 
+/// Maximum length for truncated tool input display.
+const TOOL_INPUT_MAX_LEN: usize = 60;
+
+/// Formats a tool invocation for display.
+///
+/// Returns a formatted string like `[Tool: Bash] git status` for known tools,
+/// or a truncated JSON representation for unknown tools.
+fn format_tool_summary(tool_name: &str, input_json: &str) -> String {
+    let prefix = format!("[Tool: {}]", tool_name);
+
+    // Try to parse the accumulated JSON
+    let input: serde_json::Value = match serde_json::from_str(input_json) {
+        Ok(v) => v,
+        Err(_) => return format!("{} (input parsing failed)", prefix),
+    };
+
+    // Format based on tool type
+    let summary = match tool_name {
+        "Bash" => format_bash_tool(&input),
+        "Read" => format_read_tool(&input),
+        "Edit" => format_edit_tool(&input),
+        "Write" => format_write_tool(&input),
+        "Grep" => format_grep_tool(&input),
+        "Glob" => format_glob_tool(&input),
+        _ => format_unknown_tool(&input),
+    };
+
+    format!("{} {}", prefix, summary)
+}
+
+fn format_bash_tool(input: &serde_json::Value) -> String {
+    input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(|cmd| truncate_str(cmd, TOOL_INPUT_MAX_LEN))
+        .unwrap_or_else(|| "(no command)".to_string())
+}
+
+fn format_read_tool(input: &serde_json::Value) -> String {
+    input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
+        .unwrap_or_else(|| "(no path)".to_string())
+}
+
+fn format_edit_tool(input: &serde_json::Value) -> String {
+    let path = input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(no path)");
+
+    // Try to show context about what's being edited
+    if let Some(old_str) = input.get("old_string").and_then(|v| v.as_str()) {
+        let preview = truncate_str(old_str, 30);
+        format!("{} \"{}\"", truncate_str(path, 40), preview)
+    } else {
+        truncate_str(path, TOOL_INPUT_MAX_LEN)
+    }
+}
+
+fn format_write_tool(input: &serde_json::Value) -> String {
+    input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
+        .unwrap_or_else(|| "(no path)".to_string())
+}
+
+fn format_grep_tool(input: &serde_json::Value) -> String {
+    input
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
+        .unwrap_or_else(|| "(no pattern)".to_string())
+}
+
+fn format_glob_tool(input: &serde_json::Value) -> String {
+    input
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
+        .unwrap_or_else(|| "(no pattern)".to_string())
+}
+
+fn format_unknown_tool(input: &serde_json::Value) -> String {
+    let json_str = input.to_string();
+    truncate_str(&json_str, TOOL_INPUT_MAX_LEN)
+}
+
+/// Truncates a string to the given maximum length, appending "..." if truncated.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    // Replace newlines with spaces for single-line display
+    let single_line: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+
+    if single_line.len() <= max_len {
+        single_line
+    } else {
+        format!("{}...", &single_line[..max_len.saturating_sub(3)])
+    }
+}
+
 struct App {
     status: AppStatus,
     output_lines: Vec<String>,
@@ -252,7 +354,13 @@ impl App {
             }
             ClaudeEvent::ContentBlockStop(stop) => {
                 debug!(index = stop.index, "Content block stopped");
-                // Content block finished - could process tool_use here in Slice 2
+                // Process tool_use blocks when they complete
+                if let Some(state) = self.content_blocks.get(&stop.index)
+                    && let Some(tool_name) = &state.tool_name
+                {
+                    let summary = format_tool_summary(tool_name, &state.input_json);
+                    self.add_line(summary);
+                }
             }
             ClaudeEvent::MessageDelta(delta) => {
                 debug!(?delta, "Message delta");
