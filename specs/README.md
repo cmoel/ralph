@@ -18,7 +18,7 @@ Single source of truth for specification status.
 | [logging](logging.md) | Done | Structured file logging with rotation and retention | — |
 | [status-panel](status-panel.md) | Done | Visual status panel replacing title bar | — |
 | [current-spec-detection](current-spec-detection.md) | Done | Display active spec by polling README | status-panel, logging |
-| [configuration](configuration.md) | In Progress | TOML config file with auto-reload (Slices 1-2 done) | — (slice 3: status-panel, slice 4: logging) |
+| [configuration](configuration.md) | Ready | TOML config file with auto-reload (Slices 1-3 done) | — (slice 4: logging) |
 
 ## Notes
 

@@ -134,12 +134,12 @@ If the config is invalid, the status panel shows a warning.
 
 ### Acceptance Criteria
 
-- [ ] Show config directory path in status panel (abbreviated with `~`)
-- [ ] Poll config file mtime periodically (every 2 seconds)
-- [ ] Reload config when mtime changes
-- [ ] Show "✓ Reloaded" indicator briefly after reload (fade after 3 seconds)
-- [ ] Show warning icon and message if config is invalid
-- [ ] Reload failures logged at WARN, don't crash
+- [x] Show config directory path in status panel (abbreviated with `~`)
+- [x] Poll config file mtime periodically (every 2 seconds)
+- [x] Reload config when mtime changes
+- [x] Show "✓ Reloaded" indicator briefly after reload (fade after 3 seconds)
+- [x] Show warning icon and message if config is invalid
+- [x] Reload failures logged at WARN, don't crash
 
 ### Technical Constraints
 

@@ -2,7 +2,7 @@ mod config;
 mod events;
 mod logging;
 
-use crate::config::{Config, ConfigLoadStatus, LoadedConfig, ensure_config_exists};
+use crate::config::{Config, ConfigLoadStatus, LoadedConfig, ensure_config_exists, reload_config};
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -38,6 +38,11 @@ fn contract_path(path: &std::path::Path) -> String {
         return format!("~/{}", suffix.display());
     }
     path.display().to_string()
+}
+
+/// Get the modification time of a file, or None if it can't be determined.
+fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,11 +264,17 @@ struct App {
     /// Loaded configuration.
     config: Config,
     /// Path to the configuration file.
-    #[allow(dead_code)] // Used by future status-panel spec
     config_path: PathBuf,
     /// Status of config loading.
-    #[allow(dead_code)] // Used by future status-panel spec
     config_load_status: ConfigLoadStatus,
+    /// Last known mtime of the config file for change detection.
+    config_mtime: Option<SystemTime>,
+    /// Last time we polled for config changes.
+    last_config_poll: Instant,
+    /// When config was last successfully reloaded (for "Reloaded" indicator fade).
+    config_reloaded_at: Option<Instant>,
+    /// Error message if config reload failed (invalid TOML, etc.).
+    config_reload_error: Option<String>,
     /// Name of the currently active spec (from specs/README.md).
     current_spec: Option<String>,
     /// Last time we polled for the current spec.
@@ -296,8 +307,13 @@ impl App {
             log_directory,
             logging_error,
             config: loaded_config.config,
-            config_path: loaded_config.config_path,
+            config_path: loaded_config.config_path.clone(),
             config_load_status: loaded_config.status,
+            config_mtime: get_file_mtime(&loaded_config.config_path),
+            // Initialize to "long ago" so we poll immediately on start
+            last_config_poll: Instant::now() - Duration::from_secs(10),
+            config_reloaded_at: None,
+            config_reload_error: None,
             current_spec: None,
             // Initialize to "long ago" so we poll immediately on start
             last_spec_poll: Instant::now() - Duration::from_secs(10),
@@ -703,6 +719,49 @@ impl App {
         self.last_spec_poll = Instant::now();
         self.current_spec = detect_current_spec(&self.config.specs_path());
     }
+
+    fn poll_config(&mut self) {
+        // Throttle: poll every 2 seconds
+        if self.last_config_poll.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+
+        self.last_config_poll = Instant::now();
+
+        // Get current mtime
+        let current_mtime = match get_file_mtime(&self.config_path) {
+            Some(mtime) => mtime,
+            None => {
+                debug!(path = ?self.config_path, "config_mtime_check_failed");
+                return;
+            }
+        };
+
+        // Check if mtime changed
+        let mtime_changed = match self.config_mtime {
+            Some(prev_mtime) => current_mtime != prev_mtime,
+            None => true, // No previous mtime, treat as changed
+        };
+
+        if !mtime_changed {
+            return;
+        }
+
+        // Mtime changed, attempt to reload config
+        self.config_mtime = Some(current_mtime);
+
+        match reload_config(&self.config_path) {
+            Ok(new_config) => {
+                self.config = new_config;
+                self.config_reload_error = None;
+                self.config_reloaded_at = Some(Instant::now());
+            }
+            Err(error) => {
+                // Keep previous config, show error
+                self.config_reload_error = Some(error);
+            }
+        }
+    }
 }
 
 /// Get the editor command to use for editing config.
@@ -895,6 +954,9 @@ fn run_app(
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
 
+        // Poll for config file changes (throttled to every 2 seconds)
+        app.poll_config();
+
         // Draw UI
         terminal.draw(|f| draw_ui(f, &mut app))?;
 
@@ -1042,6 +1104,45 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     } else {
         // Logging not initialized yet
         status_spans.push(Span::raw("Logs: ---"));
+    }
+
+    // Add config info (directory or error, with reload indicator)
+    status_spans.push(Span::raw("    "));
+    // Determine if there's a config error (reload error takes precedence over initial load error)
+    let config_error: Option<&str> =
+        app.config_reload_error
+            .as_deref()
+            .or(match &app.config_load_status {
+                ConfigLoadStatus::Error(e) => Some(e.as_str()),
+                _ => None,
+            });
+    if let Some(error) = config_error {
+        // Config invalid - show warning
+        status_spans.push(Span::styled("⚠ ", Style::default().fg(Color::Yellow)));
+        status_spans.push(Span::styled(error, Style::default().fg(Color::Yellow)));
+    } else {
+        // Config valid - show directory
+        status_spans.push(Span::raw("Config: "));
+        let config_dir = app
+            .config_path
+            .parent()
+            .map(contract_path)
+            .unwrap_or_default();
+        status_spans.push(Span::styled(
+            config_dir,
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+
+        // Show "✓ Reloaded" indicator if recently reloaded (fades after 3 seconds)
+        if let Some(reloaded_at) = app.config_reloaded_at
+            && reloaded_at.elapsed() < Duration::from_secs(3)
+        {
+            status_spans.push(Span::raw("  "));
+            status_spans.push(Span::styled(
+                "✓ Reloaded",
+                Style::default().fg(Color::Green),
+            ));
+        }
     }
 
     // Show transient error (e.g., editor spawn failure)

@@ -14,7 +14,6 @@ pub enum ConfigLoadStatus {
     /// Created default config file (first run)
     Created,
     /// Error occurred during loading, using defaults
-    #[allow(dead_code)] // Used by future status-panel spec
     Error(String),
 }
 
@@ -169,6 +168,25 @@ pub fn load_config() -> LoadedConfig {
         config_path,
         status,
     }
+}
+
+/// Reload configuration from the given path.
+/// Returns Ok(Config) if reload succeeded, or Err(String) with error message.
+/// On error, the caller should keep the previous config.
+pub fn reload_config(config_path: &PathBuf) -> Result<Config, String> {
+    let contents = fs::read_to_string(config_path).map_err(|e| {
+        warn!(path = ?config_path, error = %e, "config_reload_read_failed");
+        format!("Failed to read config: {}", e)
+    })?;
+
+    let config = toml::from_str::<Config>(&contents).map_err(|e| {
+        warn!(path = ?config_path, error = %e, "config_reload_parse_failed");
+        format!("Invalid config: {}", e)
+    })?;
+
+    let config = apply_env_overrides(config);
+    info!(path = ?config_path, "config_reloaded");
+    Ok(config)
 }
 
 /// Load config from file, or create default if not exists
