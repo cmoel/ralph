@@ -19,9 +19,9 @@ use crossterm::terminal::{
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, warn};
 
@@ -737,7 +737,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Title bar
+            Constraint::Length(3), // Status panel (border + 1 content row + border)
             Constraint::Min(1),    // Main pane
             Constraint::Length(1), // Footer
         ])
@@ -747,13 +747,23 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     app.main_pane_height = chunks[1].height.saturating_sub(2); // Account for borders
     app.main_pane_width = chunks[1].width;
 
-    // Title bar
-    let title_bar = Paragraph::new(Line::from(vec![
-        Span::styled("RALPH", Style::default().fg(Color::Cyan)),
-        Span::raw("  "),
-        Span::styled(app.status.label(), Style::default().fg(app.status.color())),
-    ]));
-    f.render_widget(title_bar, chunks[0]);
+    // Status panel
+    let status_line = Line::from(vec![
+        Span::styled("● ", Style::default().fg(app.status.color())),
+        Span::styled(
+            app.status.label(),
+            Style::default()
+                .fg(app.status.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    let status_panel = Paragraph::new(status_line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+    f.render_widget(status_panel, chunks[0]);
 
     // Main pane with scrolling
     // Include both completed lines and the current partial line

@@ -24,14 +24,14 @@ The title bar is replaced with a bordered status panel. The panel uses ratatui's
 
 ### Acceptance Criteria
 
-- [ ] Title bar removed from layout
-- [ ] Status panel added with `BorderType::Rounded`
-- [ ] Border color is cyan (`Color::Cyan`)
-- [ ] Status displayed with colored dot indicator (●)
-- [ ] Status text is bold
-- [ ] Color coding: Running=green, Stopped=yellow, Error=red
-- [ ] Panel uses `Constraint::Length(3)` for height (borders + content)
-- [ ] Main pane height calculation updated to account for new panel size
+- [x] Title bar removed from layout
+- [x] Status panel added with `BorderType::Rounded`
+- [x] Border color is cyan (`Color::Cyan`)
+- [x] Status displayed with colored dot indicator (●)
+- [x] Status text is bold
+- [x] Color coding: Running=green, Stopped=yellow, Error=red
+- [x] Panel uses `Constraint::Length(3)` for height (borders + content)
+- [x] Main pane height calculation updated to account for new panel size
 
 ### Technical Constraints
 
