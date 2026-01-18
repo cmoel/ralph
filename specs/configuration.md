@@ -81,12 +81,12 @@ Footer updates to show: `[s] Start  [c] Config  [q] Quit`
 
 ### Acceptance Criteria
 
-- [ ] Press `c` opens config file in `$EDITOR` (or `$VISUAL`, fallback to `vi`)
-- [ ] Ralph suspends TUI (disable raw mode, leave alternate screen)
-- [ ] Spawn editor process and wait for exit
-- [ ] Restore TUI after editor closes
-- [ ] Footer shows `[c] Config` hint
-- [ ] `c` key only works when `AppStatus` is `Stopped` (not while running)
+- [x] Press `c` opens config file in `$EDITOR` (or `$VISUAL`, fallback to `vi`)
+- [x] Ralph suspends TUI (disable raw mode, leave alternate screen)
+- [x] Spawn editor process and wait for exit
+- [x] Restore TUI after editor closes
+- [x] Footer shows `[c] Config` hint
+- [x] `c` key only works when `AppStatus` is `Stopped` (not while running)
 
 ### Technical Constraints
 

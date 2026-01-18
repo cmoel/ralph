@@ -2,7 +2,7 @@ mod config;
 mod events;
 mod logging;
 
-use crate::config::{Config, ConfigLoadStatus, LoadedConfig};
+use crate::config::{Config, ConfigLoadStatus, LoadedConfig, ensure_config_exists};
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
@@ -268,6 +268,8 @@ struct App {
     current_spec: Option<String>,
     /// Last time we polled for the current spec.
     last_spec_poll: Instant,
+    /// Transient error message to display in the status panel (e.g., editor spawn failure).
+    status_error: Option<String>,
 }
 
 impl App {
@@ -299,6 +301,7 @@ impl App {
             current_spec: None,
             // Initialize to "long ago" so we poll immediately on start
             last_spec_poll: Instant::now() - Duration::from_secs(10),
+            status_error: None,
         }
     }
 
@@ -702,6 +705,79 @@ impl App {
     }
 }
 
+/// Get the editor command to use for editing config.
+/// Checks $VISUAL first, then $EDITOR, falls back to "vi".
+fn get_editor() -> String {
+    std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string())
+}
+
+/// Result of attempting to open the config in an editor.
+#[derive(Debug)]
+enum EditConfigResult {
+    /// Successfully opened and closed the editor
+    Success,
+    /// Could not determine config path
+    NoConfigPath,
+    /// Editor failed to spawn
+    SpawnFailed(String),
+    /// Editor exited with non-zero status
+    EditorError(i32),
+}
+
+/// Opens the config file in the user's preferred editor.
+/// Suspends the terminal, runs the editor, then restores the terminal.
+fn open_config_in_editor(terminal: &mut DefaultTerminal) -> EditConfigResult {
+    let config_path = match ensure_config_exists() {
+        Some(path) => path,
+        None => return EditConfigResult::NoConfigPath,
+    };
+
+    let editor = get_editor();
+    debug!(editor = %editor, config_path = %config_path.display(), "opening_config_editor");
+
+    // Suspend the TUI
+    if let Err(e) = disable_raw_mode() {
+        warn!(error = %e, "failed to disable raw mode");
+    }
+    if let Err(e) = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture) {
+        warn!(error = %e, "failed to leave alternate screen");
+    }
+
+    // Spawn the editor and wait for it to complete
+    let result = Command::new(&editor).arg(&config_path).status();
+
+    // Restore the TUI
+    if let Err(e) = enable_raw_mode() {
+        warn!(error = %e, "failed to re-enable raw mode");
+    }
+    if let Err(e) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture) {
+        warn!(error = %e, "failed to re-enter alternate screen");
+    }
+    // Force a full redraw
+    if let Err(e) = terminal.clear() {
+        warn!(error = %e, "failed to clear terminal after editor");
+    }
+
+    match result {
+        Ok(status) => {
+            if status.success() {
+                info!(editor = %editor, "config_editor_closed");
+                EditConfigResult::Success
+            } else {
+                let code = status.code().unwrap_or(-1);
+                warn!(editor = %editor, exit_code = code, "config_editor_exited_with_error");
+                EditConfigResult::EditorError(code)
+            }
+        }
+        Err(e) => {
+            warn!(editor = %editor, error = %e, "config_editor_spawn_failed");
+            EditConfigResult::SpawnFailed(format!("{}: {}", editor, e))
+        }
+    }
+}
+
 /// Detect the currently in-progress spec from specs/README.md
 fn detect_current_spec(specs_dir: &std::path::Path) -> Option<String> {
     let readme_path = specs_dir.join("README.md");
@@ -847,6 +923,27 @@ fn run_app(
                             app.start_command()?;
                         }
                     }
+                    KeyCode::Char('c') => {
+                        // Only allow config editing when stopped
+                        if app.status == AppStatus::Stopped {
+                            // Clear any previous error before opening editor
+                            app.status_error = None;
+                            match open_config_in_editor(&mut terminal) {
+                                EditConfigResult::Success => {}
+                                EditConfigResult::NoConfigPath => {
+                                    app.status_error =
+                                        Some("Could not determine config path".to_string());
+                                }
+                                EditConfigResult::SpawnFailed(msg) => {
+                                    app.status_error = Some(format!("Editor failed: {}", msg));
+                                }
+                                EditConfigResult::EditorError(code) => {
+                                    app.status_error =
+                                        Some(format!("Editor exited with code {}", code));
+                                }
+                            }
+                        }
+                    }
                     KeyCode::Char('k') | KeyCode::Up => {
                         app.scroll_up(1);
                     }
@@ -947,6 +1044,16 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
         status_spans.push(Span::raw("Logs: ---"));
     }
 
+    // Show transient error (e.g., editor spawn failure)
+    if let Some(ref error) = app.status_error {
+        status_spans.push(Span::raw("    "));
+        status_spans.push(Span::styled("⚠ ", Style::default().fg(Color::Red)));
+        status_spans.push(Span::styled(
+            error.as_str(),
+            Style::default().fg(Color::Red),
+        ));
+    }
+
     let status_line = Line::from(status_spans);
     let status_panel = Paragraph::new(status_line).block(
         Block::default()
@@ -971,10 +1078,10 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     f.render_widget(main_pane, chunks[1]);
 
     // Footer
-    let footer_text = if app.status == AppStatus::Error {
-        "[q] Quit"
-    } else {
-        "[s] Start  [q] Quit"
+    let footer_text = match app.status {
+        AppStatus::Error => "[q] Quit",
+        AppStatus::Stopped => "[s] Start  [c] Config  [q] Quit",
+        AppStatus::Running => "[s] Start  [q] Quit",
     };
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         footer_text,
