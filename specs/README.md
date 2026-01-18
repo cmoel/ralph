@@ -23,7 +23,7 @@ Single source of truth for specification status.
 | [config-modal](config-modal.md) | Done | In-app config form with validation using ratatui native widgets | configuration |
 | [remove-cli-args-field](remove-cli-args-field.md) | Done | Remove non-configurable CLI args field from config modal | config-modal |
 | [auto-continue](auto-continue.md) | Done | Auto-continue claude until all specs complete | configuration |
-| [specs-panel](specs-panel.md) | Ready | Browse all specs with blocked specs highlighted | — |
+| [specs-panel](specs-panel.md) | In Progress | Browse all specs with blocked specs highlighted | — |
 
 ## Notes
 
