@@ -40,19 +40,19 @@ Environment variables override config file values:
 
 ### Acceptance Criteria
 
-- [ ] Add dependencies: `toml`, `serde` (with derive), `directories`
-- [ ] Define `Config` struct with serde Serialize/Deserialize
-- [ ] All fields have sensible defaults via `Default` trait
-- [ ] Load config from platform-appropriate location using `directories` crate
-- [ ] Create default config file on first run if none exists
-- [ ] Parse environment variables and override config values
-- [ ] Invalid config file → log warning, use defaults
-- [ ] Missing config file → create default, log info
-- [ ] Store loaded config in `App` state
-- [ ] Store config load status in `App` (success, created, or error message)
-- [ ] Use `config.claude.path` when spawning claude CLI
-- [ ] Use `config.paths.prompt` when checking for PROMPT.md
-- [ ] Use `config.paths.specs` for specs directory path
+- [x] Add dependencies: `toml`, `serde` (with derive), `directories`
+- [x] Define `Config` struct with serde Serialize/Deserialize
+- [x] All fields have sensible defaults via `Default` trait
+- [x] Load config from platform-appropriate location using `directories` crate
+- [x] Create default config file on first run if none exists
+- [x] Parse environment variables and override config values
+- [x] Invalid config file → log warning, use defaults
+- [x] Missing config file → create default, log info
+- [x] Store loaded config in `App` state
+- [x] Store config load status in `App` (success, created, or error message)
+- [x] Use `config.claude.path` when spawning claude CLI
+- [x] Use `config.paths.prompt` when checking for PROMPT.md
+- [x] Use `config.paths.specs` for specs directory path
 
 ### Technical Constraints
 

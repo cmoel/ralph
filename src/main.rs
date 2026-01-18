@@ -1,5 +1,8 @@
+mod config;
 mod events;
 mod logging;
+
+use crate::config::{Config, ConfigLoadStatus, LoadedConfig};
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
@@ -244,6 +247,14 @@ struct App {
     /// Error that occurred during logging initialization.
     #[allow(dead_code)] // Used by future status-panel spec
     logging_error: Option<String>,
+    /// Loaded configuration.
+    config: Config,
+    /// Path to the configuration file.
+    #[allow(dead_code)] // Used by future status-panel spec
+    config_path: PathBuf,
+    /// Status of config loading.
+    #[allow(dead_code)] // Used by future status-panel spec
+    config_load_status: ConfigLoadStatus,
 }
 
 impl App {
@@ -251,6 +262,7 @@ impl App {
         session_id: Option<String>,
         log_directory: Option<PathBuf>,
         logging_error: Option<String>,
+        loaded_config: LoadedConfig,
     ) -> Self {
         Self {
             status: AppStatus::Stopped,
@@ -267,6 +279,9 @@ impl App {
             session_id,
             log_directory,
             logging_error,
+            config: loaded_config.config,
+            config_path: loaded_config.config_path,
+            config_load_status: loaded_config.status,
         }
     }
 
@@ -473,10 +488,11 @@ impl App {
             return Ok(());
         }
 
-        // Check if PROMPT.md exists
-        if !std::path::Path::new("PROMPT.md").exists() {
+        // Check if prompt file exists (using config path)
+        let prompt_path = self.config.prompt_path();
+        if !prompt_path.exists() {
             self.status = AppStatus::Error;
-            self.add_line("Error: PROMPT.md not found".to_string());
+            self.add_line(format!("Error: {} not found", prompt_path.display()));
             return Ok(());
         }
 
@@ -490,12 +506,13 @@ impl App {
         self.current_line.clear();
 
         // Spawn the command using shell to handle the pipe
-        // Expand $HOME in Rust since it may not be set in the spawned shell
-        let home = std::env::var("HOME").unwrap_or_default();
-        let claude_path = format!("{}/.claude/local/claude", home);
+        // Use config values for claude path, args, and prompt path
+        let claude_path = self.config.claude_path();
         let command = format!(
-            "cat PROMPT.md | {} --output-format=stream-json --verbose --print --include-partial-messages",
-            claude_path
+            "cat {} | {} {}",
+            prompt_path.display(),
+            claude_path.display(),
+            self.config.claude.args
         );
         let child = Command::new("sh")
             .arg("-c")
@@ -628,13 +645,27 @@ fn main() -> Result<()> {
         }
     };
 
+    // Load configuration
+    let loaded_config = config::load_config();
+    debug!(
+        config_path = %loaded_config.config_path.display(),
+        status = ?loaded_config.status,
+        "config_loaded"
+    );
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(stdout))?;
 
-    let result = run_app(terminal, session_id.clone(), log_directory, logging_error);
+    let result = run_app(
+        terminal,
+        session_id.clone(),
+        log_directory,
+        logging_error,
+        loaded_config,
+    );
 
     // Restore terminal
     disable_raw_mode()?;
@@ -658,8 +689,9 @@ fn run_app(
     session_id: Option<String>,
     log_directory: Option<PathBuf>,
     logging_error: Option<String>,
+    loaded_config: LoadedConfig,
 ) -> Result<()> {
-    let mut app = App::new(session_id, log_directory, logging_error);
+    let mut app = App::new(session_id, log_directory, logging_error, loaded_config);
 
     loop {
         // Poll for output from child process
