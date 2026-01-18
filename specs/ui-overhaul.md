@@ -230,11 +230,11 @@ A scrollbar appears on the right edge of the output panel, showing current scrol
 
 ### Acceptance Criteria
 
-- [ ] Scrollbar on right edge of output panel
-- [ ] Shows `▲` at top, `▼` at bottom
-- [ ] Thumb position reflects scroll position
-- [ ] Thumb size reflects viewport vs content ratio
-- [ ] Scrollbar only visible when content exceeds viewport
+- [x] Scrollbar on right edge of output panel
+- [x] Shows `▲` at top, `▼` at bottom
+- [x] Thumb position reflects scroll position
+- [x] Thumb size reflects viewport vs content ratio
+- [x] Scrollbar only visible when content exceeds viewport
 
 ### Technical Constraints
 

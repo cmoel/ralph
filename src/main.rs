@@ -27,7 +27,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Wrap,
+};
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, info, trace, warn};
 
@@ -1159,6 +1162,22 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
         .scroll((app.scroll_offset, 0));
 
     f.render_widget(output_panel, chunks[0]);
+
+    // Scrollbar - only visible when content exceeds viewport
+    let visual_lines = app.visual_line_count();
+    if visual_lines > app.main_pane_height {
+        let scrollbar = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"));
+
+        let mut scrollbar_state = ScrollbarState::default()
+            .content_length(visual_lines as usize)
+            .position(app.scroll_offset as usize)
+            .viewport_content_length(app.main_pane_height as usize);
+
+        f.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
+    }
 
     // Command panel with keyboard shortcuts (left) and status indicator (right)
     let shortcuts = match app.status {
