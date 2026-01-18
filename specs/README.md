@@ -20,7 +20,7 @@ Single source of truth for specification status.
 | [current-spec-detection](current-spec-detection.md) | Done | Display active spec by polling README | status-panel, logging |
 | [configuration](configuration.md) | Done | TOML config file with auto-reload | — |
 | [ui-overhaul](ui-overhaul.md) | Done | Redesigned layout with command panel, state-based styling, timer | — |
-| [config-modal](config-modal.md) | In Progress (Slice 2 Done) | In-app config form with validation using ratatui native widgets | configuration |
+| [config-modal](config-modal.md) | In Progress (Slice 3 Done) | In-app config form with validation using ratatui native widgets | configuration |
 
 ## Notes
 

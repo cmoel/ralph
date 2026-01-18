@@ -177,15 +177,15 @@ Fields are validated on blur (when focus leaves the field). Invalid fields show 
 
 ### Acceptance Criteria
 
-- [ ] Validation runs on blur (when Tab away from field)
-- [ ] Claude CLI path: validates file exists and is executable
-- [ ] Prompt file: validates file exists
-- [ ] Specs directory: validates directory exists
-- [ ] Invalid fields show warning icon (⚠) and error message below
-- [ ] Error message text is yellow/orange colored
-- [ ] Save button disabled when any validation errors exist
-- [ ] Save button visually indicates disabled state (dimmed)
-- [ ] Validation errors clear when field value changes
+- [x] Validation runs on blur (when Tab away from field)
+- [x] Claude CLI path: validates file exists and is executable
+- [x] Prompt file: validates file exists
+- [x] Specs directory: validates directory exists
+- [x] Invalid fields show warning icon (⚠) and error message below
+- [x] Error message text is yellow/orange colored
+- [x] Save button disabled when any validation errors exist
+- [x] Save button visually indicates disabled state (dimmed)
+- [x] Validation errors clear when field value changes
 
 ### Technical Constraints
 

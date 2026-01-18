@@ -131,7 +131,7 @@ const TOOL_INPUT_MAX_LEN: usize = 60;
 const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
 /// Which field is focused in the config modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ConfigModalField {
     ClaudePath,
     ClaudeArgs,
@@ -187,6 +187,8 @@ struct ConfigModalState {
     cursor_pos: usize,
     /// Error message to display (e.g., save failed).
     error: Option<String>,
+    /// Validation errors per field.
+    validation_errors: HashMap<ConfigModalField, String>,
 }
 
 impl ConfigModalState {
@@ -206,6 +208,7 @@ impl ConfigModalState {
             log_level_index,
             cursor_pos: config.claude.path.len(),
             error: None,
+            validation_errors: HashMap::new(),
         }
     }
 
@@ -221,15 +224,21 @@ impl ConfigModalState {
     }
 
     /// Move focus to the next field, resetting cursor position.
+    /// Validates the field being left (blur validation).
     fn focus_next(&mut self) {
+        let leaving_field = self.focus;
         self.focus = self.focus.next();
         self.update_cursor_for_new_focus();
+        self.validate_field(leaving_field);
     }
 
     /// Move focus to the previous field, resetting cursor position.
+    /// Validates the field being left (blur validation).
     fn focus_prev(&mut self) {
+        let leaving_field = self.focus;
         self.focus = self.focus.prev();
         self.update_cursor_for_new_focus();
+        self.validate_field(leaving_field);
     }
 
     /// Update cursor position when focus changes to a new field.
@@ -244,7 +253,7 @@ impl ConfigModalState {
     /// Insert a character at the current cursor position.
     fn insert_char(&mut self, c: char) {
         let cursor = self.cursor_pos;
-        match self.focus {
+        let field_changed = match self.focus {
             ConfigModalField::ClaudePath => {
                 if cursor >= self.claude_path.len() {
                     self.claude_path.push(c);
@@ -252,6 +261,7 @@ impl ConfigModalState {
                     self.claude_path.insert(cursor, c);
                 }
                 self.cursor_pos += 1;
+                true
             }
             ConfigModalField::ClaudeArgs => {
                 if cursor >= self.claude_args.len() {
@@ -260,6 +270,7 @@ impl ConfigModalState {
                     self.claude_args.insert(cursor, c);
                 }
                 self.cursor_pos += 1;
+                true
             }
             ConfigModalField::PromptFile => {
                 if cursor >= self.prompt_file.len() {
@@ -268,6 +279,7 @@ impl ConfigModalState {
                     self.prompt_file.insert(cursor, c);
                 }
                 self.cursor_pos += 1;
+                true
             }
             ConfigModalField::SpecsDirectory => {
                 if cursor >= self.specs_dir.len() {
@@ -276,8 +288,12 @@ impl ConfigModalState {
                     self.specs_dir.insert(cursor, c);
                 }
                 self.cursor_pos += 1;
+                true
             }
-            _ => {}
+            _ => false,
+        };
+        if field_changed {
+            self.clear_current_field_error();
         }
     }
 
@@ -287,44 +303,58 @@ impl ConfigModalState {
             return;
         }
         let cursor = self.cursor_pos;
-        match self.focus {
+        let field_changed = match self.focus {
             ConfigModalField::ClaudePath => {
                 self.claude_path.remove(cursor - 1);
                 self.cursor_pos -= 1;
+                true
             }
             ConfigModalField::ClaudeArgs => {
                 self.claude_args.remove(cursor - 1);
                 self.cursor_pos -= 1;
+                true
             }
             ConfigModalField::PromptFile => {
                 self.prompt_file.remove(cursor - 1);
                 self.cursor_pos -= 1;
+                true
             }
             ConfigModalField::SpecsDirectory => {
                 self.specs_dir.remove(cursor - 1);
                 self.cursor_pos -= 1;
+                true
             }
-            _ => {}
+            _ => false,
+        };
+        if field_changed {
+            self.clear_current_field_error();
         }
     }
 
     /// Delete the character at the cursor position (delete key).
     fn delete_char_at(&mut self) {
         let cursor = self.cursor_pos;
-        match self.focus {
+        let field_changed = match self.focus {
             ConfigModalField::ClaudePath if cursor < self.claude_path.len() => {
                 self.claude_path.remove(cursor);
+                true
             }
             ConfigModalField::ClaudeArgs if cursor < self.claude_args.len() => {
                 self.claude_args.remove(cursor);
+                true
             }
             ConfigModalField::PromptFile if cursor < self.prompt_file.len() => {
                 self.prompt_file.remove(cursor);
+                true
             }
             ConfigModalField::SpecsDirectory if cursor < self.specs_dir.len() => {
                 self.specs_dir.remove(cursor);
+                true
             }
-            _ => {}
+            _ => false,
+        };
+        if field_changed {
+            self.clear_current_field_error();
         }
     }
 
@@ -379,6 +409,33 @@ impl ConfigModalState {
         LOG_LEVELS[self.log_level_index]
     }
 
+    /// Check if there are any validation errors.
+    fn has_validation_errors(&self) -> bool {
+        !self.validation_errors.is_empty()
+    }
+
+    /// Validate a specific field and update validation_errors.
+    fn validate_field(&mut self, field: ConfigModalField) {
+        let error = match field {
+            ConfigModalField::ClaudePath => validate_executable_path(&self.claude_path),
+            ConfigModalField::PromptFile => validate_file_exists(&self.prompt_file),
+            ConfigModalField::SpecsDirectory => validate_directory_exists(&self.specs_dir),
+            // ClaudeArgs has no validation, LogLevel/buttons don't need validation
+            _ => None,
+        };
+
+        if let Some(msg) = error {
+            self.validation_errors.insert(field, msg);
+        } else {
+            self.validation_errors.remove(&field);
+        }
+    }
+
+    /// Clear validation error for the current field (called when value changes).
+    fn clear_current_field_error(&mut self) {
+        self.validation_errors.remove(&self.focus);
+    }
+
     /// Build a Config from the current form values.
     fn to_config(&self) -> Config {
         Config {
@@ -394,6 +451,93 @@ impl ConfigModalState {
                 level: self.selected_log_level().to_string(),
             },
         }
+    }
+}
+
+/// Validate that a path points to an executable file.
+/// Returns an error message if validation fails, None if valid.
+fn validate_executable_path(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return Some("Path cannot be empty".to_string());
+    }
+
+    let expanded = Config::expand_tilde(path);
+
+    match std::fs::metadata(&expanded) {
+        Ok(metadata) => {
+            if !metadata.is_file() {
+                return Some("Path is not a file".to_string());
+            }
+
+            // Check executable permission on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = metadata.permissions().mode();
+                if mode & 0o111 == 0 {
+                    return Some("File is not executable".to_string());
+                }
+            }
+
+            None
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some("File not found".to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Some("Cannot access file".to_string())
+        }
+        Err(_) => Some("Invalid path".to_string()),
+    }
+}
+
+/// Validate that a path points to an existing file.
+/// Returns an error message if validation fails, None if valid.
+fn validate_file_exists(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return Some("Path cannot be empty".to_string());
+    }
+
+    let expanded = Config::expand_tilde(path);
+
+    match std::fs::metadata(&expanded) {
+        Ok(metadata) => {
+            if !metadata.is_file() {
+                Some("Path is not a file".to_string())
+            } else {
+                None
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some("File not found".to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Some("Cannot access file".to_string())
+        }
+        Err(_) => Some("Invalid path".to_string()),
+    }
+}
+
+/// Validate that a path points to an existing directory.
+/// Returns an error message if validation fails, None if valid.
+fn validate_directory_exists(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return Some("Path cannot be empty".to_string());
+    }
+
+    let expanded = Config::expand_tilde(path);
+
+    match std::fs::metadata(&expanded) {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                Some("Path is not a directory".to_string())
+            } else {
+                None
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Some("Directory not found".to_string())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Some("Cannot access directory".to_string())
+        }
+        Err(_) => Some("Invalid path".to_string()),
     }
 }
 
@@ -1340,6 +1484,10 @@ fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyMod
         // Enter - context-dependent
         KeyCode::Enter => match state.focus {
             ConfigModalField::SaveButton => {
+                // Don't save if there are validation errors
+                if state.has_validation_errors() {
+                    return;
+                }
                 // Save config to file
                 let new_config = state.to_config();
                 match save_config(&new_config, &app.config_path) {
@@ -1672,7 +1820,8 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
 
 fn draw_config_modal(f: &mut Frame, app: &App) {
     let modal_width = 70;
-    let modal_height = 20;
+    // Increased height to accommodate validation error lines
+    let modal_height = 24;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -1757,28 +1906,46 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     let focused_label_style = Style::default().fg(Color::Cyan);
 
     // Get values from state or config
-    let (claude_path, claude_args, prompt_file, specs_dir, log_level, cursor_pos, focus) =
-        if let Some(s) = state {
-            (
-                s.claude_path.as_str(),
-                s.claude_args.as_str(),
-                s.prompt_file.as_str(),
-                s.specs_dir.as_str(),
-                s.selected_log_level(),
-                s.cursor_pos,
-                Some(s.focus),
-            )
-        } else {
-            (
-                app.config.claude.path.as_str(),
-                app.config.claude.args.as_str(),
-                app.config.paths.prompt.as_str(),
-                app.config.paths.specs.as_str(),
-                app.config.logging.level.as_str(),
-                0,
-                None,
-            )
-        };
+    let (
+        claude_path,
+        claude_args,
+        prompt_file,
+        specs_dir,
+        log_level,
+        cursor_pos,
+        focus,
+        has_errors,
+    ) = if let Some(s) = state {
+        (
+            s.claude_path.as_str(),
+            s.claude_args.as_str(),
+            s.prompt_file.as_str(),
+            s.specs_dir.as_str(),
+            s.selected_log_level(),
+            s.cursor_pos,
+            Some(s.focus),
+            s.has_validation_errors(),
+        )
+    } else {
+        (
+            app.config.claude.path.as_str(),
+            app.config.claude.args.as_str(),
+            app.config.paths.prompt.as_str(),
+            app.config.paths.specs.as_str(),
+            app.config.logging.level.as_str(),
+            0,
+            None,
+            false,
+        )
+    };
+
+    // Helper to get validation error for a field
+    let get_field_error = |field: ConfigModalField| -> Option<&str> {
+        state.and_then(|s| s.validation_errors.get(&field).map(|e| e.as_str()))
+    };
+
+    // Style for validation error messages
+    let error_style = Style::default().fg(Color::Yellow);
 
     // Build content lines
     let mut content = vec![
@@ -1803,6 +1970,13 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     let mut path_line = vec![Span::styled("  Claude CLI path: ", path_label_style)];
     path_line.extend(render_field(claude_path, path_focused, cursor_pos));
     content.push(Line::from(path_line));
+    // Validation error for Claude CLI path
+    if let Some(error) = get_field_error(ConfigModalField::ClaudePath) {
+        content.push(Line::from(Span::styled(
+            format!("                     \u{26a0} {}", error),
+            error_style,
+        )));
+    }
 
     // Claude CLI args field
     let args_focused = focus == Some(ConfigModalField::ClaudeArgs);
@@ -1825,6 +1999,13 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     let mut prompt_line = vec![Span::styled("  Prompt file:     ", prompt_label_style)];
     prompt_line.extend(render_field(prompt_file, prompt_focused, cursor_pos));
     content.push(Line::from(prompt_line));
+    // Validation error for Prompt file
+    if let Some(error) = get_field_error(ConfigModalField::PromptFile) {
+        content.push(Line::from(Span::styled(
+            format!("                     \u{26a0} {}", error),
+            error_style,
+        )));
+    }
 
     // Specs directory field
     let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
@@ -1836,6 +2017,13 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
     specs_line.extend(render_field(specs_dir, specs_focused, cursor_pos));
     content.push(Line::from(specs_line));
+    // Validation error for Specs directory
+    if let Some(error) = get_field_error(ConfigModalField::SpecsDirectory) {
+        content.push(Line::from(Span::styled(
+            format!("                     \u{26a0} {}", error),
+            error_style,
+        )));
+    }
 
     // Log level dropdown
     let level_focused = focus == Some(ConfigModalField::LogLevel);
@@ -1879,7 +2067,10 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     let save_focused = focus == Some(ConfigModalField::SaveButton);
     let cancel_focused = focus == Some(ConfigModalField::CancelButton);
 
-    let save_style = if save_focused {
+    // Save button is dimmed when there are validation errors
+    let save_style = if has_errors {
+        Style::default().fg(Color::DarkGray)
+    } else if save_focused {
         Style::default().fg(Color::Black).bg(Color::Cyan)
     } else {
         Style::default().fg(Color::Cyan)
