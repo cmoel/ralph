@@ -56,13 +56,13 @@ Raw JSON from the claude CLI is available at TRACE level for debugging protocol 
 
 ### Acceptance Criteria
 
-- [ ] `loop_start` logged at INFO with loop number
-- [ ] `loop_end` logged at INFO with loop number and exit status
-- [ ] `command_spawned` logged at DEBUG with pid
-- [ ] `process_killed` logged at INFO with pid
-- [ ] Raw JSON lines logged at TRACE level (for protocol debugging)
-- [ ] Existing `debug!()` and `warn!()` calls continue to work
-- [ ] All log entries include session ID context
+- [x] `loop_start` logged at INFO with loop number
+- [x] `loop_end` logged at INFO with loop number and exit status
+- [x] `command_spawned` logged at DEBUG with pid
+- [x] `process_killed` logged at INFO with pid
+- [x] Raw JSON lines logged at TRACE level (for protocol debugging)
+- [x] Existing `debug!()` and `warn!()` calls continue to work
+- [x] All log entries include session ID context
 
 ### Technical Constraints
 

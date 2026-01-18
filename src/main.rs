@@ -26,7 +26,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Terminal};
-use tracing::{debug, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
 
@@ -241,6 +241,8 @@ struct App {
     /// Session ID for this Ralph invocation.
     #[allow(dead_code)] // Used by future status-panel spec
     session_id: Option<String>,
+    /// Loop counter for logging, incremented each time start_command() is called.
+    loop_count: u64,
     /// Directory where logs are written.
     #[allow(dead_code)] // Used by future status-panel spec
     log_directory: Option<PathBuf>,
@@ -277,6 +279,7 @@ impl App {
             content_blocks: HashMap::new(),
             current_line: String::new(),
             session_id,
+            loop_count: 0,
             log_directory,
             logging_error,
             config: loaded_config.config,
@@ -363,6 +366,9 @@ impl App {
         if line.trim().is_empty() {
             return;
         }
+
+        // Log raw JSON at TRACE level for protocol debugging
+        trace!(json = line, "raw_json_line");
 
         // Handle stderr lines (pass through as-is)
         if line.starts_with("[stderr]") {
@@ -496,6 +502,10 @@ impl App {
             return Ok(());
         }
 
+        // Increment loop counter and log loop_start
+        self.loop_count += 1;
+        info!(loop_number = self.loop_count, "loop_start");
+
         // Add divider if not first run
         if !self.output_lines.is_empty() {
             self.add_line("─".repeat(40));
@@ -523,6 +533,9 @@ impl App {
 
         match child {
             Ok(mut child) => {
+                // Log command_spawned with PID
+                debug!(pid = child.id(), "command_spawned");
+
                 let (tx, rx) = mpsc::channel();
 
                 // Read stdout in a background thread
@@ -569,8 +582,10 @@ impl App {
 
     fn kill_child(&mut self) {
         if let Some(mut child) = self.child_process.take() {
+            let pid = child.id();
             let _ = child.kill();
             let _ = child.wait();
+            info!(pid, "process_killed");
         }
         self.output_receiver = None;
     }
@@ -601,14 +616,34 @@ impl App {
 
         // Check if the channel disconnected (all senders dropped = readers finished)
         if channel_disconnected {
+            debug!("channel_disconnected");
+
             // Try to get exit status from child process
-            if let Some(mut child) = self.child_process.take() {
+            let exit_status: Option<String> = if let Some(mut child) = self.child_process.take() {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        if let Some(c) = status.code()
-                            && c != 0
-                        {
-                            self.add_line(format!("[Process exited with code {}]", c));
+                        if let Some(code) = status.code() {
+                            if code != 0 {
+                                warn!(exit_code = code, "process_exit_nonzero");
+                                self.add_line(format!("[Process exited with code {}]", code));
+                            }
+                            Some(format!("exit_code={}", code))
+                        } else {
+                            // Process was terminated by signal (Unix)
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::process::ExitStatusExt;
+                                if let Some(signal) = status.signal() {
+                                    info!(signal, "process_killed_by_signal");
+                                    Some(format!("signal={}", signal))
+                                } else {
+                                    Some("unknown".to_string())
+                                }
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                Some("unknown".to_string())
+                            }
                         }
                     }
                     Ok(None) => {
@@ -616,9 +651,20 @@ impl App {
                         self.child_process = Some(child);
                         return;
                     }
-                    Err(_) => {}
+                    Err(_) => None,
                 }
-            }
+            } else {
+                None
+            };
+
+            // Log loop_end with exit status
+            let status_str = exit_status.unwrap_or_else(|| "unknown".to_string());
+            info!(
+                loop_number = self.loop_count,
+                exit_status = %status_str,
+                "loop_end"
+            );
+
             self.status = AppStatus::Stopped;
             self.output_receiver = None;
         }
@@ -627,7 +673,6 @@ impl App {
 
 fn main() -> Result<()> {
     use std::time::Instant;
-    use tracing::info;
 
     let start_time = Instant::now();
 
