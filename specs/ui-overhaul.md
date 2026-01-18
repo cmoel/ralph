@@ -283,8 +283,8 @@ The stopped state label changes from "STOPPED" to "IDLE" for a friendlier, less 
 
 ### Acceptance Criteria
 
-- [ ] Status text shows `IDLE` instead of `STOPPED` when not running
-- [ ] All references in code updated (enum variant can stay `Stopped`, just display text changes)
+- [x] Status text shows `IDLE` instead of `STOPPED` when not running
+- [x] All references in code updated (enum variant can stay `Stopped`, just display text changes)
 
 ### Technical Constraints
 

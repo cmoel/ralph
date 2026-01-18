@@ -63,7 +63,7 @@ impl AppStatus {
     #[allow(dead_code)] // May be used in later UI slices
     fn label(&self) -> &'static str {
         match self {
-            AppStatus::Stopped => "STOPPED",
+            AppStatus::Stopped => "IDLE",
             AppStatus::Running => "RUNNING",
             AppStatus::Error => "ERROR",
         }
@@ -1203,7 +1203,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     // Status indicator: colored dot + text (elapsed time when running)
     let status_dot = "● ";
     let status_text = match app.status {
-        AppStatus::Stopped => "STOPPED".to_string(),
+        AppStatus::Stopped => "IDLE".to_string(),
         AppStatus::Running => {
             if let Some(start_time) = app.run_start_time {
                 format_elapsed(start_time.elapsed())
