@@ -19,7 +19,7 @@ Single source of truth for specification status.
 | [status-panel](status-panel.md) | Done | Visual status panel replacing title bar | — |
 | [current-spec-detection](current-spec-detection.md) | Done | Display active spec by polling README | status-panel, logging |
 | [configuration](configuration.md) | Done | TOML config file with auto-reload | — |
-| [ui-overhaul](ui-overhaul.md) | Ready | Redesigned layout with command panel, state-based styling, timer | — (slice 2: current-spec-detection) |
+| [ui-overhaul](ui-overhaul.md) | In Progress | Redesigned layout with command panel, state-based styling, timer | — (slice 2: current-spec-detection) |
 
 ## Notes
 
