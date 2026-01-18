@@ -163,10 +163,10 @@ Error (red, double):
 
 ### Acceptance Criteria
 
-- [ ] Border color: Cyan (stopped), Green (running), Red (error)
-- [ ] Border type: Rounded (stopped), Double (running/error)
-- [ ] Status dot in command panel matches border color
-- [ ] Status text color matches state
+- [x] Border color: Cyan (stopped), Green (running), Red (error)
+- [x] Border type: Rounded (stopped), Double (running/error)
+- [x] Status dot in command panel matches border color
+- [x] Status text color matches state
 
 ### Technical Constraints
 

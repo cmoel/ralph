@@ -73,6 +73,13 @@ impl AppStatus {
             AppStatus::Error => Color::Red,
         }
     }
+
+    fn border_type(&self) -> BorderType {
+        match self {
+            AppStatus::Stopped => BorderType::Rounded,
+            AppStatus::Running | AppStatus::Error => BorderType::Double,
+        }
+    }
 }
 
 enum OutputMessage {
@@ -1118,8 +1125,8 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
 
     let mut output_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_type(app.status.border_type())
+        .border_style(Style::default().fg(app.status.color()))
         .title(Line::from(format!(" {} ", app.session_id)).left_aligned());
 
     if let Some(spec) = &app.current_spec {
@@ -1165,8 +1172,8 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     let command_panel = Paragraph::new(command_line).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Cyan)),
+            .border_type(app.status.border_type())
+            .border_style(Style::default().fg(app.status.color())),
     );
 
     f.render_widget(command_panel, chunks[1]);
