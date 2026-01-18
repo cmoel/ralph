@@ -86,10 +86,10 @@ Old log files are automatically cleaned up on startup. Users don't need to manua
 
 ### Acceptance Criteria
 
-- [ ] On startup, scan log directory for `ralph.*.log` files
-- [ ] Delete files older than 7 days
-- [ ] Log cleanup actions at DEBUG level (files deleted, count)
-- [ ] Cleanup errors logged at WARN but don't prevent app startup
+- [x] On startup, scan log directory for `ralph.*.log` files
+- [x] Delete files older than 7 days
+- [x] Log cleanup actions at DEBUG level (files deleted, count)
+- [x] Cleanup errors logged at WARN but don't prevent app startup
 
 ### Technical Constraints
 

@@ -748,12 +748,16 @@ fn main() -> Result<()> {
 
     // Initialize logging before anything else
     let (session_id, log_directory, logging_error, _guard) = match logging::init() {
-        Ok(ctx) => (
-            Some(ctx.session_id),
-            Some(ctx.log_directory),
-            None,
-            Some(ctx._guard),
-        ),
+        Ok(ctx) => {
+            // Clean up old log files after logging is initialized
+            logging::cleanup_old_logs(&ctx.log_directory);
+            (
+                Some(ctx.session_id),
+                Some(ctx.log_directory),
+                None,
+                Some(ctx._guard),
+            )
+        }
         Err(e) => {
             eprintln!("Warning: Failed to initialize logging: {}", e);
             (None, None, Some(e.message), None)

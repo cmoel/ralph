@@ -108,3 +108,75 @@ pub fn init() -> Result<LoggingContext, LoggingError> {
 fn dirs_home_log_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join("Library").join("Logs").join("ralph"))
 }
+
+/// Cleans up log files older than the retention period.
+///
+/// Scans the log directory for `ralph.*` files and deletes those older than 7 days.
+/// Errors are logged at WARN level but don't prevent app startup.
+pub fn cleanup_old_logs(log_dir: &PathBuf) {
+    use std::time::{Duration, SystemTime};
+    use tracing::{debug, warn};
+
+    const RETENTION_DAYS: u64 = 7;
+    let retention_duration = Duration::from_secs(RETENTION_DAYS * 24 * 60 * 60);
+
+    let entries = match fs::read_dir(log_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!(error = %e, "Failed to read log directory for cleanup");
+            return;
+        }
+    };
+
+    let now = SystemTime::now();
+    let mut deleted_count = 0u32;
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+
+        // Only process ralph.* log files
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) if name.starts_with("ralph.") && name != "ralph" => name,
+            _ => continue,
+        };
+
+        // Get file modification time
+        let metadata = match fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(file = %file_name, error = %e, "Failed to read metadata for log file");
+                continue;
+            }
+        };
+
+        let modified = match metadata.modified() {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(file = %file_name, error = %e, "Failed to get modification time for log file");
+                continue;
+            }
+        };
+
+        // Check if file is older than retention period
+        let age = match now.duration_since(modified) {
+            Ok(d) => d,
+            Err(_) => continue, // File is in the future, skip
+        };
+
+        if age > retention_duration {
+            match fs::remove_file(&path) {
+                Ok(()) => {
+                    debug!(file = %file_name, age_days = age.as_secs() / 86400, "Deleted old log file");
+                    deleted_count += 1;
+                }
+                Err(e) => {
+                    warn!(file = %file_name, error = %e, "Failed to delete old log file");
+                }
+            }
+        }
+    }
+
+    if deleted_count > 0 {
+        debug!(count = deleted_count, "Log cleanup completed");
+    }
+}
