@@ -190,6 +190,25 @@ pub fn reload_config(config_path: &PathBuf) -> Result<Config, String> {
     Ok(config)
 }
 
+/// Save a config to the given file path.
+/// Returns Ok(()) on success, or Err(String) with error message on failure.
+pub fn save_config(config: &Config, config_path: &PathBuf) -> Result<(), String> {
+    // Serialize to TOML
+    let toml_content = toml::to_string_pretty(config).map_err(|e| {
+        warn!(error = %e, "config_save_serialize_failed");
+        format!("Failed to serialize config: {}", e)
+    })?;
+
+    // Write to file
+    fs::write(config_path, &toml_content).map_err(|e| {
+        warn!(path = ?config_path, error = %e, "config_save_write_failed");
+        format!("Failed to write config: {}", e)
+    })?;
+
+    info!(path = ?config_path, "config_saved");
+    Ok(())
+}
+
 /// Load config from file, or create default if not exists
 fn load_or_create_config(config_path: &PathBuf) -> (Config, ConfigLoadStatus) {
     match fs::read_to_string(config_path) {

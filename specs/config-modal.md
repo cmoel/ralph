@@ -106,25 +106,25 @@ The modal now contains editable form fields instead of read-only display.
 
 ### Acceptance Criteria
 
-- [ ] Claude CLI path: text input field, pre-filled with current value
-- [ ] Claude CLI args: text input field, pre-filled with current value
-- [ ] Prompt file: text input field, pre-filled with current value
-- [ ] Specs directory: text input field, pre-filled with current value
-- [ ] Log level: dropdown with options: trace, debug, info, warn, error
-- [ ] Tab/Shift+Tab navigates between fields
-- [ ] Focus visually indicated on current field
-- [ ] Save button saves to config file and closes modal
-- [ ] Cancel button closes modal without saving
-- [ ] Esc closes modal without saving
+- [x] Claude CLI path: text input field, pre-filled with current value
+- [x] Claude CLI args: text input field, pre-filled with current value
+- [x] Prompt file: text input field, pre-filled with current value
+- [x] Specs directory: text input field, pre-filled with current value
+- [x] Log level: dropdown with options: trace, debug, info, warn, error
+- [x] Tab/Shift+Tab navigates between fields
+- [x] Focus visually indicated on current field (cyan label, cursor block)
+- [x] Save button saves to config file and closes modal
+- [x] Cancel button closes modal without saving
+- [x] Esc closes modal without saving
 
 ### Technical Constraints
 
-- Use `rat-widget::text_input::TextInput` for text fields
-- Use `rat-widget::choice::Choice` or similar for dropdown
-- Use `rat-widget::button::Button` for buttons
-- Use `rat-focus::FocusFlag` for focus management
-- Initialize fields with values from `app.config`
-- On Save, serialize to TOML and write to `app.config_path`
+- ~~Use `rat-widget::text_input::TextInput` for text fields~~ (Using custom text input with ratatui native widgets)
+- ~~Use `rat-widget::choice::Choice` or similar for dropdown~~ (Using custom < value > cycling with left/right arrows)
+- ~~Use `rat-widget::button::Button` for buttons~~ (Using styled Span with Enter key activation)
+- ~~Use `rat-focus::FocusFlag` for focus management~~ (Using `ConfigModalField` enum with `focus` field)
+- [x] Initialize fields with values from `app.config`
+- [x] On Save, serialize to TOML and write to `app.config_path`
 
 ### Error Cases
 

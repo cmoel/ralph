@@ -2,7 +2,9 @@ mod config;
 mod events;
 mod logging;
 
-use crate::config::{Config, ConfigLoadStatus, LoadedConfig, ensure_config_exists, reload_config};
+use crate::config::{
+    Config, ConfigLoadStatus, LoadedConfig, ensure_config_exists, reload_config, save_config,
+};
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
@@ -124,6 +126,276 @@ struct ContentBlockState {
 
 /// Maximum length for truncated tool input display.
 const TOOL_INPUT_MAX_LEN: usize = 60;
+
+/// Log level options for the dropdown.
+const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+
+/// Which field is focused in the config modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigModalField {
+    ClaudePath,
+    ClaudeArgs,
+    PromptFile,
+    SpecsDirectory,
+    LogLevel,
+    SaveButton,
+    CancelButton,
+}
+
+impl ConfigModalField {
+    fn next(self) -> Self {
+        match self {
+            Self::ClaudePath => Self::ClaudeArgs,
+            Self::ClaudeArgs => Self::PromptFile,
+            Self::PromptFile => Self::SpecsDirectory,
+            Self::SpecsDirectory => Self::LogLevel,
+            Self::LogLevel => Self::SaveButton,
+            Self::SaveButton => Self::CancelButton,
+            Self::CancelButton => Self::ClaudePath,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::ClaudePath => Self::CancelButton,
+            Self::ClaudeArgs => Self::ClaudePath,
+            Self::PromptFile => Self::ClaudeArgs,
+            Self::SpecsDirectory => Self::PromptFile,
+            Self::LogLevel => Self::SpecsDirectory,
+            Self::SaveButton => Self::LogLevel,
+            Self::CancelButton => Self::SaveButton,
+        }
+    }
+}
+
+/// State for the config modal form.
+#[derive(Debug, Clone)]
+struct ConfigModalState {
+    /// Current focused field.
+    focus: ConfigModalField,
+    /// Claude CLI path value.
+    claude_path: String,
+    /// Claude CLI args value.
+    claude_args: String,
+    /// Prompt file path value.
+    prompt_file: String,
+    /// Specs directory path value.
+    specs_dir: String,
+    /// Currently selected log level index in LOG_LEVELS.
+    log_level_index: usize,
+    /// Cursor position within the focused text field.
+    cursor_pos: usize,
+    /// Error message to display (e.g., save failed).
+    error: Option<String>,
+}
+
+impl ConfigModalState {
+    /// Create a new modal state initialized from the current config.
+    fn from_config(config: &Config) -> Self {
+        let log_level_index = LOG_LEVELS
+            .iter()
+            .position(|&l| l == config.logging.level)
+            .unwrap_or(2); // Default to "info" (index 2)
+
+        Self {
+            focus: ConfigModalField::ClaudePath,
+            claude_path: config.claude.path.clone(),
+            claude_args: config.claude.args.clone(),
+            prompt_file: config.paths.prompt.clone(),
+            specs_dir: config.paths.specs.clone(),
+            log_level_index,
+            cursor_pos: config.claude.path.len(),
+            error: None,
+        }
+    }
+
+    /// Get a reference to the currently focused text field's value.
+    fn current_field_value(&self) -> Option<&String> {
+        match self.focus {
+            ConfigModalField::ClaudePath => Some(&self.claude_path),
+            ConfigModalField::ClaudeArgs => Some(&self.claude_args),
+            ConfigModalField::PromptFile => Some(&self.prompt_file),
+            ConfigModalField::SpecsDirectory => Some(&self.specs_dir),
+            _ => None,
+        }
+    }
+
+    /// Move focus to the next field, resetting cursor position.
+    fn focus_next(&mut self) {
+        self.focus = self.focus.next();
+        self.update_cursor_for_new_focus();
+    }
+
+    /// Move focus to the previous field, resetting cursor position.
+    fn focus_prev(&mut self) {
+        self.focus = self.focus.prev();
+        self.update_cursor_for_new_focus();
+    }
+
+    /// Update cursor position when focus changes to a new field.
+    fn update_cursor_for_new_focus(&mut self) {
+        if let Some(value) = self.current_field_value() {
+            self.cursor_pos = value.len();
+        } else {
+            self.cursor_pos = 0;
+        }
+    }
+
+    /// Insert a character at the current cursor position.
+    fn insert_char(&mut self, c: char) {
+        let cursor = self.cursor_pos;
+        match self.focus {
+            ConfigModalField::ClaudePath => {
+                if cursor >= self.claude_path.len() {
+                    self.claude_path.push(c);
+                } else {
+                    self.claude_path.insert(cursor, c);
+                }
+                self.cursor_pos += 1;
+            }
+            ConfigModalField::ClaudeArgs => {
+                if cursor >= self.claude_args.len() {
+                    self.claude_args.push(c);
+                } else {
+                    self.claude_args.insert(cursor, c);
+                }
+                self.cursor_pos += 1;
+            }
+            ConfigModalField::PromptFile => {
+                if cursor >= self.prompt_file.len() {
+                    self.prompt_file.push(c);
+                } else {
+                    self.prompt_file.insert(cursor, c);
+                }
+                self.cursor_pos += 1;
+            }
+            ConfigModalField::SpecsDirectory => {
+                if cursor >= self.specs_dir.len() {
+                    self.specs_dir.push(c);
+                } else {
+                    self.specs_dir.insert(cursor, c);
+                }
+                self.cursor_pos += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// Delete the character before the cursor (backspace).
+    fn delete_char_before(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let cursor = self.cursor_pos;
+        match self.focus {
+            ConfigModalField::ClaudePath => {
+                self.claude_path.remove(cursor - 1);
+                self.cursor_pos -= 1;
+            }
+            ConfigModalField::ClaudeArgs => {
+                self.claude_args.remove(cursor - 1);
+                self.cursor_pos -= 1;
+            }
+            ConfigModalField::PromptFile => {
+                self.prompt_file.remove(cursor - 1);
+                self.cursor_pos -= 1;
+            }
+            ConfigModalField::SpecsDirectory => {
+                self.specs_dir.remove(cursor - 1);
+                self.cursor_pos -= 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// Delete the character at the cursor position (delete key).
+    fn delete_char_at(&mut self) {
+        let cursor = self.cursor_pos;
+        match self.focus {
+            ConfigModalField::ClaudePath if cursor < self.claude_path.len() => {
+                self.claude_path.remove(cursor);
+            }
+            ConfigModalField::ClaudeArgs if cursor < self.claude_args.len() => {
+                self.claude_args.remove(cursor);
+            }
+            ConfigModalField::PromptFile if cursor < self.prompt_file.len() => {
+                self.prompt_file.remove(cursor);
+            }
+            ConfigModalField::SpecsDirectory if cursor < self.specs_dir.len() => {
+                self.specs_dir.remove(cursor);
+            }
+            _ => {}
+        }
+    }
+
+    /// Move cursor left within the current field.
+    fn cursor_left(&mut self) {
+        if self.cursor_pos > 0 {
+            self.cursor_pos -= 1;
+        }
+    }
+
+    /// Move cursor right within the current field.
+    fn cursor_right(&mut self) {
+        if let Some(value) = self.current_field_value()
+            && self.cursor_pos < value.len()
+        {
+            self.cursor_pos += 1;
+        }
+    }
+
+    /// Move to beginning of current field.
+    fn cursor_home(&mut self) {
+        self.cursor_pos = 0;
+    }
+
+    /// Move to end of current field.
+    fn cursor_end(&mut self) {
+        if let Some(value) = self.current_field_value() {
+            self.cursor_pos = value.len();
+        }
+    }
+
+    /// Cycle log level selection up.
+    fn log_level_prev(&mut self) {
+        if self.log_level_index > 0 {
+            self.log_level_index -= 1;
+        } else {
+            self.log_level_index = LOG_LEVELS.len() - 1;
+        }
+    }
+
+    /// Cycle log level selection down.
+    fn log_level_next(&mut self) {
+        if self.log_level_index < LOG_LEVELS.len() - 1 {
+            self.log_level_index += 1;
+        } else {
+            self.log_level_index = 0;
+        }
+    }
+
+    /// Get the currently selected log level.
+    fn selected_log_level(&self) -> &'static str {
+        LOG_LEVELS[self.log_level_index]
+    }
+
+    /// Build a Config from the current form values.
+    fn to_config(&self) -> Config {
+        Config {
+            claude: crate::config::ClaudeConfig {
+                path: self.claude_path.clone(),
+                args: self.claude_args.clone(),
+            },
+            paths: crate::config::PathsConfig {
+                prompt: self.prompt_file.clone(),
+                specs: self.specs_dir.clone(),
+            },
+            logging: crate::config::LoggingConfig {
+                level: self.selected_log_level().to_string(),
+            },
+        }
+    }
+}
 
 /// Formats a tool invocation for display.
 ///
@@ -332,6 +604,8 @@ struct App {
     run_start_time: Option<Instant>,
     /// Frame counter for animations (incremented each render cycle).
     frame_count: u64,
+    /// State for the config modal form (when open).
+    config_modal_state: Option<ConfigModalState>,
 }
 
 impl App {
@@ -376,6 +650,7 @@ impl App {
             current_log_level,
             run_start_time: None,
             frame_count: 0,
+            config_modal_state: None,
         }
     }
 
@@ -1032,6 +1307,130 @@ fn main() -> Result<()> {
     result
 }
 
+/// Handle keyboard input for the config modal.
+fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyModifiers) {
+    let Some(state) = &mut app.config_modal_state else {
+        return;
+    };
+
+    // Clear any previous error when user takes action
+    if state.error.is_some() && key_code != KeyCode::Esc {
+        state.error = None;
+    }
+
+    match key_code {
+        // Navigation between fields
+        KeyCode::Tab => {
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                state.focus_prev();
+            } else {
+                state.focus_next();
+            }
+        }
+        KeyCode::BackTab => {
+            state.focus_prev();
+        }
+
+        // Cancel / close
+        KeyCode::Esc => {
+            app.show_config_modal = false;
+            app.config_modal_state = None;
+        }
+
+        // Enter - context-dependent
+        KeyCode::Enter => match state.focus {
+            ConfigModalField::SaveButton => {
+                // Save config to file
+                let new_config = state.to_config();
+                match save_config(&new_config, &app.config_path) {
+                    Ok(()) => {
+                        // Update app config and close modal
+                        app.config = new_config;
+                        // Update mtime so we don't trigger a reload
+                        app.config_mtime = get_file_mtime(&app.config_path);
+                        app.show_config_modal = false;
+                        app.config_modal_state = None;
+                        debug!("Config saved successfully via modal");
+                    }
+                    Err(e) => {
+                        // Show error in modal, don't close
+                        state.error = Some(e);
+                    }
+                }
+            }
+            ConfigModalField::CancelButton => {
+                app.show_config_modal = false;
+                app.config_modal_state = None;
+            }
+            _ => {
+                // Enter in text fields moves to next field
+                state.focus_next();
+            }
+        },
+
+        // Text input handling
+        KeyCode::Char(c) => {
+            if matches!(
+                state.focus,
+                ConfigModalField::ClaudePath
+                    | ConfigModalField::ClaudeArgs
+                    | ConfigModalField::PromptFile
+                    | ConfigModalField::SpecsDirectory
+            ) {
+                state.insert_char(c);
+            }
+        }
+
+        KeyCode::Backspace => {
+            state.delete_char_before();
+        }
+
+        KeyCode::Delete => {
+            state.delete_char_at();
+        }
+
+        // Cursor movement within text fields
+        KeyCode::Left => {
+            if matches!(state.focus, ConfigModalField::LogLevel) {
+                state.log_level_prev();
+            } else {
+                state.cursor_left();
+            }
+        }
+
+        KeyCode::Right => {
+            if matches!(state.focus, ConfigModalField::LogLevel) {
+                state.log_level_next();
+            } else {
+                state.cursor_right();
+            }
+        }
+
+        KeyCode::Home => {
+            state.cursor_home();
+        }
+
+        KeyCode::End => {
+            state.cursor_end();
+        }
+
+        // Up/Down for log level dropdown and button navigation
+        KeyCode::Up => match state.focus {
+            ConfigModalField::LogLevel => state.log_level_prev(),
+            ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
+            _ => {}
+        },
+
+        KeyCode::Down => match state.focus {
+            ConfigModalField::LogLevel => state.log_level_next(),
+            ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
+            _ => {}
+        },
+
+        _ => {}
+    }
+}
+
 fn run_app(
     mut terminal: DefaultTerminal,
     session_id: String,
@@ -1075,12 +1474,10 @@ fn run_app(
                 continue;
             }
 
-            // Handle config modal dismissal
+            // Handle config modal input
             if app.show_config_modal {
-                if let Event::Key(key) = event
-                    && (key.code == KeyCode::Enter || key.code == KeyCode::Esc)
-                {
-                    app.show_config_modal = false;
+                if let Event::Key(key) = event {
+                    handle_config_modal_input(&mut app, key.code, key.modifiers);
                 }
                 continue;
             }
@@ -1100,6 +1497,8 @@ fn run_app(
                         // Only allow config modal when not running
                         if app.status != AppStatus::Running {
                             app.show_config_modal = true;
+                            app.config_modal_state =
+                                Some(ConfigModalState::from_config(&app.config));
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
@@ -1272,12 +1671,15 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_config_modal(f: &mut Frame, app: &App) {
-    let modal_width = 66;
-    let modal_height = 18;
+    let modal_width = 70;
+    let modal_height = 20;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
     f.render_widget(Clear, modal_area);
+
+    // Get form state (fall back to read-only view if no state)
+    let state = app.config_modal_state.as_ref();
 
     // Build the modal content
     let config_path_display = app.config_path.display().to_string();
@@ -1288,63 +1690,214 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
         .unwrap_or_else(|| "(not configured)".to_string());
 
     let separator = "─".repeat(modal_width.saturating_sub(4) as usize);
+    let field_width = 40;
 
-    let content = vec![
-        Line::from(""),
+    // Helper to render a text input field - returns owned Spans
+    let render_field = |value: &str, focused: bool, cursor_pos: usize| -> Vec<Span<'static>> {
+        let display_value: String = if value.len() > field_width {
+            // Show the portion around the cursor
+            let start = cursor_pos.saturating_sub(field_width / 2);
+            let end = (start + field_width).min(value.len());
+            let start = end.saturating_sub(field_width);
+            value[start..end].to_string()
+        } else {
+            value.to_string()
+        };
+
+        // Calculate cursor position within displayed text
+        let visible_cursor = if value.len() > field_width {
+            let start = cursor_pos.saturating_sub(field_width / 2);
+            let end = (start + field_width).min(value.len());
+            let start = end.saturating_sub(field_width);
+            cursor_pos - start
+        } else {
+            cursor_pos
+        };
+
+        if focused {
+            // Split at cursor for visual indication
+            let char_indices: Vec<_> = display_value.char_indices().collect();
+            let (before, cursor_char, rest) = if visible_cursor < char_indices.len() {
+                let (idx, _) = char_indices[visible_cursor];
+                let before = display_value[..idx].to_string();
+                let cursor_char = display_value[idx..]
+                    .chars()
+                    .next()
+                    .unwrap_or(' ')
+                    .to_string();
+                let rest_start = idx + cursor_char.len();
+                let rest = if rest_start < display_value.len() {
+                    display_value[rest_start..].to_string()
+                } else {
+                    String::new()
+                };
+                (before, cursor_char, rest)
+            } else {
+                (display_value.clone(), " ".to_string(), String::new())
+            };
+
+            vec![
+                Span::styled(before, Style::default().fg(Color::White)),
+                Span::styled(
+                    cursor_char,
+                    Style::default().fg(Color::Black).bg(Color::White),
+                ),
+                Span::styled(rest, Style::default().fg(Color::White)),
+            ]
+        } else {
+            vec![Span::styled(
+                display_value,
+                Style::default().fg(Color::White),
+            )]
+        }
+    };
+
+    // Helper for label styling
+    let label_style = Style::default().fg(Color::DarkGray);
+    let focused_label_style = Style::default().fg(Color::Cyan);
+
+    // Get values from state or config
+    let (claude_path, claude_args, prompt_file, specs_dir, log_level, cursor_pos, focus) =
+        if let Some(s) = state {
+            (
+                s.claude_path.as_str(),
+                s.claude_args.as_str(),
+                s.prompt_file.as_str(),
+                s.specs_dir.as_str(),
+                s.selected_log_level(),
+                s.cursor_pos,
+                Some(s.focus),
+            )
+        } else {
+            (
+                app.config.claude.path.as_str(),
+                app.config.claude.args.as_str(),
+                app.config.paths.prompt.as_str(),
+                app.config.paths.specs.as_str(),
+                app.config.logging.level.as_str(),
+                0,
+                None,
+            )
+        };
+
+    // Build content lines
+    let mut content = vec![
         Line::from(vec![
-            Span::styled("  Config file: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Config file: ", label_style),
             Span::raw(&config_path_display),
         ]),
         Line::from(vec![
-            Span::styled("  Log directory: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Log directory: ", label_style),
             Span::raw(&log_dir_display),
         ]),
-        Line::from(""),
         Line::from(format!("  {separator}")),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "  Claude CLI path:    ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw(&app.config.claude.path),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "  Claude CLI args:    ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw(truncate_str(&app.config.claude.args, 35)),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "  Prompt file:        ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw(&app.config.paths.prompt),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "  Specs directory:    ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw(&app.config.paths.specs),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                "  Log level:          ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw(&app.config.logging.level),
-        ]),
-        Line::from(""),
-        Line::from(""),
-        Line::from(Span::styled(
-            "                         [Close]                          ",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from(""),
     ];
+
+    // Claude CLI path field
+    let path_focused = focus == Some(ConfigModalField::ClaudePath);
+    let path_label_style = if path_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mut path_line = vec![Span::styled("  Claude CLI path: ", path_label_style)];
+    path_line.extend(render_field(claude_path, path_focused, cursor_pos));
+    content.push(Line::from(path_line));
+
+    // Claude CLI args field
+    let args_focused = focus == Some(ConfigModalField::ClaudeArgs);
+    let args_label_style = if args_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mut args_line = vec![Span::styled("  Claude CLI args: ", args_label_style)];
+    args_line.extend(render_field(claude_args, args_focused, cursor_pos));
+    content.push(Line::from(args_line));
+
+    // Prompt file field
+    let prompt_focused = focus == Some(ConfigModalField::PromptFile);
+    let prompt_label_style = if prompt_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mut prompt_line = vec![Span::styled("  Prompt file:     ", prompt_label_style)];
+    prompt_line.extend(render_field(prompt_file, prompt_focused, cursor_pos));
+    content.push(Line::from(prompt_line));
+
+    // Specs directory field
+    let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
+    let specs_label_style = if specs_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
+    specs_line.extend(render_field(specs_dir, specs_focused, cursor_pos));
+    content.push(Line::from(specs_line));
+
+    // Log level dropdown
+    let level_focused = focus == Some(ConfigModalField::LogLevel);
+    let level_label_style = if level_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let level_display = if level_focused {
+        format!("< {} >", log_level)
+    } else {
+        log_level.to_string()
+    };
+    let level_value_style = if level_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    content.push(Line::from(vec![
+        Span::styled("  Log level:       ", level_label_style),
+        Span::styled(level_display, level_value_style),
+    ]));
+
+    content.push(Line::from(""));
+
+    // Error message if any
+    if let Some(s) = state {
+        if let Some(error) = &s.error {
+            content.push(Line::from(Span::styled(
+                format!("  Error: {}", error),
+                Style::default().fg(Color::Red),
+            )));
+        } else {
+            content.push(Line::from(""));
+        }
+    } else {
+        content.push(Line::from(""));
+    }
+
+    // Buttons
+    let save_focused = focus == Some(ConfigModalField::SaveButton);
+    let cancel_focused = focus == Some(ConfigModalField::CancelButton);
+
+    let save_style = if save_focused {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
+    let cancel_style = if cancel_focused {
+        Style::default().fg(Color::Black).bg(Color::White)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    content.push(Line::from(vec![
+        Span::raw("                    "),
+        Span::styled(" Save ", save_style),
+        Span::raw("    "),
+        Span::styled(" Cancel ", cancel_style),
+    ]));
+
+    content.push(Line::from(""));
 
     let modal = Paragraph::new(content).block(
         Block::default()
