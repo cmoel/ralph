@@ -38,16 +38,16 @@ When `AppStatus` transitions to `Stopped`, the spec field clears.
 
 ## Acceptance Criteria
 
-- [ ] PROMPT.md updated with "In Progress" instructions (prerequisite)
-- [ ] Poll `specs/README.md` every 2 seconds while `AppStatus` is `Running`
-- [ ] Polling stops when `AppStatus` is `Stopped`
-- [ ] Parse markdown table to find row with "In Progress" status
-- [ ] Extract spec name from the matching row
-- [ ] Store current spec name in `App` state
-- [ ] Display spec name in status panel with "Spec:" label
-- [ ] Show "—" when no spec is in progress
-- [ ] Clear spec display when transitioning to `Stopped`
-- [ ] Parse failures handled gracefully (show "—", no crash)
+- [x] PROMPT.md updated with "In Progress" instructions (prerequisite)
+- [x] Poll `specs/README.md` every 2 seconds while `AppStatus` is `Running`
+- [x] Polling stops when `AppStatus` is `Stopped`
+- [x] Parse markdown table to find row with "In Progress" status
+- [x] Extract spec name from the matching row
+- [x] Store current spec name in `App` state
+- [x] Display spec name in status panel with "Spec:" label
+- [x] Show "—" when no spec is in progress
+- [x] Clear spec display when transitioning to `Stopped`
+- [x] Parse failures handled gracefully (show "—", no crash)
 
 ## Technical Constraints
 

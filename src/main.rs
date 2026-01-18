@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -264,6 +264,10 @@ struct App {
     /// Status of config loading.
     #[allow(dead_code)] // Used by future status-panel spec
     config_load_status: ConfigLoadStatus,
+    /// Name of the currently active spec (from specs/README.md).
+    current_spec: Option<String>,
+    /// Last time we polled for the current spec.
+    last_spec_poll: Instant,
 }
 
 impl App {
@@ -292,6 +296,9 @@ impl App {
             config: loaded_config.config,
             config_path: loaded_config.config_path,
             config_load_status: loaded_config.status,
+            current_spec: None,
+            // Initialize to "long ago" so we poll immediately on start
+            last_spec_poll: Instant::now() - Duration::from_secs(10),
         }
     }
 
@@ -674,8 +681,64 @@ impl App {
 
             self.status = AppStatus::Stopped;
             self.output_receiver = None;
+            // Clear current spec when stopped
+            self.current_spec = None;
         }
     }
+
+    fn poll_spec(&mut self) {
+        // Only poll when running
+        if self.status != AppStatus::Running {
+            return;
+        }
+
+        // Throttle: poll every 2 seconds
+        if self.last_spec_poll.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+
+        self.last_spec_poll = Instant::now();
+        self.current_spec = detect_current_spec(&self.config.specs_path());
+    }
+}
+
+/// Detect the currently in-progress spec from specs/README.md
+fn detect_current_spec(specs_dir: &std::path::Path) -> Option<String> {
+    let readme_path = specs_dir.join("README.md");
+
+    let contents = match std::fs::read_to_string(&readme_path) {
+        Ok(c) => c,
+        Err(e) => {
+            debug!(path = ?readme_path, error = %e, "spec_readme_read_failed");
+            return None;
+        }
+    };
+
+    let mut found_specs: Vec<String> = Vec::new();
+
+    for line in contents.lines() {
+        // Look for table rows with "In Progress" status
+        // Pattern: | [spec-name](...)  | In Progress | ... |
+        if line.contains("| In Progress |") || line.contains("| In Progress|") {
+            // Extract spec name from the link: | [spec-name](spec-name.md) |
+            if let Some(start) = line.find("| [") {
+                let after_bracket = &line[start + 3..];
+                if let Some(end) = after_bracket.find(']') {
+                    let spec_name = after_bracket[..end].to_string();
+                    found_specs.push(spec_name);
+                }
+            }
+        }
+    }
+
+    if found_specs.len() > 1 {
+        warn!(
+            specs = ?found_specs,
+            "multiple_specs_in_progress"
+        );
+    }
+
+    found_specs.into_iter().next()
 }
 
 fn main() -> Result<()> {
@@ -748,6 +811,9 @@ fn run_app(
     loop {
         // Poll for output from child process
         app.poll_output();
+
+        // Poll for current spec (throttled to every 2 seconds)
+        app.poll_spec();
 
         // Draw UI
         terminal.draw(|f| draw_ui(f, &mut app))?;
@@ -846,6 +912,13 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     status_spans.push(Span::raw("    Session: "));
     status_spans.push(Span::styled(
         app.session_id.as_deref().unwrap_or("---"),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+
+    // Add current spec
+    status_spans.push(Span::raw("    Spec: "));
+    status_spans.push(Span::styled(
+        app.current_spec.as_deref().unwrap_or("—"),
         Style::default().add_modifier(Modifier::BOLD),
     ));
 
