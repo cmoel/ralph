@@ -272,6 +272,29 @@ Pulse rate: ~2Hz (alternates every ~15 frames at 30fps)
 
 - None
 
+## Slice 7: Rename STOPPED to IDLE
+
+### User Behavior
+
+The stopped state label changes from "STOPPED" to "IDLE" for a friendlier, less abrupt tone.
+
+**Before:** `● STOPPED`
+**After:** `● IDLE`
+
+### Acceptance Criteria
+
+- [ ] Status text shows `IDLE` instead of `STOPPED` when not running
+- [ ] All references in code updated (enum variant can stay `Stopped`, just display text changes)
+
+### Technical Constraints
+
+- Only the display text changes, not the internal `AppStatus::Stopped` enum variant
+- Update the status label string in `draw_ui()`
+
+### Error Cases
+
+- None
+
 ## Dependencies
 
 - Slice 1: None (can start immediately)
@@ -280,6 +303,7 @@ Pulse rate: ~2Hz (alternates every ~15 frames at 30fps)
 - Slice 4: Slice 1
 - Slice 5: Slice 1
 - Slice 6: Slice 3
+- Slice 7: Slice 1
 
 ## Out of Scope
 
