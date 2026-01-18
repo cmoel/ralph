@@ -71,6 +71,21 @@ impl Default for LoggingConfig {
     }
 }
 
+/// Behavior configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BehaviorConfig {
+    pub auto_continue: bool,
+}
+
+impl Default for BehaviorConfig {
+    fn default() -> Self {
+        Self {
+            auto_continue: true,
+        }
+    }
+}
+
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -80,6 +95,8 @@ pub struct Config {
     pub paths: PathsConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub behavior: BehaviorConfig,
 }
 
 impl Config {

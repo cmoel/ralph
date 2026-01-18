@@ -423,6 +423,8 @@ impl ConfigModalState {
             logging: crate::config::LoggingConfig {
                 level: self.selected_log_level().to_string(),
             },
+            // Use default behavior config - modal doesn't edit this
+            behavior: crate::config::BehaviorConfig::default(),
         }
     }
 }
@@ -719,6 +721,8 @@ struct App {
     frame_count: u64,
     /// State for the config modal form (when open).
     config_modal_state: Option<ConfigModalState>,
+    /// Flag indicating auto-continue should be triggered on next loop iteration.
+    auto_continue_pending: bool,
 }
 
 impl App {
@@ -763,6 +767,7 @@ impl App {
             run_start_time: None,
             frame_count: 0,
             config_modal_state: None,
+            auto_continue_pending: false,
         }
     }
 
@@ -1072,6 +1077,18 @@ impl App {
         self.output_receiver = None;
     }
 
+    /// Stop the running command (user-initiated)
+    fn stop_command(&mut self) {
+        if self.status != AppStatus::Running {
+            return;
+        }
+        info!("manual_stop");
+        self.kill_child();
+        self.status = AppStatus::Stopped;
+        self.current_spec = None;
+        self.run_start_time = None;
+    }
+
     fn poll_output(&mut self) {
         // First, collect all pending messages
         let mut messages = Vec::new();
@@ -1101,43 +1118,44 @@ impl App {
             debug!("channel_disconnected");
 
             // Try to get exit status from child process
-            let exit_status: Option<String> = if let Some(mut child) = self.child_process.take() {
-                match child.try_wait() {
-                    Ok(Some(status)) => {
-                        if let Some(code) = status.code() {
-                            if code != 0 {
-                                warn!(exit_code = code, "process_exit_nonzero");
-                                self.add_line(format!("[Process exited with code {}]", code));
-                            }
-                            Some(format!("exit_code={}", code))
-                        } else {
-                            // Process was terminated by signal (Unix)
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::process::ExitStatusExt;
-                                if let Some(signal) = status.signal() {
-                                    info!(signal, "process_killed_by_signal");
-                                    Some(format!("signal={}", signal))
-                                } else {
-                                    Some("unknown".to_string())
+            let (exit_code, exit_status): (Option<i32>, Option<String>) =
+                if let Some(mut child) = self.child_process.take() {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            if let Some(code) = status.code() {
+                                if code != 0 {
+                                    warn!(exit_code = code, "process_exit_nonzero");
+                                    self.add_line(format!("[Process exited with code {}]", code));
+                                }
+                                (Some(code), Some(format!("exit_code={}", code)))
+                            } else {
+                                // Process was terminated by signal (Unix)
+                                #[cfg(unix)]
+                                {
+                                    use std::os::unix::process::ExitStatusExt;
+                                    if let Some(signal) = status.signal() {
+                                        info!(signal, "process_killed_by_signal");
+                                        (None, Some(format!("signal={}", signal)))
+                                    } else {
+                                        (None, Some("unknown".to_string()))
+                                    }
+                                }
+                                #[cfg(not(unix))]
+                                {
+                                    (None, Some("unknown".to_string()))
                                 }
                             }
-                            #[cfg(not(unix))]
-                            {
-                                Some("unknown".to_string())
-                            }
                         }
+                        Ok(None) => {
+                            // Still running, put it back (shouldn't happen if channel disconnected)
+                            self.child_process = Some(child);
+                            return;
+                        }
+                        Err(_) => (None, None),
                     }
-                    Ok(None) => {
-                        // Still running, put it back (shouldn't happen if channel disconnected)
-                        self.child_process = Some(child);
-                        return;
-                    }
-                    Err(_) => None,
-                }
-            } else {
-                None
-            };
+                } else {
+                    (None, None)
+                };
 
             // Log loop_end with exit status
             let status_str = exit_status.unwrap_or_else(|| "unknown".to_string());
@@ -1147,12 +1165,56 @@ impl App {
                 "loop_end"
             );
 
-            self.status = AppStatus::Stopped;
             self.output_receiver = None;
-            // Clear current spec when stopped
             self.current_spec = None;
-            // Clear elapsed timer when stopped
             self.run_start_time = None;
+
+            // Determine next state based on exit code and auto-continue setting
+            match exit_code {
+                Some(0) if self.config.behavior.auto_continue => {
+                    // Check if there are specs remaining
+                    match check_specs_remaining(&self.config.specs_path()) {
+                        SpecsRemaining::Yes => {
+                            info!("auto_continue");
+                            self.add_line(
+                                "══════════════════ AUTO-CONTINUING ══════════════════".to_string(),
+                            );
+                            self.auto_continue_pending = true;
+                            self.status = AppStatus::Stopped;
+                        }
+                        SpecsRemaining::No => {
+                            info!("all_specs_complete");
+                            self.add_line(
+                                "══════════════════ ALL SPECS COMPLETE ══════════════════"
+                                    .to_string(),
+                            );
+                            self.status = AppStatus::Stopped;
+                        }
+                        SpecsRemaining::Missing => {
+                            warn!("specs_readme_missing");
+                            self.add_line("[Error: specs/README.md not found]".to_string());
+                            self.status = AppStatus::Error;
+                        }
+                        SpecsRemaining::ReadError(e) => {
+                            warn!(error = %e, "specs_readme_read_error");
+                            self.add_line(format!("[Error reading specs/README.md: {}]", e));
+                            self.status = AppStatus::Error;
+                        }
+                    }
+                }
+                Some(0) => {
+                    // Auto-continue disabled, just stop
+                    self.status = AppStatus::Stopped;
+                }
+                Some(_code) => {
+                    // Non-zero exit code → Error state
+                    self.status = AppStatus::Error;
+                }
+                None => {
+                    // Killed by signal (manual stop) → Stopped state
+                    self.status = AppStatus::Stopped;
+                }
+            }
         }
     }
 
@@ -1234,6 +1296,46 @@ impl App {
             }
         }
     }
+}
+
+/// Result of checking if there's more spec work to do
+enum SpecsRemaining {
+    /// There are specs with Ready or In Progress status
+    Yes,
+    /// All specs are Done or Blocked
+    No,
+    /// README file doesn't exist
+    Missing,
+    /// README file couldn't be read (permissions, etc.)
+    ReadError(String),
+}
+
+/// Check if there are specs remaining (Ready or In Progress status)
+fn check_specs_remaining(specs_dir: &std::path::Path) -> SpecsRemaining {
+    let readme_path = specs_dir.join("README.md");
+
+    let contents = match std::fs::read_to_string(&readme_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return SpecsRemaining::Missing;
+        }
+        Err(e) => {
+            return SpecsRemaining::ReadError(e.to_string());
+        }
+    };
+
+    for line in contents.lines() {
+        // Look for table rows with "Ready" or "In Progress" status
+        if line.contains("| Ready |")
+            || line.contains("| Ready|")
+            || line.contains("| In Progress |")
+            || line.contains("| In Progress|")
+        {
+            return SpecsRemaining::Yes;
+        }
+    }
+
+    SpecsRemaining::No
 }
 
 /// Detect the currently in-progress spec from specs/README.md
@@ -1490,6 +1592,12 @@ fn run_app(
         // Poll for output from child process
         app.poll_output();
 
+        // Handle auto-continue if pending
+        if app.auto_continue_pending {
+            app.auto_continue_pending = false;
+            app.start_command()?;
+        }
+
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
 
@@ -1527,11 +1635,15 @@ fn run_app(
                         app.kill_child();
                         return Ok(());
                     }
-                    KeyCode::Char('s') => {
-                        if app.status != AppStatus::Error {
+                    KeyCode::Char('s') => match app.status {
+                        AppStatus::Stopped => {
                             app.start_command()?;
                         }
-                    }
+                        AppStatus::Running => {
+                            app.stop_command();
+                        }
+                        AppStatus::Error => {}
+                    },
                     KeyCode::Char('c') => {
                         // Only allow config modal when not running
                         if app.status != AppStatus::Running {
@@ -1640,7 +1752,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     let shortcuts = match app.status {
         AppStatus::Error => "[q] Quit",
         AppStatus::Stopped => "[s] Start  [c] Config  [q] Quit",
-        AppStatus::Running => "[s] Start  [q] Quit",
+        AppStatus::Running => "[s] Stop  [q] Quit",
     };
 
     // Status indicator: colored dot + text (elapsed time when running)

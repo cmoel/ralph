@@ -10,11 +10,11 @@ When claude is running, the user sees `[s] Stop` instead of `[s] Start` in the c
 
 ### Acceptance Criteria
 
-- [ ] Command panel shows `[s] Stop` when status is Running
-- [ ] Command panel shows `[s] Start` when status is Stopped or Error
-- [ ] Pressing `s` while Running kills the child process
-- [ ] After killing, status transitions to Stopped
-- [ ] Killing a process is logged
+- [x] Command panel shows `[s] Stop` when status is Running
+- [x] Command panel shows `[s] Start` when status is Stopped or Error
+- [x] Pressing `s` while Running kills the child process
+- [x] After killing, status transitions to Stopped
+- [x] Killing a process is logged
 
 ### Technical Constraints
 
@@ -35,15 +35,15 @@ When enabled (default), Ralph automatically restarts claude after it completes s
 
 ### Acceptance Criteria
 
-- [ ] Config option `[behavior] auto_continue = true` exists (enabled by default)
-- [ ] On exit code 0: check `specs/README.md` for remaining work
-- [ ] If README has specs with Ready or In Progress status → auto-continue
-- [ ] If README has no Ready or In Progress specs → transition to Stopped
-- [ ] If README cannot be read → transition to Error state
-- [ ] On exit code non-zero → transition to Error state
-- [ ] Auto-continue displays bold/standout message in output area
-- [ ] Auto-continue is logged
-- [ ] Manual stop (Slice 1) does not trigger auto-continue (killed processes exit non-zero)
+- [x] Config option `[behavior] auto_continue = true` exists (enabled by default)
+- [x] On exit code 0: check `specs/README.md` for remaining work
+- [x] If README has specs with Ready or In Progress status → auto-continue
+- [x] If README has no Ready or In Progress specs → transition to Stopped
+- [x] If README cannot be read → transition to Error state
+- [x] On exit code non-zero → transition to Error state
+- [x] Auto-continue displays bold/standout message in output area
+- [x] Auto-continue is logged
+- [x] Manual stop (Slice 1) does not trigger auto-continue (killed processes exit non-zero)
 
 ### Technical Constraints
 
