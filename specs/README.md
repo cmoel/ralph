@@ -22,6 +22,7 @@ Single source of truth for specification status.
 | [ui-overhaul](ui-overhaul.md) | Done | Redesigned layout with command panel, state-based styling, timer | — |
 | [config-modal](config-modal.md) | Done | In-app config form with validation using ratatui native widgets | configuration |
 | [remove-cli-args-field](remove-cli-args-field.md) | Done | Remove non-configurable CLI args field from config modal | config-modal |
+| [auto-continue](auto-continue.md) | Ready | Auto-continue claude until all specs complete | configuration |
 
 ## Notes
 
