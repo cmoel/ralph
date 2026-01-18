@@ -194,12 +194,12 @@ When running, the status shows elapsed time instead of static "RUNNING" text.
 
 ### Acceptance Criteria
 
-- [ ] Track start time when transitioning to Running
-- [ ] Display elapsed time in command panel status area
-- [ ] Format: `M:SS` under 1 hour, `H:MM:SS` over 1 hour
-- [ ] Timer updates every render cycle
-- [ ] Timer freezes on Error state (shows last elapsed time)
-- [ ] Timer clears on Stopped state
+- [x] Track start time when transitioning to Running
+- [x] Display elapsed time in command panel status area
+- [x] Format: `M:SS` under 1 hour, `H:MM:SS` over 1 hour
+- [x] Timer updates every render cycle
+- [x] Timer freezes on Error state (shows last elapsed time)
+- [x] Timer clears on Stopped state
 
 ### Technical Constraints
 

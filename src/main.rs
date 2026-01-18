@@ -82,6 +82,20 @@ impl AppStatus {
     }
 }
 
+/// Formats a duration as M:SS (under 1 hour) or H:MM:SS (1+ hours).
+fn format_elapsed(duration: Duration) -> String {
+    let total_secs = duration.as_secs();
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, minutes, seconds)
+    } else {
+        format!("{}:{:02}", minutes, seconds)
+    }
+}
+
 enum OutputMessage {
     Line(String),
 }
@@ -300,6 +314,8 @@ struct App {
     log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     /// Current log level from config (to detect changes on reload).
     current_log_level: String,
+    /// When the current run started (for elapsed time display).
+    run_start_time: Option<Instant>,
 }
 
 impl App {
@@ -341,6 +357,7 @@ impl App {
             status_error: None,
             log_level_handle,
             current_log_level,
+            run_start_time: None,
         }
     }
 
@@ -626,6 +643,7 @@ impl App {
                 self.child_process = Some(child);
                 self.output_receiver = Some(rx);
                 self.status = AppStatus::Running;
+                self.run_start_time = Some(Instant::now());
             }
             Err(e) => {
                 self.status = AppStatus::Error;
@@ -725,6 +743,8 @@ impl App {
             self.output_receiver = None;
             // Clear current spec when stopped
             self.current_spec = None;
+            // Clear elapsed timer when stopped
+            self.run_start_time = None;
         }
     }
 
@@ -1147,11 +1167,25 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
         AppStatus::Running => "[s] Start  [q] Quit",
     };
 
-    // Status indicator: colored dot + text
-    let (status_dot, status_text) = match app.status {
-        AppStatus::Stopped => ("● ", "STOPPED"),
-        AppStatus::Running => ("● ", "RUNNING"),
-        AppStatus::Error => ("● ", "ERROR"),
+    // Status indicator: colored dot + text (elapsed time when running)
+    let status_dot = "● ";
+    let status_text = match app.status {
+        AppStatus::Stopped => "STOPPED".to_string(),
+        AppStatus::Running => {
+            if let Some(start_time) = app.run_start_time {
+                format_elapsed(start_time.elapsed())
+            } else {
+                "RUNNING".to_string()
+            }
+        }
+        AppStatus::Error => {
+            // Show frozen elapsed time if available, otherwise just ERROR
+            if let Some(start_time) = app.run_start_time {
+                format_elapsed(start_time.elapsed())
+            } else {
+                "ERROR".to_string()
+            }
+        }
     };
     let status_color = app.status.color();
 
