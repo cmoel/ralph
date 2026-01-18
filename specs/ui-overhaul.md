@@ -257,10 +257,10 @@ Pulse rate: ~2Hz (alternates every ~15 frames at 30fps)
 
 ### Acceptance Criteria
 
-- [ ] Error state border pulses red ↔ dark red
-- [ ] Pulsing uses `frame.count()` for timing
-- [ ] Only pulses in Error state, solid color otherwise
-- [ ] Status dot in command panel also pulses
+- [x] Error state border pulses red ↔ dark red
+- [x] Pulsing uses `frame.count()` for timing
+- [x] Only pulses in Error state, solid color otherwise
+- [x] Status dot in command panel also pulses
 
 ### Technical Constraints
 

@@ -69,18 +69,26 @@ impl AppStatus {
         }
     }
 
-    fn color(&self) -> Color {
-        match self {
-            AppStatus::Stopped => Color::Cyan,
-            AppStatus::Running => Color::Green,
-            AppStatus::Error => Color::Red,
-        }
-    }
-
     fn border_type(&self) -> BorderType {
         match self {
             AppStatus::Stopped => BorderType::Rounded,
             AppStatus::Running | AppStatus::Error => BorderType::Double,
+        }
+    }
+
+    /// Returns the color for this status, with pulsing effect for Error state.
+    /// The pulse alternates between red and dark red at ~2Hz (every 15 frames at 30fps).
+    fn pulsing_color(&self, frame_count: u64) -> Color {
+        match self {
+            AppStatus::Stopped => Color::Cyan,
+            AppStatus::Running => Color::Green,
+            AppStatus::Error => {
+                if (frame_count / 15).is_multiple_of(2) {
+                    Color::Red
+                } else {
+                    Color::Rgb(128, 0, 0)
+                }
+            }
         }
     }
 }
@@ -319,6 +327,8 @@ struct App {
     current_log_level: String,
     /// When the current run started (for elapsed time display).
     run_start_time: Option<Instant>,
+    /// Frame counter for animations (incremented each render cycle).
+    frame_count: u64,
 }
 
 impl App {
@@ -361,6 +371,7 @@ impl App {
             log_level_handle,
             current_log_level,
             run_start_time: None,
+            frame_count: 0,
         }
     }
 
@@ -1127,6 +1138,9 @@ fn run_app(
 }
 
 fn draw_ui(f: &mut Frame, app: &mut App) {
+    // Increment frame counter for animations
+    app.frame_count = app.frame_count.wrapping_add(1);
+
     // Two-panel layout: output (flexible) + command (fixed height 3)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1149,7 +1163,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     let mut output_block = Block::default()
         .borders(Borders::ALL)
         .border_type(app.status.border_type())
-        .border_style(Style::default().fg(app.status.color()))
+        .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count)))
         .title(Line::from(format!(" {} ", app.session_id)).left_aligned());
 
     if let Some(spec) = &app.current_spec {
@@ -1206,7 +1220,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
             }
         }
     };
-    let status_color = app.status.color();
+    let status_color = app.status.pulsing_color(app.frame_count);
 
     // Calculate spacing to right-align the status indicator
     // Total width minus borders (2), shortcuts length, status indicator length
@@ -1226,7 +1240,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
         Block::default()
             .borders(Borders::ALL)
             .border_type(app.status.border_type())
-            .border_style(Style::default().fg(app.status.color())),
+            .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count))),
     );
 
     f.render_widget(command_panel, chunks[1]);
