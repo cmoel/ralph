@@ -210,13 +210,13 @@ If users edit the config file externally and introduce errors, Ralph shows the e
 
 ### Acceptance Criteria
 
-- [ ] Remove `open_config_in_editor()` function
-- [ ] Remove `$VISUAL` / `$EDITOR` / `vi` fallback logic
-- [ ] Remove editor-related error handling (`NoEditor`, `SpawnFailed`, etc.)
-- [ ] `c` key only opens config modal
-- [ ] Footer hint remains `[c] Config`
-- [ ] External config edits still trigger auto-reload (existing behavior)
-- [ ] Invalid external edits show warning in status panel (existing behavior)
+- [x] Remove `open_config_in_editor()` function
+- [x] Remove `$VISUAL` / `$EDITOR` / `vi` fallback logic
+- [x] Remove editor-related error handling (`NoEditor`, `SpawnFailed`, etc.)
+- [x] `c` key only opens config modal
+- [x] Footer hint remains `[c] Config`
+- [x] External config edits still trigger auto-reload (existing behavior)
+- [x] Invalid external edits show warning in status panel (existing behavior)
 
 ### Technical Constraints
 

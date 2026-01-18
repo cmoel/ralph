@@ -2,9 +2,7 @@ mod config;
 mod events;
 mod logging;
 
-use crate::config::{
-    Config, ConfigLoadStatus, LoadedConfig, ensure_config_exists, reload_config, save_config,
-};
+use crate::config::{Config, ConfigLoadStatus, LoadedConfig, reload_config, save_config};
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
@@ -736,10 +734,6 @@ struct App {
     current_spec: Option<String>,
     /// Last time we polled for the current spec.
     last_spec_poll: Instant,
-    /// Transient error message to display in the status panel (e.g., editor spawn failure).
-    // TODO: Remove in Slice 4 after config form is fully implemented (was for editor errors)
-    #[allow(dead_code)]
-    status_error: Option<String>,
     /// Handle for dynamically reloading the log level.
     log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     /// Current log level from config (to detect changes on reload).
@@ -789,7 +783,6 @@ impl App {
             current_spec: None,
             // Initialize to "long ago" so we poll immediately on start
             last_spec_poll: Instant::now() - Duration::from_secs(10),
-            status_error: None,
             log_level_handle,
             current_log_level,
             run_start_time: None,
@@ -1261,85 +1254,6 @@ impl App {
                 // Keep previous config, show error
                 self.config_reload_error = Some(error);
             }
-        }
-    }
-}
-
-/// Get the editor command to use for editing config.
-/// Checks $VISUAL first, then $EDITOR, falls back to "vi".
-// TODO: Remove in Slice 4 after config form is fully implemented
-#[allow(dead_code)]
-fn get_editor() -> String {
-    std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string())
-}
-
-/// Result of attempting to open the config in an editor.
-// TODO: Remove in Slice 4 after config form is fully implemented
-#[allow(dead_code)]
-#[derive(Debug)]
-enum EditConfigResult {
-    /// Successfully opened and closed the editor
-    Success,
-    /// Could not determine config path
-    NoConfigPath,
-    /// Editor failed to spawn
-    SpawnFailed(String),
-    /// Editor exited with non-zero status
-    EditorError(i32),
-}
-
-/// Opens the config file in the user's preferred editor.
-/// Suspends the terminal, runs the editor, then restores the terminal.
-// TODO: Remove in Slice 4 after config form is fully implemented
-#[allow(dead_code)]
-fn open_config_in_editor(terminal: &mut DefaultTerminal) -> EditConfigResult {
-    let config_path = match ensure_config_exists() {
-        Some(path) => path,
-        None => return EditConfigResult::NoConfigPath,
-    };
-
-    let editor = get_editor();
-    debug!(editor = %editor, config_path = %config_path.display(), "opening_config_editor");
-
-    // Suspend the TUI
-    if let Err(e) = disable_raw_mode() {
-        warn!(error = %e, "failed to disable raw mode");
-    }
-    if let Err(e) = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture) {
-        warn!(error = %e, "failed to leave alternate screen");
-    }
-
-    // Spawn the editor and wait for it to complete
-    let result = Command::new(&editor).arg(&config_path).status();
-
-    // Restore the TUI
-    if let Err(e) = enable_raw_mode() {
-        warn!(error = %e, "failed to re-enable raw mode");
-    }
-    if let Err(e) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture) {
-        warn!(error = %e, "failed to re-enter alternate screen");
-    }
-    // Force a full redraw
-    if let Err(e) = terminal.clear() {
-        warn!(error = %e, "failed to clear terminal after editor");
-    }
-
-    match result {
-        Ok(status) => {
-            if status.success() {
-                info!(editor = %editor, "config_editor_closed");
-                EditConfigResult::Success
-            } else {
-                let code = status.code().unwrap_or(-1);
-                warn!(editor = %editor, exit_code = code, "config_editor_exited_with_error");
-                EditConfigResult::EditorError(code)
-            }
-        }
-        Err(e) => {
-            warn!(editor = %editor, error = %e, "config_editor_spawn_failed");
-            EditConfigResult::SpawnFailed(format!("{}: {}", editor, e))
         }
     }
 }

@@ -125,26 +125,6 @@ pub fn get_config_path() -> Option<PathBuf> {
     get_config_dir().map(|dir| dir.join("config.toml"))
 }
 
-/// Ensure the config file exists, creating it with defaults if necessary.
-/// Returns the path to the config file, or None if it couldn't be determined/created.
-pub fn ensure_config_exists() -> Option<PathBuf> {
-    let config_path = get_config_path()?;
-
-    if config_path.exists() {
-        return Some(config_path);
-    }
-
-    // Create default config
-    let (_, status) = create_default_config(&config_path);
-    match status {
-        ConfigLoadStatus::Created | ConfigLoadStatus::Loaded => Some(config_path),
-        ConfigLoadStatus::Error(_) => {
-            // Even if we couldn't create it, return the path so the editor can show an error
-            Some(config_path)
-        }
-    }
-}
-
 /// Load configuration from file, environment, and defaults
 pub fn load_config() -> LoadedConfig {
     let config_path = match get_config_path() {
