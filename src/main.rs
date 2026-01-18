@@ -30,6 +30,16 @@ use tracing::{debug, info, trace, warn};
 
 use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
 
+/// Contract a path by replacing the home directory with `~` for display.
+fn contract_path(path: &std::path::Path) -> String {
+    if let Some(home) = dirs::home_dir()
+        && let Ok(suffix) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", suffix.display());
+    }
+    path.display().to_string()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppStatus {
     Stopped,
@@ -239,15 +249,12 @@ struct App {
     /// Current line being accumulated (text that hasn't hit a newline yet).
     current_line: String,
     /// Session ID for this Ralph invocation.
-    #[allow(dead_code)] // Used by future status-panel spec
     session_id: Option<String>,
     /// Loop counter for logging, incremented each time start_command() is called.
     loop_count: u64,
     /// Directory where logs are written.
-    #[allow(dead_code)] // Used by future status-panel spec
     log_directory: Option<PathBuf>,
     /// Error that occurred during logging initialization.
-    #[allow(dead_code)] // Used by future status-panel spec
     logging_error: Option<String>,
     /// Loaded configuration.
     config: Config,
@@ -825,7 +832,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     app.main_pane_width = chunks[1].width;
 
     // Status panel
-    let status_line = Line::from(vec![
+    let mut status_spans = vec![
         Span::styled("● ", Style::default().fg(app.status.color())),
         Span::styled(
             app.status.label(),
@@ -833,7 +840,37 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
                 .fg(app.status.color())
                 .add_modifier(Modifier::BOLD),
         ),
-    ]);
+    ];
+
+    // Add session ID
+    status_spans.push(Span::raw("    Session: "));
+    status_spans.push(Span::styled(
+        app.session_id.as_deref().unwrap_or("---"),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+
+    // Add logging info (log directory or error)
+    status_spans.push(Span::raw("    "));
+    if let Some(ref error) = app.logging_error {
+        // Logging failed - show warning
+        status_spans.push(Span::styled("⚠ ", Style::default().fg(Color::Yellow)));
+        status_spans.push(Span::styled(
+            error.as_str(),
+            Style::default().fg(Color::Yellow),
+        ));
+    } else if let Some(ref log_dir) = app.log_directory {
+        // Logging succeeded - show directory
+        status_spans.push(Span::raw("Logs: "));
+        status_spans.push(Span::styled(
+            contract_path(log_dir),
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+    } else {
+        // Logging not initialized yet
+        status_spans.push(Span::raw("Logs: ---"));
+    }
+
+    let status_line = Line::from(status_spans);
     let status_panel = Paragraph::new(status_line).block(
         Block::default()
             .borders(Borders::ALL)

@@ -73,14 +73,14 @@ The status panel now shows the session ID and log directory, enabling users to q
 
 ### Acceptance Criteria
 
-- [ ] Session ID displayed with "Session:" label
-- [ ] Session ID text is bold
-- [ ] Log directory displayed with "Logs:" label (when logging succeeded)
-- [ ] Log directory text is dim (`Modifier::DIM`)
-- [ ] Warning icon (⚠) displayed when logging failed
-- [ ] Warning icon and error message in yellow
-- [ ] Elements have visual separation (spaces or divider characters)
-- [ ] Long paths truncate gracefully on narrow terminals
+- [x] Session ID displayed with "Session:" label
+- [x] Session ID text is bold
+- [x] Log directory displayed with "Logs:" label (when logging succeeded)
+- [x] Log directory text is dim (`Modifier::DIM`)
+- [x] Warning icon (⚠) displayed when logging failed
+- [x] Warning icon and error message in yellow
+- [x] Elements have visual separation (spaces or divider characters)
+- [x] Long paths truncate gracefully on narrow terminals
 
 ### Technical Constraints
 
