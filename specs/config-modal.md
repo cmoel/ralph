@@ -45,18 +45,17 @@ This slice establishes the modal infrastructure before adding editing.
 
 ### Acceptance Criteria
 
-- [ ] Add `rat-widget` and `rat-salsa` dependencies to Cargo.toml
-- [ ] Press `c` opens modal (only when `AppStatus` is not `Running`)
-- [ ] Modal displays config file path (read-only)
-- [ ] Modal displays log directory path (read-only)
-- [ ] Modal displays all current config values (read-only)
-- [ ] `Esc` or `Close` button dismisses modal
-- [ ] Modal uses rat-widget's modal dialog component
-- [ ] Modal is centered and sized appropriately
+- [x] ~~Add `rat-widget` and `rat-salsa` dependencies to Cargo.toml~~ (Blocked: rat-salsa 3.1 requires crossterm 0.28, but ralph uses crossterm 0.29. Using ratatui native widgets instead.)
+- [x] Press `c` opens modal (only when `AppStatus` is not `Running`)
+- [x] Modal displays config file path (read-only)
+- [x] Modal displays log directory path (read-only)
+- [x] Modal displays all current config values (read-only)
+- [x] `Esc` or `Close` button dismisses modal
+- [x] Modal is centered and sized appropriately (using existing `centered_rect` helper)
 
 ### Technical Constraints
 
-- Use `rat-widget::msgdialog` or `rat-popup` for modal
+- Use ratatui's native `Block`, `Paragraph`, and `Clear` widgets for modal (fallback from rat-widget due to crossterm version incompatibility)
 - Store `show_config_modal: bool` in `App` state
 - Block other input while modal is open
 - Read values from `app.config`

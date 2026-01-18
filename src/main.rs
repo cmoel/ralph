@@ -282,6 +282,7 @@ struct App {
     scroll_offset: u16,
     is_auto_following: bool,
     show_already_running_popup: bool,
+    show_config_modal: bool,
     main_pane_height: u16,
     main_pane_width: u16,
     child_process: Option<Child>,
@@ -320,6 +321,8 @@ struct App {
     /// Last time we polled for the current spec.
     last_spec_poll: Instant,
     /// Transient error message to display in the status panel (e.g., editor spawn failure).
+    // TODO: Remove in Slice 4 after config form is fully implemented (was for editor errors)
+    #[allow(dead_code)]
     status_error: Option<String>,
     /// Handle for dynamically reloading the log level.
     log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
@@ -346,6 +349,7 @@ impl App {
             scroll_offset: 0,
             is_auto_following: true,
             show_already_running_popup: false,
+            show_config_modal: false,
             main_pane_height: 0,
             main_pane_width: 0,
             child_process: None,
@@ -844,6 +848,8 @@ impl App {
 
 /// Get the editor command to use for editing config.
 /// Checks $VISUAL first, then $EDITOR, falls back to "vi".
+// TODO: Remove in Slice 4 after config form is fully implemented
+#[allow(dead_code)]
 fn get_editor() -> String {
     std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
@@ -851,6 +857,8 @@ fn get_editor() -> String {
 }
 
 /// Result of attempting to open the config in an editor.
+// TODO: Remove in Slice 4 after config form is fully implemented
+#[allow(dead_code)]
 #[derive(Debug)]
 enum EditConfigResult {
     /// Successfully opened and closed the editor
@@ -865,6 +873,8 @@ enum EditConfigResult {
 
 /// Opens the config file in the user's preferred editor.
 /// Suspends the terminal, runs the editor, then restores the terminal.
+// TODO: Remove in Slice 4 after config form is fully implemented
+#[allow(dead_code)]
 fn open_config_in_editor(terminal: &mut DefaultTerminal) -> EditConfigResult {
     let config_path = match ensure_config_exists() {
         Some(path) => path,
@@ -1065,6 +1075,16 @@ fn run_app(
                 continue;
             }
 
+            // Handle config modal dismissal
+            if app.show_config_modal {
+                if let Event::Key(key) = event
+                    && (key.code == KeyCode::Enter || key.code == KeyCode::Esc)
+                {
+                    app.show_config_modal = false;
+                }
+                continue;
+            }
+
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
@@ -1077,24 +1097,9 @@ fn run_app(
                         }
                     }
                     KeyCode::Char('c') => {
-                        // Only allow config editing when stopped
-                        if app.status == AppStatus::Stopped {
-                            // Clear any previous error before opening editor
-                            app.status_error = None;
-                            match open_config_in_editor(&mut terminal) {
-                                EditConfigResult::Success => {}
-                                EditConfigResult::NoConfigPath => {
-                                    app.status_error =
-                                        Some("Could not determine config path".to_string());
-                                }
-                                EditConfigResult::SpawnFailed(msg) => {
-                                    app.status_error = Some(format!("Editor failed: {}", msg));
-                                }
-                                EditConfigResult::EditorError(code) => {
-                                    app.status_error =
-                                        Some(format!("Editor exited with code {}", code));
-                                }
-                            }
+                        // Only allow config modal when not running
+                        if app.status != AppStatus::Running {
+                            app.show_config_modal = true;
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
@@ -1259,6 +1264,97 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
             .style(Style::default());
         f.render_widget(popup, popup_area);
     }
+
+    // Config modal
+    if app.show_config_modal {
+        draw_config_modal(f, app);
+    }
+}
+
+fn draw_config_modal(f: &mut Frame, app: &App) {
+    let modal_width = 66;
+    let modal_height = 18;
+    let modal_area = centered_rect(modal_width, modal_height, f.area());
+
+    // Clear the area behind the modal
+    f.render_widget(Clear, modal_area);
+
+    // Build the modal content
+    let config_path_display = app.config_path.display().to_string();
+    let log_dir_display = app
+        .log_directory
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(not configured)".to_string());
+
+    let separator = "─".repeat(modal_width.saturating_sub(4) as usize);
+
+    let content = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Config file: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&config_path_display),
+        ]),
+        Line::from(vec![
+            Span::styled("  Log directory: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&log_dir_display),
+        ]),
+        Line::from(""),
+        Line::from(format!("  {separator}")),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  Claude CLI path:    ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(&app.config.claude.path),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  Claude CLI args:    ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(truncate_str(&app.config.claude.args, 35)),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  Prompt file:        ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(&app.config.paths.prompt),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  Specs directory:    ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(&app.config.paths.specs),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  Log level:          ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(&app.config.logging.level),
+        ]),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "                         [Close]                          ",
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+    ];
+
+    let modal = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Configuration ")
+            .title_alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(Color::White)),
+    );
+
+    f.render_widget(modal, modal_area);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
