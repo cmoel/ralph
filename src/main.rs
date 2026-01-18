@@ -128,6 +128,240 @@ const TOOL_INPUT_MAX_LEN: usize = 60;
 /// Log level options for the dropdown.
 const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
+/// Status of a spec in the README table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SpecStatus {
+    /// Blocked - needs attention (sorted first)
+    Blocked,
+    /// Ready - can be worked on
+    Ready,
+    /// In Progress - currently being worked on
+    InProgress,
+    /// Done - completed (sorted last)
+    Done,
+}
+
+impl SpecStatus {
+    /// Parse status from string.
+    fn from_str(s: &str) -> Option<Self> {
+        match s.trim() {
+            "Blocked" => Some(Self::Blocked),
+            "Ready" => Some(Self::Ready),
+            "In Progress" => Some(Self::InProgress),
+            "Done" => Some(Self::Done),
+            _ => None,
+        }
+    }
+
+    /// Get the display color for this status.
+    fn color(&self) -> Color {
+        match self {
+            Self::Blocked => Color::Red,
+            Self::Ready => Color::Cyan,
+            Self::InProgress => Color::Green,
+            Self::Done => Color::DarkGray,
+        }
+    }
+
+    /// Get the display label for this status.
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Blocked => "Blocked",
+            Self::Ready => "Ready",
+            Self::InProgress => "In Progress",
+            Self::Done => "Done",
+        }
+    }
+}
+
+/// A single spec entry parsed from the README.
+#[derive(Debug, Clone)]
+struct SpecEntry {
+    /// Name of the spec (from markdown link).
+    name: String,
+    /// Current status.
+    status: SpecStatus,
+    /// File creation/modification timestamp for sorting.
+    timestamp: Option<SystemTime>,
+}
+
+/// State for the specs panel modal.
+#[derive(Debug)]
+struct SpecsPanelState {
+    /// List of specs parsed from README.
+    specs: Vec<SpecEntry>,
+    /// Currently selected index.
+    selected: usize,
+    /// Scroll offset for the list.
+    scroll_offset: usize,
+    /// Error message if parsing failed.
+    error: Option<String>,
+    /// Directory where spec files are located.
+    specs_dir: PathBuf,
+}
+
+impl SpecsPanelState {
+    /// Create a new specs panel state by parsing the README.
+    fn new(specs_dir: &std::path::Path) -> Self {
+        match parse_specs_readme(specs_dir) {
+            Ok(mut specs) => {
+                // Sort by status (Blocked→Ready→InProgress→Done), then by timestamp (newest first)
+                specs.sort_by(|a, b| match a.status.cmp(&b.status) {
+                    std::cmp::Ordering::Equal => {
+                        // Within same status, sort by timestamp descending (newest first)
+                        // None values go to the end
+                        match (&b.timestamp, &a.timestamp) {
+                            (Some(b_ts), Some(a_ts)) => b_ts.cmp(a_ts),
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => std::cmp::Ordering::Equal,
+                        }
+                    }
+                    other => other,
+                });
+                Self {
+                    specs,
+                    selected: 0,
+                    scroll_offset: 0,
+                    error: None,
+                    specs_dir: specs_dir.to_path_buf(),
+                }
+            }
+            Err(e) => Self {
+                specs: Vec::new(),
+                selected: 0,
+                scroll_offset: 0,
+                error: Some(e),
+                specs_dir: specs_dir.to_path_buf(),
+            },
+        }
+    }
+
+    /// Get the path to the currently selected spec file.
+    fn selected_spec_path(&self) -> Option<PathBuf> {
+        self.specs
+            .get(self.selected)
+            .map(|spec| self.specs_dir.join(format!("{}.md", spec.name)))
+    }
+
+    /// Read the head of the selected spec file.
+    fn read_selected_spec_head(&self, max_lines: usize) -> Result<Vec<String>, String> {
+        let path = self.selected_spec_path().ok_or("No spec selected")?;
+
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err("File not found".to_string());
+            }
+            Err(e) => {
+                return Err(format!("Error reading file: {}", e));
+            }
+        };
+
+        Ok(contents.lines().take(max_lines).map(String::from).collect())
+    }
+
+    /// Move selection up.
+    fn select_prev(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move selection down.
+    fn select_next(&mut self) {
+        if !self.specs.is_empty() && self.selected < self.specs.len() - 1 {
+            self.selected += 1;
+        }
+    }
+
+    /// Count of blocked specs.
+    fn blocked_count(&self) -> usize {
+        self.specs
+            .iter()
+            .filter(|s| s.status == SpecStatus::Blocked)
+            .count()
+    }
+
+    /// Ensure selected item is visible, adjusting scroll_offset if needed.
+    fn ensure_visible(&mut self, visible_height: usize) {
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        } else if self.selected >= self.scroll_offset + visible_height {
+            self.scroll_offset = self.selected - visible_height + 1;
+        }
+    }
+}
+
+/// Parse specs from the README.md file.
+fn parse_specs_readme(specs_dir: &std::path::Path) -> Result<Vec<SpecEntry>, String> {
+    let readme_path = specs_dir.join("README.md");
+
+    let contents = match std::fs::read_to_string(&readme_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err("specs/README.md not found".to_string());
+        }
+        Err(e) => {
+            return Err(format!("Failed to read specs/README.md: {}", e));
+        }
+    };
+
+    let mut specs = Vec::new();
+
+    for line in contents.lines() {
+        // Skip non-table lines and header rows
+        if !line.starts_with('|') || line.contains("---") || line.contains("Spec") {
+            continue;
+        }
+
+        // Parse table row: | [spec-name](spec-name.md) | Status | Summary | Depends On |
+        let parts: Vec<&str> = line.split('|').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        // Extract spec name from markdown link in first column
+        let name_col = parts.get(1).map(|s| s.trim()).unwrap_or("");
+        let name = if let Some(start) = name_col.find('[') {
+            let after_bracket = &name_col[start + 1..];
+            if let Some(end) = after_bracket.find(']') {
+                after_bracket[..end].to_string()
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        };
+
+        // Extract status from second column
+        let status_str = parts.get(2).map(|s| s.trim()).unwrap_or("");
+        let status = match SpecStatus::from_str(status_str) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        // Get file timestamp
+        let spec_path = specs_dir.join(format!("{}.md", name));
+        let timestamp = std::fs::metadata(&spec_path).ok().and_then(|m| {
+            // Try created time first, fall back to modified time
+            m.created().ok().or_else(|| m.modified().ok())
+        });
+
+        specs.push(SpecEntry {
+            name,
+            status,
+            timestamp,
+        });
+    }
+
+    if specs.is_empty() {
+        return Err("No specs found in README.md".to_string());
+    }
+
+    Ok(specs)
+}
+
 /// Which field is focused in the config modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ConfigModalField {
@@ -723,6 +957,10 @@ struct App {
     config_modal_state: Option<ConfigModalState>,
     /// Flag indicating auto-continue should be triggered on next loop iteration.
     auto_continue_pending: bool,
+    /// Whether the specs panel modal is visible.
+    show_specs_panel: bool,
+    /// State for the specs panel modal (when open).
+    specs_panel_state: Option<SpecsPanelState>,
 }
 
 impl App {
@@ -768,6 +1006,8 @@ impl App {
             frame_count: 0,
             config_modal_state: None,
             auto_continue_pending: false,
+            show_specs_panel: false,
+            specs_panel_state: None,
         }
     }
 
@@ -1572,6 +1812,27 @@ fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyMod
     }
 }
 
+/// Handle keyboard input for the specs panel.
+fn handle_specs_panel_input(app: &mut App, key_code: KeyCode) {
+    let Some(state) = &mut app.specs_panel_state else {
+        return;
+    };
+
+    match key_code {
+        KeyCode::Esc => {
+            app.show_specs_panel = false;
+            app.specs_panel_state = None;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.select_prev();
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            state.select_next();
+        }
+        _ => {}
+    }
+}
+
 fn run_app(
     mut terminal: DefaultTerminal,
     session_id: String,
@@ -1629,6 +1890,14 @@ fn run_app(
                 continue;
             }
 
+            // Handle specs panel input
+            if app.show_specs_panel {
+                if let Event::Key(key) = event {
+                    handle_specs_panel_input(&mut app, key.code);
+                }
+                continue;
+            }
+
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
@@ -1651,6 +1920,12 @@ fn run_app(
                             app.config_modal_state =
                                 Some(ConfigModalState::from_config(&app.config));
                         }
+                    }
+                    KeyCode::Char('l') => {
+                        // Open specs panel (available in all states)
+                        app.show_specs_panel = true;
+                        app.specs_panel_state =
+                            Some(SpecsPanelState::new(&app.config.specs_path()));
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         app.scroll_up(1);
@@ -1750,9 +2025,9 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
 
     // Command panel with keyboard shortcuts (left) and status indicator (right)
     let shortcuts = match app.status {
-        AppStatus::Error => "[q] Quit",
-        AppStatus::Stopped => "[s] Start  [c] Config  [q] Quit",
-        AppStatus::Running => "[s] Stop  [q] Quit",
+        AppStatus::Error => "[l] Specs  [q] Quit",
+        AppStatus::Stopped => "[s] Start  [c] Config  [l] Specs  [q] Quit",
+        AppStatus::Running => "[s] Stop  [l] Specs  [q] Quit",
     };
 
     // Status indicator: colored dot + text (elapsed time when running)
@@ -1818,6 +2093,11 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     // Config modal
     if app.show_config_modal {
         draw_config_modal(f, app);
+    }
+
+    // Specs panel modal
+    if app.show_specs_panel {
+        draw_specs_panel(f, app);
     }
 }
 
@@ -2076,6 +2356,174 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .title(" Configuration ")
+            .title_alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(Color::White)),
+    );
+
+    f.render_widget(modal, modal_area);
+}
+
+fn draw_specs_panel(f: &mut Frame, app: &mut App) {
+    let modal_width: u16 = 70;
+    let modal_height: u16 = 24;
+    let modal_area = centered_rect(modal_width, modal_height, f.area());
+
+    // Clear the area behind the modal
+    f.render_widget(Clear, modal_area);
+
+    let Some(state) = &mut app.specs_panel_state else {
+        return;
+    };
+
+    // Calculate inner area (minus borders)
+    let inner_height = modal_height.saturating_sub(2) as usize;
+    let inner_width = modal_width.saturating_sub(2) as usize;
+    let blocked_count = state.blocked_count();
+
+    // Reserve space for warning banner if there are blocked specs
+    let banner_height = if blocked_count > 0 { 3 } else { 0 };
+
+    // Split layout: list (~40%), separator (1), preview (~60%)
+    let list_area_height = ((inner_height - banner_height) * 40 / 100).max(3);
+    let separator_height = 1;
+    let preview_area_height =
+        inner_height.saturating_sub(banner_height + list_area_height + separator_height);
+
+    // Ensure selected item is visible
+    state.ensure_visible(list_area_height);
+
+    let mut content: Vec<Line> = Vec::new();
+
+    // Warning banner for blocked specs
+    if blocked_count > 0 {
+        let banner_width = inner_width;
+        let banner_fill = "\u{2588}".repeat(banner_width);
+        let warning_text = format!(
+            "\u{2588}\u{2588}  \u{26a0} {} BLOCKED SPEC{} - ACTION REQUIRED",
+            blocked_count,
+            if blocked_count == 1 { "" } else { "S" }
+        );
+        let padding = banner_width.saturating_sub(warning_text.chars().count());
+        let padded_warning = format!("{}{}", warning_text, " ".repeat(padding.saturating_sub(2)));
+        let padded_warning = format!("{}\u{2588}\u{2588}", padded_warning);
+
+        content.push(Line::from(Span::styled(
+            banner_fill.clone(),
+            Style::default().fg(Color::White).bg(Color::Red),
+        )));
+        content.push(Line::from(Span::styled(
+            padded_warning,
+            Style::default().fg(Color::Yellow).bg(Color::Red),
+        )));
+        content.push(Line::from(Span::styled(
+            banner_fill,
+            Style::default().fg(Color::White).bg(Color::Red),
+        )));
+    }
+
+    // Handle error case
+    if let Some(error) = &state.error {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            format!("  Error: {}", error),
+            Style::default().fg(Color::Red),
+        )));
+    } else if state.specs.is_empty() {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "  No specs found",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        // Render visible specs
+        let visible_start = state.scroll_offset;
+        let visible_end = (state.scroll_offset + list_area_height).min(state.specs.len());
+
+        for spec_idx in visible_start..visible_end {
+            let spec = &state.specs[spec_idx];
+            let is_selected = spec_idx == state.selected;
+
+            // Build the line: "  [Status] spec-name"
+            let status_label = format!("[{}]", spec.status.label());
+            let status_width = 14; // Fixed width for alignment
+            let padded_status = format!("{:width$}", status_label, width = status_width);
+
+            let line_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default()
+            };
+
+            let status_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(spec.status.color())
+            };
+
+            let name_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            // Calculate padding needed for full-width selection highlight
+            let line_content = format!("  {}{}", padded_status, spec.name);
+            let padding = inner_width.saturating_sub(line_content.len());
+
+            content.push(Line::from(vec![
+                Span::styled("  ", line_style),
+                Span::styled(padded_status, status_style),
+                Span::styled(&spec.name, name_style),
+                Span::styled(" ".repeat(padding), line_style),
+            ]));
+        }
+
+        // Fill remaining list space if list is shorter than allocated height
+        let rendered_lines = visible_end - visible_start;
+        for _ in rendered_lines..list_area_height {
+            content.push(Line::from(""));
+        }
+
+        // Horizontal separator between list and preview
+        let separator = "\u{2500}".repeat(inner_width);
+        content.push(Line::from(Span::styled(
+            separator,
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        // Preview pane
+        match state.read_selected_spec_head(preview_area_height) {
+            Ok(lines) => {
+                for line in lines.iter().take(preview_area_height) {
+                    // Truncate long lines to fit width
+                    let display_line: String = line.chars().take(inner_width).collect();
+                    content.push(Line::from(Span::styled(
+                        display_line,
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                // Fill remaining preview space
+                for _ in lines.len()..preview_area_height {
+                    content.push(Line::from(""));
+                }
+            }
+            Err(error) => {
+                content.push(Line::from(Span::styled(
+                    format!("  {}", error),
+                    Style::default().fg(Color::Yellow),
+                )));
+                // Fill remaining preview space
+                for _ in 1..preview_area_height {
+                    content.push(Line::from(""));
+                }
+            }
+        }
+    }
+
+    let modal = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Specs ")
             .title_alignment(ratatui::layout::Alignment::Center)
             .style(Style::default().fg(Color::White)),
     );

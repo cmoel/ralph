@@ -14,26 +14,26 @@ User navigates with up/down arrows. The list scrolls when selection moves off-sc
 
 ### Acceptance Criteria
 
-- [ ] `l` opens the Specs panel (available in all states except when another modal is open)
-- [ ] `Esc` closes the panel
-- [ ] Panel parses `specs/README.md` for all specs and their statuses
-- [ ] Specs sorted by status: Blocked → Ready → In Progress → Done
-- [ ] Within each status, sorted by file creation timestamp (newest first)
-- [ ] Up/down arrows navigate the list
-- [ ] List scrolls when selection moves beyond visible area
-- [ ] Color-coded statuses:
+- [x] `l` opens the Specs panel (available in all states except when another modal is open)
+- [x] `Esc` closes the panel
+- [x] Panel parses `specs/README.md` for all specs and their statuses
+- [x] Specs sorted by status: Blocked → Ready → In Progress → Done
+- [x] Within each status, sorted by file creation timestamp (newest first)
+- [x] Up/down arrows navigate the list
+- [x] List scrolls when selection moves beyond visible area
+- [x] Color-coded statuses:
   - Blocked: Red
   - Ready: Cyan
   - In Progress: Green
   - Done: Dim gray
-- [ ] Selected spec highlighted (inverted colors or similar)
-- [ ] When blocked specs exist, bold warning banner appears:
+- [x] Selected spec highlighted (inverted colors or similar)
+- [x] When blocked specs exist, bold warning banner appears:
   ```
   ██████████████████████████████████████████████████████████████
   ██  ⚠ N BLOCKED SPECS - ACTION REQUIRED                    ██
   ██████████████████████████████████████████████████████████████
   ```
-- [ ] Banner uses high-contrast colors (red background, white/yellow text)
+- [x] Banner uses high-contrast colors (red background, white/yellow text)
 
 ### Technical Constraints
 
@@ -58,11 +58,11 @@ The panel splits into two sections: spec list on top, preview on bottom. When a 
 
 ### Acceptance Criteria
 
-- [ ] Panel layout splits: list (top ~40%), preview (bottom ~60%)
-- [ ] Preview shows head of selected spec file (first N lines that fit)
-- [ ] Preview updates when selection changes
-- [ ] Preview displays raw markdown (no rendering needed)
-- [ ] Horizontal separator between list and preview
+- [x] Panel layout splits: list (top ~40%), preview (bottom ~60%)
+- [x] Preview shows head of selected spec file (first N lines that fit)
+- [x] Preview updates when selection changes
+- [x] Preview displays raw markdown (no rendering needed)
+- [x] Horizontal separator between list and preview
 
 ### Technical Constraints
 
