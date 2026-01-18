@@ -113,9 +113,9 @@ When Ralph detects the current spec being worked on, it appears as the right tit
 
 ### Acceptance Criteria
 
-- [ ] Right title shows current spec name when available
-- [ ] Right title hidden when no spec detected
-- [ ] Use `Title::from().position(Position::Right)` for right alignment
+- [x] Right title shows current spec name when available
+- [x] Right title hidden when no spec detected
+- [x] Use `Line::from().right_aligned()` for right alignment (ratatui 0.30 API)
 
 ### Technical Constraints
 

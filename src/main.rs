@@ -1116,14 +1116,18 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
         content.push(Line::raw(&app.current_line));
     }
 
+    let mut output_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Line::from(format!(" {} ", app.session_id)).left_aligned());
+
+    if let Some(spec) = &app.current_spec {
+        output_block = output_block.title(Line::from(format!(" {} ", spec)).right_aligned());
+    }
+
     let output_panel = Paragraph::new(content)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title(Line::from(format!(" {} ", app.session_id)).left_aligned()),
-        )
+        .block(output_block)
         .wrap(Wrap { trim: false })
         .scroll((app.scroll_offset, 0));
 
