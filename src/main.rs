@@ -25,7 +25,7 @@ use crossterm::terminal::{
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Terminal};
@@ -34,6 +34,7 @@ use tracing::{debug, info, trace, warn};
 use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
 
 /// Contract a path by replacing the home directory with `~` for display.
+#[allow(dead_code)] // Will be used in later UI slices
 fn contract_path(path: &std::path::Path) -> String {
     if let Some(home) = dirs::home_dir()
         && let Ok(suffix) = path.strip_prefix(&home)
@@ -56,6 +57,7 @@ enum AppStatus {
 }
 
 impl AppStatus {
+    #[allow(dead_code)] // May be used in later UI slices
     fn label(&self) -> &'static str {
         match self {
             AppStatus::Stopped => "STOPPED",
@@ -66,7 +68,7 @@ impl AppStatus {
 
     fn color(&self) -> Color {
         match self {
-            AppStatus::Stopped => Color::Yellow,
+            AppStatus::Stopped => Color::Cyan,
             AppStatus::Running => Color::Green,
             AppStatus::Error => Color::Red,
         }
@@ -256,19 +258,22 @@ struct App {
     content_blocks: HashMap<usize, ContentBlockState>,
     /// Current line being accumulated (text that hasn't hit a newline yet).
     current_line: String,
-    /// Session ID for this Ralph invocation.
-    session_id: Option<String>,
+    /// Session ID for this Ralph invocation (always populated).
+    session_id: String,
     /// Loop counter for logging, incremented each time start_command() is called.
     loop_count: u64,
     /// Directory where logs are written.
+    #[allow(dead_code)] // Will be used in later UI slices
     log_directory: Option<PathBuf>,
     /// Error that occurred during logging initialization.
+    #[allow(dead_code)] // Will be used in later UI slices
     logging_error: Option<String>,
     /// Loaded configuration.
     config: Config,
     /// Path to the configuration file.
     config_path: PathBuf,
     /// Status of config loading.
+    #[allow(dead_code)] // Will be used in later UI slices
     config_load_status: ConfigLoadStatus,
     /// Last known mtime of the config file for change detection.
     config_mtime: Option<SystemTime>,
@@ -292,7 +297,7 @@ struct App {
 
 impl App {
     fn new(
-        session_id: Option<String>,
+        session_id: String,
         log_directory: Option<PathBuf>,
         logging_error: Option<String>,
         loaded_config: LoadedConfig,
@@ -913,17 +918,19 @@ fn main() -> Result<()> {
 
     let start_time = Instant::now();
 
+    // Generate session ID first (always available, even if logging fails)
+    let session_id = logging::new_session_id();
+
     // Load configuration first (needed for log level)
     let loaded_config = config::load_config();
 
     // Initialize logging with config log level
-    let (session_id, log_directory, logging_error, _guard, reload_handle) =
-        match logging::init(&loaded_config.config.logging.level) {
+    let (log_directory, logging_error, _guard, reload_handle) =
+        match logging::init(session_id.clone(), &loaded_config.config.logging.level) {
             Ok(ctx) => {
                 // Clean up old log files after logging is initialized
                 logging::cleanup_old_logs(&ctx.log_directory);
                 (
-                    Some(ctx.session_id),
                     Some(ctx.log_directory),
                     None,
                     Some(ctx._guard),
@@ -932,7 +939,7 @@ fn main() -> Result<()> {
             }
             Err(e) => {
                 eprintln!("Warning: Failed to initialize logging: {}", e);
-                (None, None, Some(e.message), None, None)
+                (None, Some(e.message), None, None)
             }
         };
 
@@ -964,21 +971,19 @@ fn main() -> Result<()> {
     execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
     // Log session end
-    if let Some(sid) = session_id {
-        let duration = start_time.elapsed();
-        info!(
-            session_id = %sid,
-            duration_secs = duration.as_secs_f64(),
-            "session_end"
-        );
-    }
+    let duration = start_time.elapsed();
+    info!(
+        session_id = %session_id,
+        duration_secs = duration.as_secs_f64(),
+        "session_end"
+    );
 
     result
 }
 
 fn run_app(
     mut terminal: DefaultTerminal,
-    session_id: Option<String>,
+    session_id: String,
     log_directory: Option<PathBuf>,
     logging_error: Option<String>,
     loaded_config: LoadedConfig,
@@ -1092,148 +1097,75 @@ fn run_app(
 }
 
 fn draw_ui(f: &mut Frame, app: &mut App) {
+    // Two-panel layout: output (flexible) + command (fixed height 3)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Status panel (border + 1 content row + border)
-            Constraint::Min(1),    // Main pane
-            Constraint::Length(1), // Footer
+            Constraint::Min(0),    // Output panel (flexible)
+            Constraint::Length(3), // Command panel (border + 1 content row + border)
         ])
         .split(f.area());
 
     // Update main pane dimensions for scroll calculations
-    app.main_pane_height = chunks[1].height.saturating_sub(2); // Account for borders
-    app.main_pane_width = chunks[1].width;
+    app.main_pane_height = chunks[0].height.saturating_sub(2); // Account for borders
+    app.main_pane_width = chunks[0].width;
 
-    // Status panel
-    let mut status_spans = vec![
-        Span::styled("● ", Style::default().fg(app.status.color())),
-        Span::styled(
-            app.status.label(),
-            Style::default()
-                .fg(app.status.color())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
-
-    // Add session ID
-    status_spans.push(Span::raw("    Session: "));
-    status_spans.push(Span::styled(
-        app.session_id.as_deref().unwrap_or("---"),
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-
-    // Add current spec
-    status_spans.push(Span::raw("    Spec: "));
-    status_spans.push(Span::styled(
-        app.current_spec.as_deref().unwrap_or("—"),
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-
-    // Add logging info (log directory or error)
-    status_spans.push(Span::raw("    "));
-    if let Some(ref error) = app.logging_error {
-        // Logging failed - show warning
-        status_spans.push(Span::styled("⚠ ", Style::default().fg(Color::Yellow)));
-        status_spans.push(Span::styled(
-            error.as_str(),
-            Style::default().fg(Color::Yellow),
-        ));
-    } else if let Some(ref log_dir) = app.log_directory {
-        // Logging succeeded - show directory
-        status_spans.push(Span::raw("Logs: "));
-        status_spans.push(Span::styled(
-            contract_path(log_dir),
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-    } else {
-        // Logging not initialized yet
-        status_spans.push(Span::raw("Logs: ---"));
-    }
-
-    // Add config info (directory or error, with reload indicator)
-    status_spans.push(Span::raw("    "));
-    // Determine if there's a config error (reload error takes precedence over initial load error)
-    let config_error: Option<&str> =
-        app.config_reload_error
-            .as_deref()
-            .or(match &app.config_load_status {
-                ConfigLoadStatus::Error(e) => Some(e.as_str()),
-                _ => None,
-            });
-    if let Some(error) = config_error {
-        // Config invalid - show warning
-        status_spans.push(Span::styled("⚠ ", Style::default().fg(Color::Yellow)));
-        status_spans.push(Span::styled(error, Style::default().fg(Color::Yellow)));
-    } else {
-        // Config valid - show directory
-        status_spans.push(Span::raw("Config: "));
-        let config_dir = app
-            .config_path
-            .parent()
-            .map(contract_path)
-            .unwrap_or_default();
-        status_spans.push(Span::styled(
-            config_dir,
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-
-        // Show "✓ Reloaded" indicator if recently reloaded (fades after 3 seconds)
-        if let Some(reloaded_at) = app.config_reloaded_at
-            && reloaded_at.elapsed() < Duration::from_secs(3)
-        {
-            status_spans.push(Span::raw("  "));
-            status_spans.push(Span::styled(
-                "✓ Reloaded",
-                Style::default().fg(Color::Green),
-            ));
-        }
-    }
-
-    // Show transient error (e.g., editor spawn failure)
-    if let Some(ref error) = app.status_error {
-        status_spans.push(Span::raw("    "));
-        status_spans.push(Span::styled("⚠ ", Style::default().fg(Color::Red)));
-        status_spans.push(Span::styled(
-            error.as_str(),
-            Style::default().fg(Color::Red),
-        ));
-    }
-
-    let status_line = Line::from(status_spans);
-    let status_panel = Paragraph::new(status_line).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-    f.render_widget(status_panel, chunks[0]);
-
-    // Main pane with scrolling
-    // Include both completed lines and the current partial line
+    // Output panel with session ID as title
     let mut content: Vec<Line> = app.output_lines.iter().map(Line::raw).collect();
     if !app.current_line.is_empty() {
         content.push(Line::raw(&app.current_line));
     }
 
-    let main_pane = Paragraph::new(content)
-        .block(Block::default().borders(Borders::ALL))
+    let output_panel = Paragraph::new(content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(Line::from(format!(" {} ", app.session_id)).left_aligned()),
+        )
         .wrap(Wrap { trim: false })
         .scroll((app.scroll_offset, 0));
 
-    f.render_widget(main_pane, chunks[1]);
+    f.render_widget(output_panel, chunks[0]);
 
-    // Footer
-    let footer_text = match app.status {
+    // Command panel with keyboard shortcuts (left) and status indicator (right)
+    let shortcuts = match app.status {
         AppStatus::Error => "[q] Quit",
         AppStatus::Stopped => "[s] Start  [c] Config  [q] Quit",
         AppStatus::Running => "[s] Start  [q] Quit",
     };
-    let footer = Paragraph::new(Line::from(vec![Span::styled(
-        footer_text,
-        Style::default().fg(Color::DarkGray),
-    )]));
-    f.render_widget(footer, chunks[2]);
+
+    // Status indicator: colored dot + text
+    let (status_dot, status_text) = match app.status {
+        AppStatus::Stopped => ("● ", "STOPPED"),
+        AppStatus::Running => ("● ", "RUNNING"),
+        AppStatus::Error => ("● ", "ERROR"),
+    };
+    let status_color = app.status.color();
+
+    // Calculate spacing to right-align the status indicator
+    // Total width minus borders (2), shortcuts length, status indicator length
+    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+    let status_len = status_dot.len() + status_text.len();
+    let shortcuts_len = shortcuts.len();
+    let spacing = inner_width.saturating_sub(shortcuts_len + status_len);
+
+    let command_line = Line::from(vec![
+        Span::styled(shortcuts, Style::default().fg(Color::DarkGray)),
+        Span::raw(" ".repeat(spacing)),
+        Span::styled(status_dot, Style::default().fg(status_color)),
+        Span::styled(status_text, Style::default().fg(status_color)),
+    ]);
+
+    let command_panel = Paragraph::new(command_line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+
+    f.render_widget(command_panel, chunks[1]);
 
     // Popup dialog if needed
     if app.show_already_running_popup {

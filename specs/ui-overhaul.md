@@ -69,14 +69,14 @@ Session ID is generated at app start and displayed immediately.
 
 ### Acceptance Criteria
 
-- [ ] Remove old status panel (title bar replacement)
-- [ ] Generate session ID (6 hex chars) at app start
-- [ ] Output panel uses session ID as left title via `Block::title()`
-- [ ] Command panel with rounded border at bottom
-- [ ] Keyboard shortcuts left-aligned in command panel
-- [ ] Status indicator right-aligned in command panel
-- [ ] Status shows colored dot + text: `● STOPPED` / `● RUNNING` / `● ERROR`
-- [ ] Layout uses two vertical chunks: output (flexible) + command (fixed height 3)
+- [x] Remove old status panel (title bar replacement)
+- [x] Generate session ID (6 hex chars) at app start
+- [x] Output panel uses session ID as left title via `Block::title()`
+- [x] Command panel with rounded border at bottom
+- [x] Keyboard shortcuts left-aligned in command panel
+- [x] Status indicator right-aligned in command panel
+- [x] Status shows colored dot + text: `● STOPPED` / `● RUNNING` / `● ERROR`
+- [x] Layout uses two vertical chunks: output (flexible) + command (fixed height 3)
 
 ### Technical Constraints
 

@@ -21,8 +21,6 @@ pub type ReloadHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 pub struct LoggingContext {
     /// Guard that must be held for the application lifetime to ensure logs are flushed.
     pub _guard: WorkerGuard,
-    /// The session ID for this Ralph invocation.
-    pub session_id: String,
     /// The directory where logs are written.
     pub log_directory: PathBuf,
     /// Handle for dynamically reloading the log level filter.
@@ -49,17 +47,21 @@ fn generate_session_id() -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// Generates a 6-character random hex session ID for external use.
+pub fn new_session_id() -> String {
+    generate_session_id()
+}
+
 /// Initializes the logging system.
 ///
+/// The `session_id` parameter is the session ID for this Ralph invocation.
 /// The `log_level` parameter specifies the initial log level (e.g., "info", "debug").
 /// If `RALPH_LOG` environment variable is set, it overrides the provided level.
 ///
 /// Returns a `LoggingContext` on success, or a `LoggingError` on failure.
 /// The returned `WorkerGuard` must be held for the application lifetime.
 /// The `reload_handle` can be used to dynamically change the log level.
-pub fn init(log_level: &str) -> Result<LoggingContext, LoggingError> {
-    let session_id = generate_session_id();
-
+pub fn init(session_id: String, log_level: &str) -> Result<LoggingContext, LoggingError> {
     // Get platform-appropriate log directory
     let project_dirs = ProjectDirs::from("dev", "cmoel", "ralph").ok_or_else(|| LoggingError {
         message: "Failed to determine platform directories".to_string(),
@@ -124,7 +126,6 @@ pub fn init(log_level: &str) -> Result<LoggingContext, LoggingError> {
 
     Ok(LoggingContext {
         _guard: guard,
-        session_id,
         log_directory: log_dir,
         reload_handle: Arc::new(Mutex::new(reload_handle)),
     })

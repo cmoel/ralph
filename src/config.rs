@@ -14,6 +14,7 @@ pub enum ConfigLoadStatus {
     /// Created default config file (first run)
     Created,
     /// Error occurred during loading, using defaults
+    #[allow(dead_code)] // Will be used in later UI slices
     Error(String),
 }
 
