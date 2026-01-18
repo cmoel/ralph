@@ -132,7 +132,6 @@ const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ConfigModalField {
     ClaudePath,
-    ClaudeArgs,
     PromptFile,
     SpecsDirectory,
     LogLevel,
@@ -143,8 +142,7 @@ enum ConfigModalField {
 impl ConfigModalField {
     fn next(self) -> Self {
         match self {
-            Self::ClaudePath => Self::ClaudeArgs,
-            Self::ClaudeArgs => Self::PromptFile,
+            Self::ClaudePath => Self::PromptFile,
             Self::PromptFile => Self::SpecsDirectory,
             Self::SpecsDirectory => Self::LogLevel,
             Self::LogLevel => Self::SaveButton,
@@ -156,8 +154,7 @@ impl ConfigModalField {
     fn prev(self) -> Self {
         match self {
             Self::ClaudePath => Self::CancelButton,
-            Self::ClaudeArgs => Self::ClaudePath,
-            Self::PromptFile => Self::ClaudeArgs,
+            Self::PromptFile => Self::ClaudePath,
             Self::SpecsDirectory => Self::PromptFile,
             Self::LogLevel => Self::SpecsDirectory,
             Self::SaveButton => Self::LogLevel,
@@ -173,8 +170,6 @@ struct ConfigModalState {
     focus: ConfigModalField,
     /// Claude CLI path value.
     claude_path: String,
-    /// Claude CLI args value.
-    claude_args: String,
     /// Prompt file path value.
     prompt_file: String,
     /// Specs directory path value.
@@ -200,7 +195,6 @@ impl ConfigModalState {
         Self {
             focus: ConfigModalField::ClaudePath,
             claude_path: config.claude.path.clone(),
-            claude_args: config.claude.args.clone(),
             prompt_file: config.paths.prompt.clone(),
             specs_dir: config.paths.specs.clone(),
             log_level_index,
@@ -214,7 +208,6 @@ impl ConfigModalState {
     fn current_field_value(&self) -> Option<&String> {
         match self.focus {
             ConfigModalField::ClaudePath => Some(&self.claude_path),
-            ConfigModalField::ClaudeArgs => Some(&self.claude_args),
             ConfigModalField::PromptFile => Some(&self.prompt_file),
             ConfigModalField::SpecsDirectory => Some(&self.specs_dir),
             _ => None,
@@ -261,15 +254,6 @@ impl ConfigModalState {
                 self.cursor_pos += 1;
                 true
             }
-            ConfigModalField::ClaudeArgs => {
-                if cursor >= self.claude_args.len() {
-                    self.claude_args.push(c);
-                } else {
-                    self.claude_args.insert(cursor, c);
-                }
-                self.cursor_pos += 1;
-                true
-            }
             ConfigModalField::PromptFile => {
                 if cursor >= self.prompt_file.len() {
                     self.prompt_file.push(c);
@@ -307,11 +291,6 @@ impl ConfigModalState {
                 self.cursor_pos -= 1;
                 true
             }
-            ConfigModalField::ClaudeArgs => {
-                self.claude_args.remove(cursor - 1);
-                self.cursor_pos -= 1;
-                true
-            }
             ConfigModalField::PromptFile => {
                 self.prompt_file.remove(cursor - 1);
                 self.cursor_pos -= 1;
@@ -335,10 +314,6 @@ impl ConfigModalState {
         let field_changed = match self.focus {
             ConfigModalField::ClaudePath if cursor < self.claude_path.len() => {
                 self.claude_path.remove(cursor);
-                true
-            }
-            ConfigModalField::ClaudeArgs if cursor < self.claude_args.len() => {
-                self.claude_args.remove(cursor);
                 true
             }
             ConfigModalField::PromptFile if cursor < self.prompt_file.len() => {
@@ -418,7 +393,7 @@ impl ConfigModalState {
             ConfigModalField::ClaudePath => validate_executable_path(&self.claude_path),
             ConfigModalField::PromptFile => validate_file_exists(&self.prompt_file),
             ConfigModalField::SpecsDirectory => validate_directory_exists(&self.specs_dir),
-            // ClaudeArgs has no validation, LogLevel/buttons don't need validation
+            // LogLevel/buttons don't need validation
             _ => None,
         };
 
@@ -439,7 +414,7 @@ impl ConfigModalState {
         Config {
             claude: crate::config::ClaudeConfig {
                 path: self.claude_path.clone(),
-                args: self.claude_args.clone(),
+                args: None,
             },
             paths: crate::config::PathsConfig {
                 prompt: self.prompt_file.clone(),
@@ -1019,13 +994,16 @@ impl App {
         self.current_line.clear();
 
         // Spawn the command using shell to handle the pipe
-        // Use config values for claude path, args, and prompt path
+        // Use config values for claude path and prompt path
+        // Args are hardcoded - Ralph depends on this specific format for streaming output
         let claude_path = self.config.claude_path();
+        const CLAUDE_ARGS: &str =
+            "--output-format=stream-json --verbose --print --include-partial-messages";
         let command = format!(
             "cat {} | {} {}",
             prompt_path.display(),
             claude_path.display(),
-            self.config.claude.args
+            CLAUDE_ARGS
         );
         let child = Command::new("sh")
             .arg("-c")
@@ -1435,7 +1413,6 @@ fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyMod
             if matches!(
                 state.focus,
                 ConfigModalField::ClaudePath
-                    | ConfigModalField::ClaudeArgs
                     | ConfigModalField::PromptFile
                     | ConfigModalField::SpecsDirectory
             ) {
@@ -1820,38 +1797,28 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     let focused_label_style = Style::default().fg(Color::Cyan);
 
     // Get values from state or config
-    let (
-        claude_path,
-        claude_args,
-        prompt_file,
-        specs_dir,
-        log_level,
-        cursor_pos,
-        focus,
-        has_errors,
-    ) = if let Some(s) = state {
-        (
-            s.claude_path.as_str(),
-            s.claude_args.as_str(),
-            s.prompt_file.as_str(),
-            s.specs_dir.as_str(),
-            s.selected_log_level(),
-            s.cursor_pos,
-            Some(s.focus),
-            s.has_validation_errors(),
-        )
-    } else {
-        (
-            app.config.claude.path.as_str(),
-            app.config.claude.args.as_str(),
-            app.config.paths.prompt.as_str(),
-            app.config.paths.specs.as_str(),
-            app.config.logging.level.as_str(),
-            0,
-            None,
-            false,
-        )
-    };
+    let (claude_path, prompt_file, specs_dir, log_level, cursor_pos, focus, has_errors) =
+        if let Some(s) = state {
+            (
+                s.claude_path.as_str(),
+                s.prompt_file.as_str(),
+                s.specs_dir.as_str(),
+                s.selected_log_level(),
+                s.cursor_pos,
+                Some(s.focus),
+                s.has_validation_errors(),
+            )
+        } else {
+            (
+                app.config.claude.path.as_str(),
+                app.config.paths.prompt.as_str(),
+                app.config.paths.specs.as_str(),
+                app.config.logging.level.as_str(),
+                0,
+                None,
+                false,
+            )
+        };
 
     // Helper to get validation error for a field
     let get_field_error = |field: ConfigModalField| -> Option<&str> {
@@ -1891,17 +1858,6 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
             error_style,
         )));
     }
-
-    // Claude CLI args field
-    let args_focused = focus == Some(ConfigModalField::ClaudeArgs);
-    let args_label_style = if args_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let mut args_line = vec![Span::styled("  Claude CLI args: ", args_label_style)];
-    args_line.extend(render_field(claude_args, args_focused, cursor_pos));
-    content.push(Line::from(args_line));
 
     // Prompt file field
     let prompt_focused = focus == Some(ConfigModalField::PromptFile);

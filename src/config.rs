@@ -23,15 +23,18 @@ pub enum ConfigLoadStatus {
 #[serde(default)]
 pub struct ClaudeConfig {
     pub path: String,
-    pub args: String,
+    /// Legacy field - ignored on load, not serialized.
+    /// CLI args are hardcoded in main.rs as Ralph depends on specific args for streaming.
+    #[serde(skip_serializing, default)]
+    #[allow(dead_code)]
+    pub args: Option<String>,
 }
 
 impl Default for ClaudeConfig {
     fn default() -> Self {
         Self {
             path: "~/.claude/local/claude".to_string(),
-            args: "--output-format=stream-json --verbose --print --include-partial-messages"
-                .to_string(),
+            args: None,
         }
     }
 }
@@ -327,7 +330,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.claude.path, "~/.claude/local/claude");
-        assert!(config.claude.args.contains("--output-format=stream-json"));
+        assert!(config.claude.args.is_none());
         assert_eq!(config.paths.prompt, "./PROMPT.md");
         assert_eq!(config.paths.specs, "./specs");
         assert_eq!(config.logging.level, "info");
@@ -350,7 +353,6 @@ mod tests {
         let toml_str = r#"
 [claude]
 path = "/custom/claude"
-args = "--custom-args"
 
 [paths]
 prompt = "./custom-prompt.md"
@@ -362,7 +364,7 @@ level = "debug"
 
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.claude.path, "/custom/claude");
-        assert_eq!(config.claude.args, "--custom-args");
+        assert!(config.claude.args.is_none());
         assert_eq!(config.paths.prompt, "./custom-prompt.md");
         assert_eq!(config.paths.specs, "./custom-specs");
         assert_eq!(config.logging.level, "debug");
@@ -378,8 +380,8 @@ path = "/custom/claude"
 
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.claude.path, "/custom/claude");
-        // args should be default since not specified
-        assert!(config.claude.args.contains("--output-format=stream-json"));
+        // args should be None since not specified (legacy field)
+        assert!(config.claude.args.is_none());
         // paths and logging should be defaults
         assert_eq!(config.paths.prompt, "./PROMPT.md");
         assert_eq!(config.logging.level, "info");
@@ -398,5 +400,27 @@ foo = "bar"
 
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.claude.path, "/custom/claude");
+    }
+
+    #[test]
+    fn test_legacy_claude_args_ignored() {
+        // Existing config files may have claude.args - ensure they still load
+        let toml_str = r#"
+[claude]
+path = "/custom/claude"
+args = "--output-format=stream-json --verbose"
+
+[paths]
+prompt = "./PROMPT.md"
+"#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.claude.path, "/custom/claude");
+        // args is parsed but ignored (legacy field)
+        assert_eq!(
+            config.claude.args,
+            Some("--output-format=stream-json --verbose".to_string())
+        );
+        assert_eq!(config.paths.prompt, "./PROMPT.md");
     }
 }

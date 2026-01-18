@@ -31,12 +31,12 @@ The config modal no longer shows or allows editing of Claude CLI args. The field
 
 ## Acceptance Criteria
 
-- [ ] Remove Claude CLI args field from config modal UI
-- [ ] Remove Claude CLI args from `ConfigModalField` enum (if applicable)
-- [ ] Remove Claude CLI args from config modal state
-- [ ] Update focus order to skip the removed field
-- [ ] Hardcode the CLI args in the command spawning code (if not already)
-- [ ] Remove `claude.args` from config file schema (or keep but ignore)
+- [x] Remove Claude CLI args field from config modal UI
+- [x] Remove Claude CLI args from `ConfigModalField` enum (if applicable)
+- [x] Remove Claude CLI args from config modal state
+- [x] Update focus order to skip the removed field
+- [x] Hardcode the CLI args in the command spawning code (if not already)
+- [x] Remove `claude.args` from config file schema (or keep but ignore)
 
 ## Technical Constraints
 
