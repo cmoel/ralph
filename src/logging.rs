@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use directories::ProjectDirs;
 use tracing::info;
@@ -11,6 +12,10 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::reload;
+
+/// Handle for dynamically changing the log level at runtime.
+pub type ReloadHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
 /// Result of initializing the logging system.
 pub struct LoggingContext {
@@ -20,6 +25,8 @@ pub struct LoggingContext {
     pub session_id: String,
     /// The directory where logs are written.
     pub log_directory: PathBuf,
+    /// Handle for dynamically reloading the log level filter.
+    pub reload_handle: Arc<Mutex<ReloadHandle>>,
 }
 
 /// Error that occurred during logging initialization.
@@ -44,9 +51,13 @@ fn generate_session_id() -> String {
 
 /// Initializes the logging system.
 ///
+/// The `log_level` parameter specifies the initial log level (e.g., "info", "debug").
+/// If `RALPH_LOG` environment variable is set, it overrides the provided level.
+///
 /// Returns a `LoggingContext` on success, or a `LoggingError` on failure.
 /// The returned `WorkerGuard` must be held for the application lifetime.
-pub fn init() -> Result<LoggingContext, LoggingError> {
+/// The `reload_handle` can be used to dynamically change the log level.
+pub fn init(log_level: &str) -> Result<LoggingContext, LoggingError> {
     let session_id = generate_session_id();
 
     // Get platform-appropriate log directory
@@ -78,10 +89,24 @@ pub fn init() -> Result<LoggingContext, LoggingError> {
     // Use non-blocking writes
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    // Build the subscriber with env filter
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // Build the env filter: RALPH_LOG env var takes precedence, then provided level
+    let env_filter = std::env::var("RALPH_LOG")
+        .ok()
+        .and_then(|level| EnvFilter::try_new(&level).ok())
+        .unwrap_or_else(|| {
+            EnvFilter::try_new(log_level).unwrap_or_else(|_| {
+                tracing::warn!(
+                    invalid_level = %log_level,
+                    "Invalid log level in config, defaulting to info"
+                );
+                EnvFilter::new("info")
+            })
+        });
 
-    // Create a formatting layer with session ID in each log line
+    // Wrap the filter in a reload layer for dynamic updates
+    let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
+
+    // Create a formatting layer
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_ansi(false)
@@ -90,18 +115,43 @@ pub fn init() -> Result<LoggingContext, LoggingError> {
 
     // Build and set the subscriber
     tracing_subscriber::registry()
-        .with(env_filter)
+        .with(filter_layer)
         .with(fmt_layer)
         .init();
 
     // Log session start
-    info!(session_id = %session_id, "session_start");
+    info!(session_id = %session_id, log_level = %log_level, "session_start");
 
     Ok(LoggingContext {
         _guard: guard,
         session_id,
         log_directory: log_dir,
+        reload_handle: Arc::new(Mutex::new(reload_handle)),
     })
+}
+
+/// Updates the log level filter at runtime.
+///
+/// Returns `Ok(())` if the level was successfully updated, or an error message if the level is invalid.
+pub fn update_log_level(handle: &Arc<Mutex<ReloadHandle>>, new_level: &str) -> Result<(), String> {
+    // Check for RALPH_LOG env override - if set, don't allow config to override it
+    if std::env::var("RALPH_LOG").is_ok() {
+        return Ok(()); // Silently ignore, env var takes precedence
+    }
+
+    let new_filter = EnvFilter::try_new(new_level)
+        .map_err(|e| format!("Invalid log level '{}': {}", new_level, e))?;
+
+    let guard = handle
+        .lock()
+        .map_err(|e| format!("Failed to acquire log level lock: {}", e))?;
+
+    guard
+        .reload(new_filter)
+        .map_err(|e| format!("Failed to reload log level: {}", e))?;
+
+    info!(new_level = %new_level, "log_level_changed");
+    Ok(())
 }
 
 /// Gets the macOS ~/Library/Logs/ralph/ directory.

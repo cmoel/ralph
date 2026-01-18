@@ -164,12 +164,12 @@ The log level from config is applied to the logging system. Users can change ver
 
 ### Acceptance Criteria
 
-- [ ] Read `logging.level` from config
-- [ ] Apply to tracing subscriber during initialization
-- [ ] `RALPH_LOG` env var overrides config value
-- [ ] Valid levels: trace, debug, info, warn, error
-- [ ] Invalid level → default to info, log warning
-- [ ] On config reload, log level change takes effect
+- [x] Read `logging.level` from config
+- [x] Apply to tracing subscriber during initialization
+- [x] `RALPH_LOG` env var overrides config value
+- [x] Valid levels: trace, debug, info, warn, error
+- [x] Invalid level → default to info, log warning
+- [x] On config reload, log level change takes effect
 
 ### Technical Constraints
 

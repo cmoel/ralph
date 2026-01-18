@@ -9,8 +9,11 @@ use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
+
+use crate::logging::ReloadHandle;
 
 use anyhow::Result;
 use crossterm::event::{
@@ -281,6 +284,10 @@ struct App {
     last_spec_poll: Instant,
     /// Transient error message to display in the status panel (e.g., editor spawn failure).
     status_error: Option<String>,
+    /// Handle for dynamically reloading the log level.
+    log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
+    /// Current log level from config (to detect changes on reload).
+    current_log_level: String,
 }
 
 impl App {
@@ -289,7 +296,9 @@ impl App {
         log_directory: Option<PathBuf>,
         logging_error: Option<String>,
         loaded_config: LoadedConfig,
+        log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     ) -> Self {
+        let current_log_level = loaded_config.config.logging.level.clone();
         Self {
             status: AppStatus::Stopped,
             output_lines: Vec::new(),
@@ -318,6 +327,8 @@ impl App {
             // Initialize to "long ago" so we poll immediately on start
             last_spec_poll: Instant::now() - Duration::from_secs(10),
             status_error: None,
+            log_level_handle,
+            current_log_level,
         }
     }
 
@@ -752,6 +763,27 @@ impl App {
 
         match reload_config(&self.config_path) {
             Ok(new_config) => {
+                // Check if log level changed and update if we have a reload handle
+                let new_log_level = &new_config.logging.level;
+                if new_log_level != &self.current_log_level
+                    && let Some(ref handle) = self.log_level_handle
+                {
+                    match logging::update_log_level(handle, new_log_level) {
+                        Ok(()) => {
+                            debug!(
+                                old_level = %self.current_log_level,
+                                new_level = %new_log_level,
+                                "log_level_updated"
+                            );
+                            self.current_log_level = new_log_level.clone();
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "log_level_update_failed");
+                            // Continue with config reload, just don't update log level
+                        }
+                    }
+                }
+
                 self.config = new_config;
                 self.config_reload_error = None;
                 self.config_reloaded_at = Some(Instant::now());
@@ -881,29 +913,34 @@ fn main() -> Result<()> {
 
     let start_time = Instant::now();
 
-    // Initialize logging before anything else
-    let (session_id, log_directory, logging_error, _guard) = match logging::init() {
-        Ok(ctx) => {
-            // Clean up old log files after logging is initialized
-            logging::cleanup_old_logs(&ctx.log_directory);
-            (
-                Some(ctx.session_id),
-                Some(ctx.log_directory),
-                None,
-                Some(ctx._guard),
-            )
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to initialize logging: {}", e);
-            (None, None, Some(e.message), None)
-        }
-    };
-
-    // Load configuration
+    // Load configuration first (needed for log level)
     let loaded_config = config::load_config();
+
+    // Initialize logging with config log level
+    let (session_id, log_directory, logging_error, _guard, reload_handle) =
+        match logging::init(&loaded_config.config.logging.level) {
+            Ok(ctx) => {
+                // Clean up old log files after logging is initialized
+                logging::cleanup_old_logs(&ctx.log_directory);
+                (
+                    Some(ctx.session_id),
+                    Some(ctx.log_directory),
+                    None,
+                    Some(ctx._guard),
+                    Some(ctx.reload_handle),
+                )
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to initialize logging: {}", e);
+                (None, None, Some(e.message), None, None)
+            }
+        };
+
+    // Log config status after logging is initialized
     debug!(
         config_path = %loaded_config.config_path.display(),
         status = ?loaded_config.status,
+        log_level = %loaded_config.config.logging.level,
         "config_loaded"
     );
 
@@ -919,6 +956,7 @@ fn main() -> Result<()> {
         log_directory,
         logging_error,
         loaded_config,
+        reload_handle,
     );
 
     // Restore terminal
@@ -944,8 +982,15 @@ fn run_app(
     log_directory: Option<PathBuf>,
     logging_error: Option<String>,
     loaded_config: LoadedConfig,
+    log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
 ) -> Result<()> {
-    let mut app = App::new(session_id, log_directory, logging_error, loaded_config);
+    let mut app = App::new(
+        session_id,
+        log_directory,
+        logging_error,
+        loaded_config,
+        log_level_handle,
+    );
 
     loop {
         // Poll for output from child process
