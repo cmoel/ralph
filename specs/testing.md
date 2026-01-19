@@ -70,17 +70,17 @@ pub fn check_specs_remaining(specs_dir: &Path) -> SpecsRemaining {
 
 ### Acceptance Criteria
 
-- [ ] `parse_specs_table(contents: &str)` extracted as pure function
-- [ ] `check_specs_remaining()` uses `parse_specs_readme()` instead of string matching
-- [ ] `detect_current_spec()` uses `parse_specs_readme()` instead of string matching
-- [ ] Tests for `parse_specs_table()`:
-  - [ ] Parses valid table row
-  - [ ] Handles all status variants (Ready, In Progress, Done, Blocked)
-  - [ ] Skips header rows and separator lines
-  - [ ] Handles missing/malformed rows gracefully
-  - [ ] Handles whitespace variations (` | Ready |` vs `|Ready|`)
-- [ ] All existing functionality preserved
-- [ ] `devbox run test` and `devbox run check` pass
+- [x] `parse_specs_table(contents: &str)` extracted as pure function
+- [x] `check_specs_remaining()` uses `parse_specs_readme()` instead of string matching
+- [x] `detect_current_spec()` uses `parse_specs_readme()` instead of string matching
+- [x] Tests for `parse_specs_table()`:
+  - [x] Parses valid table row
+  - [x] Handles all status variants (Ready, In Progress, Done, Blocked)
+  - [x] Skips header rows and separator lines
+  - [x] Handles missing/malformed rows gracefully
+  - [x] Handles whitespace variations (` | Ready |` vs `|Ready|`)
+- [x] All existing functionality preserved
+- [x] `devbox run test` and `devbox run check` pass
 
 ## Slice 3: Extract and Test Validators
 
