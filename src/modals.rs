@@ -595,3 +595,86 @@ pub fn handle_specs_panel_input(app: &mut App, key_code: KeyCode) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ConfigModalField::next tests
+
+    #[test]
+    fn test_config_modal_field_next_full_cycle() {
+        let field = ConfigModalField::ClaudePath;
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::PromptFile);
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::SpecsDirectory);
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::LogLevel);
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::AutoContinue);
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::SaveButton);
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::CancelButton);
+        // Wraparound
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::ClaudePath);
+    }
+
+    #[test]
+    fn test_config_modal_field_next_wraparound() {
+        assert_eq!(
+            ConfigModalField::CancelButton.next(),
+            ConfigModalField::ClaudePath
+        );
+    }
+
+    // ConfigModalField::prev tests
+
+    #[test]
+    fn test_config_modal_field_prev_full_cycle() {
+        let field = ConfigModalField::ClaudePath;
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::CancelButton);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::SaveButton);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::AutoContinue);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::LogLevel);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::SpecsDirectory);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::PromptFile);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::ClaudePath);
+    }
+
+    #[test]
+    fn test_config_modal_field_prev_wraparound() {
+        assert_eq!(
+            ConfigModalField::ClaudePath.prev(),
+            ConfigModalField::CancelButton
+        );
+    }
+
+    // next() and prev() are inverses of each other
+    #[test]
+    fn test_config_modal_field_next_prev_inverse() {
+        let all_fields = [
+            ConfigModalField::ClaudePath,
+            ConfigModalField::PromptFile,
+            ConfigModalField::SpecsDirectory,
+            ConfigModalField::LogLevel,
+            ConfigModalField::AutoContinue,
+            ConfigModalField::SaveButton,
+            ConfigModalField::CancelButton,
+        ];
+
+        for field in all_fields {
+            assert_eq!(field.next().prev(), field);
+            assert_eq!(field.prev().next(), field);
+        }
+    }
+}

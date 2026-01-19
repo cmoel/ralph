@@ -198,3 +198,89 @@ pub fn detect_current_spec(specs_dir: &std::path::Path) -> Option<String> {
 
     found_specs.into_iter().next()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // SpecStatus::from_str tests
+
+    #[test]
+    fn test_spec_status_from_str_blocked() {
+        assert_eq!(SpecStatus::from_str("Blocked"), Some(SpecStatus::Blocked));
+    }
+
+    #[test]
+    fn test_spec_status_from_str_ready() {
+        assert_eq!(SpecStatus::from_str("Ready"), Some(SpecStatus::Ready));
+    }
+
+    #[test]
+    fn test_spec_status_from_str_in_progress() {
+        assert_eq!(
+            SpecStatus::from_str("In Progress"),
+            Some(SpecStatus::InProgress)
+        );
+    }
+
+    #[test]
+    fn test_spec_status_from_str_done() {
+        assert_eq!(SpecStatus::from_str("Done"), Some(SpecStatus::Done));
+    }
+
+    #[test]
+    fn test_spec_status_from_str_invalid() {
+        assert_eq!(SpecStatus::from_str("Invalid"), None);
+        assert_eq!(SpecStatus::from_str(""), None);
+        assert_eq!(SpecStatus::from_str("done"), None); // case sensitive
+        assert_eq!(SpecStatus::from_str("DONE"), None);
+    }
+
+    #[test]
+    fn test_spec_status_from_str_with_whitespace() {
+        assert_eq!(
+            SpecStatus::from_str("  Blocked  "),
+            Some(SpecStatus::Blocked)
+        );
+        assert_eq!(SpecStatus::from_str("\tReady\t"), Some(SpecStatus::Ready));
+        assert_eq!(
+            SpecStatus::from_str(" In Progress "),
+            Some(SpecStatus::InProgress)
+        );
+    }
+
+    // SpecStatus::label tests
+
+    #[test]
+    fn test_spec_status_label_blocked() {
+        assert_eq!(SpecStatus::Blocked.label(), "Blocked");
+    }
+
+    #[test]
+    fn test_spec_status_label_ready() {
+        assert_eq!(SpecStatus::Ready.label(), "Ready");
+    }
+
+    #[test]
+    fn test_spec_status_label_in_progress() {
+        assert_eq!(SpecStatus::InProgress.label(), "In Progress");
+    }
+
+    #[test]
+    fn test_spec_status_label_done() {
+        assert_eq!(SpecStatus::Done.label(), "Done");
+    }
+
+    #[test]
+    fn test_spec_status_label_roundtrip() {
+        // Verify that label() returns a value that from_str() can parse back
+        for status in [
+            SpecStatus::Blocked,
+            SpecStatus::Ready,
+            SpecStatus::InProgress,
+            SpecStatus::Done,
+        ] {
+            assert_eq!(SpecStatus::from_str(status.label()), Some(status));
+        }
+    }
+}

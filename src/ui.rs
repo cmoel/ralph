@@ -336,3 +336,117 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         draw_specs_panel(f, app);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // format_elapsed tests
+
+    #[test]
+    fn test_format_elapsed_zero() {
+        assert_eq!(format_elapsed(Duration::from_secs(0)), "0:00");
+    }
+
+    #[test]
+    fn test_format_elapsed_seconds_only() {
+        assert_eq!(format_elapsed(Duration::from_secs(5)), "0:05");
+        assert_eq!(format_elapsed(Duration::from_secs(45)), "0:45");
+        assert_eq!(format_elapsed(Duration::from_secs(59)), "0:59");
+    }
+
+    #[test]
+    fn test_format_elapsed_minutes_and_seconds() {
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1:00");
+        assert_eq!(format_elapsed(Duration::from_secs(65)), "1:05");
+        assert_eq!(format_elapsed(Duration::from_secs(125)), "2:05");
+        assert_eq!(format_elapsed(Duration::from_secs(3599)), "59:59");
+    }
+
+    #[test]
+    fn test_format_elapsed_hours() {
+        assert_eq!(format_elapsed(Duration::from_secs(3600)), "1:00:00");
+        assert_eq!(format_elapsed(Duration::from_secs(3661)), "1:01:01");
+        assert_eq!(format_elapsed(Duration::from_secs(7325)), "2:02:05");
+        assert_eq!(format_elapsed(Duration::from_secs(36000)), "10:00:00");
+    }
+
+    // truncate_str tests
+
+    #[test]
+    fn test_truncate_str_short_string() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact_length() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_long_string() {
+        assert_eq!(truncate_str("hello world", 8), "hello...");
+        assert_eq!(truncate_str("hello world", 10), "hello w...");
+    }
+
+    #[test]
+    fn test_truncate_str_with_newlines() {
+        assert_eq!(truncate_str("hello\nworld", 20), "hello world");
+        assert_eq!(truncate_str("a\nb\nc", 10), "a b c");
+    }
+
+    #[test]
+    fn test_truncate_str_newlines_then_truncate() {
+        assert_eq!(truncate_str("hello\nworld", 8), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_str_empty() {
+        assert_eq!(truncate_str("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_str_small_max_len() {
+        // max_len < 3 should still work via saturating_sub
+        assert_eq!(truncate_str("hello", 2), "...");
+        assert_eq!(truncate_str("hello", 3), "...");
+        assert_eq!(truncate_str("hello", 4), "h...");
+    }
+
+    // format_with_thousands tests
+
+    #[test]
+    fn test_format_with_thousands_zero() {
+        assert_eq!(format_with_thousands(0), "0");
+    }
+
+    #[test]
+    fn test_format_with_thousands_small() {
+        assert_eq!(format_with_thousands(1), "1");
+        assert_eq!(format_with_thousands(12), "12");
+        assert_eq!(format_with_thousands(123), "123");
+        assert_eq!(format_with_thousands(999), "999");
+    }
+
+    #[test]
+    fn test_format_with_thousands_thousands() {
+        assert_eq!(format_with_thousands(1000), "1,000");
+        assert_eq!(format_with_thousands(1234), "1,234");
+        assert_eq!(format_with_thousands(7371), "7,371");
+        assert_eq!(format_with_thousands(12345), "12,345");
+        assert_eq!(format_with_thousands(123456), "123,456");
+    }
+
+    #[test]
+    fn test_format_with_thousands_millions() {
+        assert_eq!(format_with_thousands(1000000), "1,000,000");
+        assert_eq!(format_with_thousands(1234567), "1,234,567");
+        assert_eq!(format_with_thousands(123456789), "123,456,789");
+    }
+
+    #[test]
+    fn test_format_with_thousands_billions() {
+        assert_eq!(format_with_thousands(1000000000), "1,000,000,000");
+    }
+}

@@ -12,13 +12,13 @@ Test functions that are already pure and testable.
 
 ### Acceptance Criteria
 
-- [ ] `ui.rs`: Test `format_elapsed()` — various durations, edge cases
-- [ ] `ui.rs`: Test `truncate_str()` — short strings, long strings, newlines
-- [ ] `ui.rs`: Test `format_with_thousands()` — 0, hundreds, thousands, millions
-- [ ] `specs.rs`: Test `SpecStatus::from_str()` — all variants, invalid input
-- [ ] `specs.rs`: Test `SpecStatus::label()` — all variants
-- [ ] `modals.rs`: Test `ConfigModalField::next()` and `prev()` — full cycle, wraparound
-- [ ] All tests pass with `devbox run test`
+- [x] `ui.rs`: Test `format_elapsed()` — various durations, edge cases
+- [x] `ui.rs`: Test `truncate_str()` — short strings, long strings, newlines
+- [x] `ui.rs`: Test `format_with_thousands()` — 0, hundreds, thousands, millions
+- [x] `specs.rs`: Test `SpecStatus::from_str()` — all variants, invalid input
+- [x] `specs.rs`: Test `SpecStatus::label()` — all variants
+- [x] `modals.rs`: Test `ConfigModalField::next()` and `prev()` — full cycle, wraparound
+- [x] All tests pass with `devbox run test`
 
 ### Technical Constraints
 
