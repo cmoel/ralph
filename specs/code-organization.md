@@ -26,14 +26,14 @@ src/
 
 ## Acceptance Criteria
 
-- [ ] main.rs contains only: main(), run_app(), and the event loop
-- [ ] app.rs contains: App struct, AppStatus enum, App impl
-- [ ] ui.rs contains: all draw_* functions, format_* functions, centered_rect, truncate_str
-- [ ] modals.rs contains: ConfigModalState, ConfigModalField, SpecsPanelState, SpecStatus, SpecEntry, input handlers, validators
-- [ ] specs.rs contains: parse_specs_readme, detect_current_spec, check_specs_remaining, SpecsRemaining
-- [ ] All existing tests pass
-- [ ] `devbox run check` passes (clippy clean)
-- [ ] No file exceeds 600 lines
+- [x] main.rs contains only: main(), run_app(), and the event loop
+- [x] app.rs contains: App struct, AppStatus enum, App impl
+- [x] ui.rs contains: all draw_* functions, format_* functions, centered_rect, truncate_str
+- [x] modals.rs contains: ConfigModalState, ConfigModalField, SpecsPanelState, SpecStatus, SpecEntry, input handlers, validators
+- [x] specs.rs contains: parse_specs_readme, detect_current_spec, check_specs_remaining, SpecsRemaining
+- [x] All existing tests pass
+- [x] `devbox run check` passes (clippy clean)
+- [x] No file exceeds 600 lines
 
 ## Technical Constraints
 

@@ -1,17 +1,30 @@
+//! Ralph - TUI wrapper for claude CLI that displays formatted streaming output.
+
+mod app;
 mod config;
 mod events;
 mod logging;
+mod modal_ui;
+mod modals;
+mod specs;
+mod ui;
+mod validators;
 
-use crate::config::{Config, ConfigLoadStatus, LoadedConfig, reload_config, save_config};
+use crate::app::{App, AppStatus, ContentBlockState};
+use crate::config::LoadedConfig;
+use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
+use crate::modals::{
+    ConfigModalState, SpecsPanelState, handle_config_modal_input, handle_specs_panel_input,
+};
+use crate::ui::{draw_ui, format_tool_summary, format_usage_summary};
 
-use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use crate::logging::ReloadHandle;
 
@@ -23,1610 +36,17 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    Wrap,
-};
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, info, trace, warn};
 
-use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
-
-/// Contract a path by replacing the home directory with `~` for display.
-#[allow(dead_code)] // Will be used in later UI slices
-fn contract_path(path: &std::path::Path) -> String {
-    if let Some(home) = dirs::home_dir()
-        && let Ok(suffix) = path.strip_prefix(&home)
-    {
-        return format!("~/{}", suffix.display());
-    }
-    path.display().to_string()
-}
-
-/// Get the modification time of a file, or None if it can't be determined.
-fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AppStatus {
-    Stopped,
-    Running,
-    Error,
-}
-
-impl AppStatus {
-    #[allow(dead_code)] // May be used in later UI slices
-    fn label(&self) -> &'static str {
-        match self {
-            AppStatus::Stopped => "IDLE",
-            AppStatus::Running => "RUNNING",
-            AppStatus::Error => "ERROR",
-        }
-    }
-
-    fn border_type(&self) -> BorderType {
-        match self {
-            AppStatus::Stopped => BorderType::Rounded,
-            AppStatus::Running | AppStatus::Error => BorderType::Double,
-        }
-    }
-
-    /// Returns the color for this status, with pulsing effect for Error state.
-    /// The pulse alternates between red and dark red at ~2Hz (every 15 frames at 30fps).
-    fn pulsing_color(&self, frame_count: u64) -> Color {
-        match self {
-            AppStatus::Stopped => Color::Cyan,
-            AppStatus::Running => Color::Green,
-            AppStatus::Error => {
-                if (frame_count / 15).is_multiple_of(2) {
-                    Color::Red
-                } else {
-                    Color::Rgb(128, 0, 0)
-                }
-            }
-        }
-    }
-}
-
-/// Formats a duration as M:SS (under 1 hour) or H:MM:SS (1+ hours).
-fn format_elapsed(duration: Duration) -> String {
-    let total_secs = duration.as_secs();
-    let hours = total_secs / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let seconds = total_secs % 60;
-
-    if hours > 0 {
-        format!("{}:{:02}:{:02}", hours, minutes, seconds)
-    } else {
-        format!("{}:{:02}", minutes, seconds)
-    }
-}
-
-enum OutputMessage {
+/// Message types for output processing.
+pub enum OutputMessage {
     Line(String),
 }
 
-/// Tracks accumulated state for a content block being streamed.
-#[derive(Debug, Default)]
-struct ContentBlockState {
-    /// For text blocks: accumulated text content.
-    text: String,
-    /// For tool_use blocks: the tool name.
-    tool_name: Option<String>,
-    /// For tool_use blocks: accumulated JSON input string.
-    input_json: String,
-}
-
-/// Maximum length for truncated tool input display.
-const TOOL_INPUT_MAX_LEN: usize = 60;
-
-/// Log level options for the dropdown.
-const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
-
-/// Status of a spec in the README table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum SpecStatus {
-    /// Blocked - needs attention (sorted first)
-    Blocked,
-    /// Ready - can be worked on
-    Ready,
-    /// In Progress - currently being worked on
-    InProgress,
-    /// Done - completed (sorted last)
-    Done,
-}
-
-impl SpecStatus {
-    /// Parse status from string.
-    fn from_str(s: &str) -> Option<Self> {
-        match s.trim() {
-            "Blocked" => Some(Self::Blocked),
-            "Ready" => Some(Self::Ready),
-            "In Progress" => Some(Self::InProgress),
-            "Done" => Some(Self::Done),
-            _ => None,
-        }
-    }
-
-    /// Get the display color for this status.
-    fn color(&self) -> Color {
-        match self {
-            Self::Blocked => Color::Red,
-            Self::Ready => Color::Cyan,
-            Self::InProgress => Color::Green,
-            Self::Done => Color::DarkGray,
-        }
-    }
-
-    /// Get the display label for this status.
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Blocked => "Blocked",
-            Self::Ready => "Ready",
-            Self::InProgress => "In Progress",
-            Self::Done => "Done",
-        }
-    }
-}
-
-/// A single spec entry parsed from the README.
-#[derive(Debug, Clone)]
-struct SpecEntry {
-    /// Name of the spec (from markdown link).
-    name: String,
-    /// Current status.
-    status: SpecStatus,
-    /// File creation/modification timestamp for sorting.
-    timestamp: Option<SystemTime>,
-}
-
-/// State for the specs panel modal.
-#[derive(Debug)]
-struct SpecsPanelState {
-    /// List of specs parsed from README.
-    specs: Vec<SpecEntry>,
-    /// Currently selected index.
-    selected: usize,
-    /// Scroll offset for the list.
-    scroll_offset: usize,
-    /// Error message if parsing failed.
-    error: Option<String>,
-    /// Directory where spec files are located.
-    specs_dir: PathBuf,
-}
-
-impl SpecsPanelState {
-    /// Create a new specs panel state by parsing the README.
-    fn new(specs_dir: &std::path::Path) -> Self {
-        match parse_specs_readme(specs_dir) {
-            Ok(mut specs) => {
-                // Sort by status (Blocked→Ready→InProgress→Done), then by timestamp (newest first)
-                specs.sort_by(|a, b| match a.status.cmp(&b.status) {
-                    std::cmp::Ordering::Equal => {
-                        // Within same status, sort by timestamp descending (newest first)
-                        // None values go to the end
-                        match (&b.timestamp, &a.timestamp) {
-                            (Some(b_ts), Some(a_ts)) => b_ts.cmp(a_ts),
-                            (Some(_), None) => std::cmp::Ordering::Less,
-                            (None, Some(_)) => std::cmp::Ordering::Greater,
-                            (None, None) => std::cmp::Ordering::Equal,
-                        }
-                    }
-                    other => other,
-                });
-                Self {
-                    specs,
-                    selected: 0,
-                    scroll_offset: 0,
-                    error: None,
-                    specs_dir: specs_dir.to_path_buf(),
-                }
-            }
-            Err(e) => Self {
-                specs: Vec::new(),
-                selected: 0,
-                scroll_offset: 0,
-                error: Some(e),
-                specs_dir: specs_dir.to_path_buf(),
-            },
-        }
-    }
-
-    /// Get the path to the currently selected spec file.
-    fn selected_spec_path(&self) -> Option<PathBuf> {
-        self.specs
-            .get(self.selected)
-            .map(|spec| self.specs_dir.join(format!("{}.md", spec.name)))
-    }
-
-    /// Read the head of the selected spec file.
-    fn read_selected_spec_head(&self, max_lines: usize) -> Result<Vec<String>, String> {
-        let path = self.selected_spec_path().ok_or("No spec selected")?;
-
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err("File not found".to_string());
-            }
-            Err(e) => {
-                return Err(format!("Error reading file: {}", e));
-            }
-        };
-
-        Ok(contents.lines().take(max_lines).map(String::from).collect())
-    }
-
-    /// Move selection up.
-    fn select_prev(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    /// Move selection down.
-    fn select_next(&mut self) {
-        if !self.specs.is_empty() && self.selected < self.specs.len() - 1 {
-            self.selected += 1;
-        }
-    }
-
-    /// Count of blocked specs.
-    fn blocked_count(&self) -> usize {
-        self.specs
-            .iter()
-            .filter(|s| s.status == SpecStatus::Blocked)
-            .count()
-    }
-
-    /// Ensure selected item is visible, adjusting scroll_offset if needed.
-    fn ensure_visible(&mut self, visible_height: usize) {
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + visible_height {
-            self.scroll_offset = self.selected - visible_height + 1;
-        }
-    }
-}
-
-/// Parse specs from the README.md file.
-fn parse_specs_readme(specs_dir: &std::path::Path) -> Result<Vec<SpecEntry>, String> {
-    let readme_path = specs_dir.join("README.md");
-
-    let contents = match std::fs::read_to_string(&readme_path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err("specs/README.md not found".to_string());
-        }
-        Err(e) => {
-            return Err(format!("Failed to read specs/README.md: {}", e));
-        }
-    };
-
-    let mut specs = Vec::new();
-
-    for line in contents.lines() {
-        // Skip non-table lines and header rows
-        if !line.starts_with('|') || line.contains("---") || line.contains("Spec") {
-            continue;
-        }
-
-        // Parse table row: | [spec-name](spec-name.md) | Status | Summary | Depends On |
-        let parts: Vec<&str> = line.split('|').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-
-        // Extract spec name from markdown link in first column
-        let name_col = parts.get(1).map(|s| s.trim()).unwrap_or("");
-        let name = if let Some(start) = name_col.find('[') {
-            let after_bracket = &name_col[start + 1..];
-            if let Some(end) = after_bracket.find(']') {
-                after_bracket[..end].to_string()
-            } else {
-                continue;
-            }
-        } else {
-            continue;
-        };
-
-        // Extract status from second column
-        let status_str = parts.get(2).map(|s| s.trim()).unwrap_or("");
-        let status = match SpecStatus::from_str(status_str) {
-            Some(s) => s,
-            None => continue,
-        };
-
-        // Get file timestamp
-        let spec_path = specs_dir.join(format!("{}.md", name));
-        let timestamp = std::fs::metadata(&spec_path).ok().and_then(|m| {
-            // Try created time first, fall back to modified time
-            m.created().ok().or_else(|| m.modified().ok())
-        });
-
-        specs.push(SpecEntry {
-            name,
-            status,
-            timestamp,
-        });
-    }
-
-    if specs.is_empty() {
-        return Err("No specs found in README.md".to_string());
-    }
-
-    Ok(specs)
-}
-
-/// Which field is focused in the config modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum ConfigModalField {
-    ClaudePath,
-    PromptFile,
-    SpecsDirectory,
-    LogLevel,
-    AutoContinue,
-    SaveButton,
-    CancelButton,
-}
-
-impl ConfigModalField {
-    fn next(self) -> Self {
-        match self {
-            Self::ClaudePath => Self::PromptFile,
-            Self::PromptFile => Self::SpecsDirectory,
-            Self::SpecsDirectory => Self::LogLevel,
-            Self::LogLevel => Self::AutoContinue,
-            Self::AutoContinue => Self::SaveButton,
-            Self::SaveButton => Self::CancelButton,
-            Self::CancelButton => Self::ClaudePath,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            Self::ClaudePath => Self::CancelButton,
-            Self::PromptFile => Self::ClaudePath,
-            Self::SpecsDirectory => Self::PromptFile,
-            Self::LogLevel => Self::SpecsDirectory,
-            Self::AutoContinue => Self::LogLevel,
-            Self::SaveButton => Self::AutoContinue,
-            Self::CancelButton => Self::SaveButton,
-        }
-    }
-}
-
-/// State for the config modal form.
-#[derive(Debug, Clone)]
-struct ConfigModalState {
-    /// Current focused field.
-    focus: ConfigModalField,
-    /// Claude CLI path value.
-    claude_path: String,
-    /// Prompt file path value.
-    prompt_file: String,
-    /// Specs directory path value.
-    specs_dir: String,
-    /// Currently selected log level index in LOG_LEVELS.
-    log_level_index: usize,
-    /// Auto-continue enabled.
-    auto_continue: bool,
-    /// Cursor position within the focused text field.
-    cursor_pos: usize,
-    /// Error message to display (e.g., save failed).
-    error: Option<String>,
-    /// Validation errors per field.
-    validation_errors: HashMap<ConfigModalField, String>,
-}
-
-impl ConfigModalState {
-    /// Create a new modal state initialized from the current config.
-    fn from_config(config: &Config) -> Self {
-        let log_level_index = LOG_LEVELS
-            .iter()
-            .position(|&l| l == config.logging.level)
-            .unwrap_or(2); // Default to "info" (index 2)
-
-        Self {
-            focus: ConfigModalField::ClaudePath,
-            claude_path: config.claude.path.clone(),
-            prompt_file: config.paths.prompt.clone(),
-            specs_dir: config.paths.specs.clone(),
-            log_level_index,
-            auto_continue: config.behavior.auto_continue,
-            cursor_pos: config.claude.path.len(),
-            error: None,
-            validation_errors: HashMap::new(),
-        }
-    }
-
-    /// Get a reference to the currently focused text field's value.
-    fn current_field_value(&self) -> Option<&String> {
-        match self.focus {
-            ConfigModalField::ClaudePath => Some(&self.claude_path),
-            ConfigModalField::PromptFile => Some(&self.prompt_file),
-            ConfigModalField::SpecsDirectory => Some(&self.specs_dir),
-            _ => None,
-        }
-    }
-
-    /// Move focus to the next field, resetting cursor position.
-    /// Validates the field being left (blur validation).
-    fn focus_next(&mut self) {
-        let leaving_field = self.focus;
-        self.focus = self.focus.next();
-        self.update_cursor_for_new_focus();
-        self.validate_field(leaving_field);
-    }
-
-    /// Move focus to the previous field, resetting cursor position.
-    /// Validates the field being left (blur validation).
-    fn focus_prev(&mut self) {
-        let leaving_field = self.focus;
-        self.focus = self.focus.prev();
-        self.update_cursor_for_new_focus();
-        self.validate_field(leaving_field);
-    }
-
-    /// Update cursor position when focus changes to a new field.
-    fn update_cursor_for_new_focus(&mut self) {
-        if let Some(value) = self.current_field_value() {
-            self.cursor_pos = value.len();
-        } else {
-            self.cursor_pos = 0;
-        }
-    }
-
-    /// Insert a character at the current cursor position.
-    fn insert_char(&mut self, c: char) {
-        let cursor = self.cursor_pos;
-        let field_changed = match self.focus {
-            ConfigModalField::ClaudePath => {
-                if cursor >= self.claude_path.len() {
-                    self.claude_path.push(c);
-                } else {
-                    self.claude_path.insert(cursor, c);
-                }
-                self.cursor_pos += 1;
-                true
-            }
-            ConfigModalField::PromptFile => {
-                if cursor >= self.prompt_file.len() {
-                    self.prompt_file.push(c);
-                } else {
-                    self.prompt_file.insert(cursor, c);
-                }
-                self.cursor_pos += 1;
-                true
-            }
-            ConfigModalField::SpecsDirectory => {
-                if cursor >= self.specs_dir.len() {
-                    self.specs_dir.push(c);
-                } else {
-                    self.specs_dir.insert(cursor, c);
-                }
-                self.cursor_pos += 1;
-                true
-            }
-            _ => false,
-        };
-        if field_changed {
-            self.clear_current_field_error();
-        }
-    }
-
-    /// Delete the character before the cursor (backspace).
-    fn delete_char_before(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        let cursor = self.cursor_pos;
-        let field_changed = match self.focus {
-            ConfigModalField::ClaudePath => {
-                self.claude_path.remove(cursor - 1);
-                self.cursor_pos -= 1;
-                true
-            }
-            ConfigModalField::PromptFile => {
-                self.prompt_file.remove(cursor - 1);
-                self.cursor_pos -= 1;
-                true
-            }
-            ConfigModalField::SpecsDirectory => {
-                self.specs_dir.remove(cursor - 1);
-                self.cursor_pos -= 1;
-                true
-            }
-            _ => false,
-        };
-        if field_changed {
-            self.clear_current_field_error();
-        }
-    }
-
-    /// Delete the character at the cursor position (delete key).
-    fn delete_char_at(&mut self) {
-        let cursor = self.cursor_pos;
-        let field_changed = match self.focus {
-            ConfigModalField::ClaudePath if cursor < self.claude_path.len() => {
-                self.claude_path.remove(cursor);
-                true
-            }
-            ConfigModalField::PromptFile if cursor < self.prompt_file.len() => {
-                self.prompt_file.remove(cursor);
-                true
-            }
-            ConfigModalField::SpecsDirectory if cursor < self.specs_dir.len() => {
-                self.specs_dir.remove(cursor);
-                true
-            }
-            _ => false,
-        };
-        if field_changed {
-            self.clear_current_field_error();
-        }
-    }
-
-    /// Move cursor left within the current field.
-    fn cursor_left(&mut self) {
-        if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
-        }
-    }
-
-    /// Move cursor right within the current field.
-    fn cursor_right(&mut self) {
-        if let Some(value) = self.current_field_value()
-            && self.cursor_pos < value.len()
-        {
-            self.cursor_pos += 1;
-        }
-    }
-
-    /// Move to beginning of current field.
-    fn cursor_home(&mut self) {
-        self.cursor_pos = 0;
-    }
-
-    /// Move to end of current field.
-    fn cursor_end(&mut self) {
-        if let Some(value) = self.current_field_value() {
-            self.cursor_pos = value.len();
-        }
-    }
-
-    /// Cycle log level selection up.
-    fn log_level_prev(&mut self) {
-        if self.log_level_index > 0 {
-            self.log_level_index -= 1;
-        } else {
-            self.log_level_index = LOG_LEVELS.len() - 1;
-        }
-    }
-
-    /// Cycle log level selection down.
-    fn log_level_next(&mut self) {
-        if self.log_level_index < LOG_LEVELS.len() - 1 {
-            self.log_level_index += 1;
-        } else {
-            self.log_level_index = 0;
-        }
-    }
-
-    /// Get the currently selected log level.
-    fn selected_log_level(&self) -> &'static str {
-        LOG_LEVELS[self.log_level_index]
-    }
-
-    /// Toggle auto-continue setting.
-    fn toggle_auto_continue(&mut self) {
-        self.auto_continue = !self.auto_continue;
-    }
-
-    /// Check if there are any validation errors.
-    fn has_validation_errors(&self) -> bool {
-        !self.validation_errors.is_empty()
-    }
-
-    /// Validate a specific field and update validation_errors.
-    fn validate_field(&mut self, field: ConfigModalField) {
-        let error = match field {
-            ConfigModalField::ClaudePath => validate_executable_path(&self.claude_path),
-            ConfigModalField::PromptFile => validate_file_exists(&self.prompt_file),
-            ConfigModalField::SpecsDirectory => validate_directory_exists(&self.specs_dir),
-            // LogLevel/buttons don't need validation
-            _ => None,
-        };
-
-        if let Some(msg) = error {
-            self.validation_errors.insert(field, msg);
-        } else {
-            self.validation_errors.remove(&field);
-        }
-    }
-
-    /// Clear validation error for the current field (called when value changes).
-    fn clear_current_field_error(&mut self) {
-        self.validation_errors.remove(&self.focus);
-    }
-
-    /// Build a Config from the current form values.
-    fn to_config(&self) -> Config {
-        Config {
-            claude: crate::config::ClaudeConfig {
-                path: self.claude_path.clone(),
-                args: None,
-            },
-            paths: crate::config::PathsConfig {
-                prompt: self.prompt_file.clone(),
-                specs: self.specs_dir.clone(),
-            },
-            logging: crate::config::LoggingConfig {
-                level: self.selected_log_level().to_string(),
-            },
-            behavior: crate::config::BehaviorConfig {
-                auto_continue: self.auto_continue,
-            },
-        }
-    }
-}
-
-/// Validate that a path points to an executable file.
-/// Returns an error message if validation fails, None if valid.
-fn validate_executable_path(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return Some("Path cannot be empty".to_string());
-    }
-
-    let expanded = Config::expand_tilde(path);
-
-    match std::fs::metadata(&expanded) {
-        Ok(metadata) => {
-            if !metadata.is_file() {
-                return Some("Path is not a file".to_string());
-            }
-
-            // Check executable permission on Unix
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mode = metadata.permissions().mode();
-                if mode & 0o111 == 0 {
-                    return Some("File is not executable".to_string());
-                }
-            }
-
-            None
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some("File not found".to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            Some("Cannot access file".to_string())
-        }
-        Err(_) => Some("Invalid path".to_string()),
-    }
-}
-
-/// Validate that a path points to an existing file.
-/// Returns an error message if validation fails, None if valid.
-fn validate_file_exists(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return Some("Path cannot be empty".to_string());
-    }
-
-    let expanded = Config::expand_tilde(path);
-
-    match std::fs::metadata(&expanded) {
-        Ok(metadata) => {
-            if !metadata.is_file() {
-                Some("Path is not a file".to_string())
-            } else {
-                None
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some("File not found".to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            Some("Cannot access file".to_string())
-        }
-        Err(_) => Some("Invalid path".to_string()),
-    }
-}
-
-/// Validate that a path points to an existing directory.
-/// Returns an error message if validation fails, None if valid.
-fn validate_directory_exists(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return Some("Path cannot be empty".to_string());
-    }
-
-    let expanded = Config::expand_tilde(path);
-
-    match std::fs::metadata(&expanded) {
-        Ok(metadata) => {
-            if !metadata.is_dir() {
-                Some("Path is not a directory".to_string())
-            } else {
-                None
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Some("Directory not found".to_string())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            Some("Cannot access directory".to_string())
-        }
-        Err(_) => Some("Invalid path".to_string()),
-    }
-}
-
-/// Formats a tool invocation for display.
-///
-/// Returns a formatted string like `[Tool: Bash] git status` for known tools,
-/// or a truncated JSON representation for unknown tools.
-fn format_tool_summary(tool_name: &str, input_json: &str) -> String {
-    let prefix = format!("[Tool: {}]", tool_name);
-
-    // Try to parse the accumulated JSON
-    let input: serde_json::Value = match serde_json::from_str(input_json) {
-        Ok(v) => v,
-        Err(_) => return format!("{} (input parsing failed)", prefix),
-    };
-
-    // Format based on tool type
-    let summary = match tool_name {
-        "Bash" => format_bash_tool(&input),
-        "Read" => format_read_tool(&input),
-        "Edit" => format_edit_tool(&input),
-        "Write" => format_write_tool(&input),
-        "Grep" => format_grep_tool(&input),
-        "Glob" => format_glob_tool(&input),
-        _ => format_unknown_tool(&input),
-    };
-
-    format!("{} {}", prefix, summary)
-}
-
-fn format_bash_tool(input: &serde_json::Value) -> String {
-    input
-        .get("command")
-        .and_then(|v| v.as_str())
-        .map(|cmd| truncate_str(cmd, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no command)".to_string())
-}
-
-fn format_read_tool(input: &serde_json::Value) -> String {
-    input
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no path)".to_string())
-}
-
-fn format_edit_tool(input: &serde_json::Value) -> String {
-    let path = input
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("(no path)");
-
-    // Try to show context about what's being edited
-    if let Some(old_str) = input.get("old_string").and_then(|v| v.as_str()) {
-        let preview = truncate_str(old_str, 30);
-        format!("{} \"{}\"", truncate_str(path, 40), preview)
-    } else {
-        truncate_str(path, TOOL_INPUT_MAX_LEN)
-    }
-}
-
-fn format_write_tool(input: &serde_json::Value) -> String {
-    input
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no path)".to_string())
-}
-
-fn format_grep_tool(input: &serde_json::Value) -> String {
-    input
-        .get("pattern")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no pattern)".to_string())
-}
-
-fn format_glob_tool(input: &serde_json::Value) -> String {
-    input
-        .get("pattern")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no pattern)".to_string())
-}
-
-fn format_unknown_tool(input: &serde_json::Value) -> String {
-    let json_str = input.to_string();
-    truncate_str(&json_str, TOOL_INPUT_MAX_LEN)
-}
-
-/// Formats a number with thousands separators (e.g., 7371 -> "7,371").
-fn format_with_thousands(n: u64) -> String {
-    let s = n.to_string();
-    let chars: Vec<char> = s.chars().collect();
-    let mut result = String::new();
-
-    for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(*c);
-    }
-    result
-}
-
-/// Formats the usage summary from a Result event.
-///
-/// Returns a two-line string: a separator line followed by the summary.
-/// Example: "───────────────────────────────────\nCost: $0.05 | Tokens: 7,371 in / 9 out | Duration: 2.3s"
-fn format_usage_summary(result: &crate::events::ResultEvent) -> String {
-    let mut parts = Vec::new();
-
-    // Format cost
-    if let Some(cost) = result.total_cost_usd {
-        parts.push(format!("Cost: ${:.2}", cost));
-    }
-
-    // Format tokens
-    if let Some(usage) = &result.usage {
-        let input = usage
-            .input_tokens
-            .map(format_with_thousands)
-            .unwrap_or_else(|| "?".to_string());
-        let output = usage
-            .output_tokens
-            .map(format_with_thousands)
-            .unwrap_or_else(|| "?".to_string());
-        parts.push(format!("Tokens: {} in / {} out", input, output));
-    }
-
-    // Format duration
-    if let Some(duration_ms) = result.duration_ms {
-        let seconds = duration_ms as f64 / 1000.0;
-        parts.push(format!("Duration: {:.1}s", seconds));
-    }
-
-    // Build the summary line
-    let separator = "─".repeat(35);
-    let summary = parts.join(" | ");
-    format!("{}\n{}", separator, summary)
-}
-
-/// Truncates a string to the given maximum length, appending "..." if truncated.
-fn truncate_str(s: &str, max_len: usize) -> String {
-    // Replace newlines with spaces for single-line display
-    let single_line: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-
-    if single_line.len() <= max_len {
-        single_line
-    } else {
-        format!("{}...", &single_line[..max_len.saturating_sub(3)])
-    }
-}
-
-struct App {
-    status: AppStatus,
-    output_lines: Vec<String>,
-    scroll_offset: u16,
-    is_auto_following: bool,
-    show_already_running_popup: bool,
-    show_config_modal: bool,
-    main_pane_height: u16,
-    main_pane_width: u16,
-    child_process: Option<Child>,
-    output_receiver: Option<Receiver<OutputMessage>>,
-    /// Tracks content blocks by index during streaming.
-    content_blocks: HashMap<usize, ContentBlockState>,
-    /// Current line being accumulated (text that hasn't hit a newline yet).
-    current_line: String,
-    /// Session ID for this Ralph invocation (always populated).
-    session_id: String,
-    /// Loop counter for logging, incremented each time start_command() is called.
-    loop_count: u64,
-    /// Directory where logs are written.
-    #[allow(dead_code)] // Will be used in later UI slices
-    log_directory: Option<PathBuf>,
-    /// Error that occurred during logging initialization.
-    #[allow(dead_code)] // Will be used in later UI slices
-    logging_error: Option<String>,
-    /// Loaded configuration.
-    config: Config,
-    /// Path to the configuration file.
-    config_path: PathBuf,
-    /// Status of config loading.
-    #[allow(dead_code)] // Will be used in later UI slices
-    config_load_status: ConfigLoadStatus,
-    /// Last known mtime of the config file for change detection.
-    config_mtime: Option<SystemTime>,
-    /// Last time we polled for config changes.
-    last_config_poll: Instant,
-    /// When config was last successfully reloaded (for "Reloaded" indicator fade).
-    config_reloaded_at: Option<Instant>,
-    /// Error message if config reload failed (invalid TOML, etc.).
-    config_reload_error: Option<String>,
-    /// Name of the currently active spec (from specs/README.md).
-    current_spec: Option<String>,
-    /// Last time we polled for the current spec.
-    last_spec_poll: Instant,
-    /// Handle for dynamically reloading the log level.
-    log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
-    /// Current log level from config (to detect changes on reload).
-    current_log_level: String,
-    /// When the current run started (for elapsed time display).
-    run_start_time: Option<Instant>,
-    /// Frame counter for animations (incremented each render cycle).
-    frame_count: u64,
-    /// State for the config modal form (when open).
-    config_modal_state: Option<ConfigModalState>,
-    /// Flag indicating auto-continue should be triggered on next loop iteration.
-    auto_continue_pending: bool,
-    /// Whether the specs panel modal is visible.
-    show_specs_panel: bool,
-    /// State for the specs panel modal (when open).
-    specs_panel_state: Option<SpecsPanelState>,
-}
-
-impl App {
-    fn new(
-        session_id: String,
-        log_directory: Option<PathBuf>,
-        logging_error: Option<String>,
-        loaded_config: LoadedConfig,
-        log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
-    ) -> Self {
-        let current_log_level = loaded_config.config.logging.level.clone();
-        Self {
-            status: AppStatus::Stopped,
-            output_lines: Vec::new(),
-            scroll_offset: 0,
-            is_auto_following: true,
-            show_already_running_popup: false,
-            show_config_modal: false,
-            main_pane_height: 0,
-            main_pane_width: 0,
-            child_process: None,
-            output_receiver: None,
-            content_blocks: HashMap::new(),
-            current_line: String::new(),
-            session_id,
-            loop_count: 0,
-            log_directory,
-            logging_error,
-            config: loaded_config.config,
-            config_path: loaded_config.config_path.clone(),
-            config_load_status: loaded_config.status,
-            config_mtime: get_file_mtime(&loaded_config.config_path),
-            // Initialize to "long ago" so we poll immediately on start
-            last_config_poll: Instant::now() - Duration::from_secs(10),
-            config_reloaded_at: None,
-            config_reload_error: None,
-            current_spec: None,
-            // Initialize to "long ago" so we poll immediately on start
-            last_spec_poll: Instant::now() - Duration::from_secs(10),
-            log_level_handle,
-            current_log_level,
-            run_start_time: None,
-            frame_count: 0,
-            config_modal_state: None,
-            auto_continue_pending: false,
-            show_specs_panel: false,
-            specs_panel_state: None,
-        }
-    }
-
-    fn visual_line_count(&self) -> u16 {
-        if self.main_pane_width == 0 {
-            return 0;
-        }
-        // Include both completed lines and the current partial line
-        let mut content: Vec<Line> = self.output_lines.iter().map(Line::raw).collect();
-        if !self.current_line.is_empty() {
-            content.push(Line::raw(&self.current_line));
-        }
-        let paragraph = Paragraph::new(content)
-            .block(Block::default().borders(Borders::ALL))
-            .wrap(Wrap { trim: false });
-        paragraph.line_count(self.main_pane_width) as u16
-    }
-
-    fn max_scroll(&self) -> u16 {
-        self.visual_line_count()
-            .saturating_sub(self.main_pane_height)
-    }
-
-    fn scroll_up(&mut self, amount: u16) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset = self.scroll_offset.saturating_sub(amount);
-            self.is_auto_following = false;
-        }
-    }
-
-    fn scroll_down(&mut self, amount: u16) {
-        let max = self.max_scroll();
-        self.scroll_offset = (self.scroll_offset + amount).min(max);
-        if self.scroll_offset >= max {
-            self.is_auto_following = true;
-        }
-    }
-
-    fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.max_scroll();
-        self.is_auto_following = true;
-    }
-
-    fn add_line(&mut self, line: String) {
-        self.output_lines.push(line);
-        if self.is_auto_following {
-            self.scroll_to_bottom();
-        }
-    }
-
-    /// Appends text to the current line, flushing complete lines to output.
-    fn append_text(&mut self, text: &str) {
-        for ch in text.chars() {
-            if ch == '\n' {
-                // Flush current line to output
-                let line = std::mem::take(&mut self.current_line);
-                self.add_line(line);
-            } else {
-                self.current_line.push(ch);
-            }
-        }
-        // Update display with partial line if auto-following
-        if self.is_auto_following {
-            self.scroll_to_bottom();
-        }
-    }
-
-    /// Flushes any remaining text in current_line to output.
-    fn flush_current_line(&mut self) {
-        if !self.current_line.is_empty() {
-            let line = std::mem::take(&mut self.current_line);
-            self.add_line(line);
-        }
-    }
-
-    /// Parses and processes a single NDJSON line.
-    fn process_line(&mut self, line: &str) {
-        // Skip empty lines
-        if line.trim().is_empty() {
-            return;
-        }
-
-        // Log raw JSON at TRACE level for protocol debugging
-        trace!(json = line, "raw_json_line");
-
-        // Handle stderr lines (pass through as-is)
-        if line.starts_with("[stderr]") {
-            self.add_line(line.to_string());
-            return;
-        }
-
-        // Try to parse as JSON
-        match serde_json::from_str::<ClaudeEvent>(line) {
-            Ok(event) => self.process_event(event),
-            Err(e) => {
-                // Check if this is an unknown event type by trying to parse as generic JSON
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                    if let Some(event_type) = json.get("type").and_then(|v| v.as_str()) {
-                        warn!(event_type, "Unknown event type, skipping");
-                    } else {
-                        warn!(?e, "Failed to parse JSON line (no type field)");
-                    }
-                } else {
-                    warn!(?e, "Malformed JSON line, skipping");
-                }
-            }
-        }
-    }
-
-    /// Processes a parsed Claude event.
-    fn process_event(&mut self, event: ClaudeEvent) {
-        match event {
-            ClaudeEvent::Ping => {
-                // Silently ignore ping events
-                debug!("Received ping");
-            }
-            ClaudeEvent::System(sys) => {
-                debug!(?sys, "System event");
-            }
-            ClaudeEvent::Assistant(asst) => {
-                debug!(?asst, "Assistant event");
-            }
-            ClaudeEvent::User(_) => {
-                // Skip user events (tool results, etc.)
-                debug!("User event (skipped)");
-            }
-            ClaudeEvent::StreamEvent { event: inner } => {
-                // Unwrap and process the inner streaming event
-                self.process_stream_event(inner);
-            }
-            ClaudeEvent::Result(result) => {
-                debug!(?result, "Result event");
-                // Display usage summary
-                let summary = format_usage_summary(&result);
-                for line in summary.lines() {
-                    self.add_line(line.to_string());
-                }
-            }
-        }
-    }
-
-    /// Processes inner streaming events (unwrapped from stream_event).
-    fn process_stream_event(&mut self, event: StreamInnerEvent) {
-        match event {
-            StreamInnerEvent::MessageStart(msg) => {
-                debug!(?msg, "Message start");
-                // Clear content blocks for new message
-                self.content_blocks.clear();
-            }
-            StreamInnerEvent::ContentBlockStart(block_start) => {
-                let index = block_start.index;
-                let mut state = ContentBlockState::default();
-
-                match block_start.content_block {
-                    ContentBlock::Text { text } => {
-                        state.text = text;
-                    }
-                    ContentBlock::ToolUse { name, .. } => {
-                        state.tool_name = Some(name);
-                    }
-                }
-
-                self.content_blocks.insert(index, state);
-                debug!(index, "Content block started");
-            }
-            StreamInnerEvent::ContentBlockDelta(delta_event) => {
-                let index = delta_event.index;
-                let state = self.content_blocks.entry(index).or_default();
-
-                match delta_event.delta {
-                    Delta::TextDelta { text } => {
-                        state.text.push_str(&text);
-                        // Display text immediately as it streams
-                        self.append_text(&text);
-                    }
-                    Delta::InputJsonDelta { partial_json } => {
-                        state.input_json.push_str(&partial_json);
-                    }
-                }
-            }
-            StreamInnerEvent::ContentBlockStop(stop) => {
-                debug!(index = stop.index, "Content block stopped");
-                // Always flush any pending text first to maintain order
-                self.flush_current_line();
-                // Then process tool_use blocks
-                if let Some(state) = self.content_blocks.get(&stop.index)
-                    && let Some(tool_name) = &state.tool_name
-                {
-                    let summary = format_tool_summary(tool_name, &state.input_json);
-                    self.add_line(summary);
-                }
-            }
-            StreamInnerEvent::MessageDelta(delta) => {
-                debug!(?delta, "Message delta");
-            }
-            StreamInnerEvent::MessageStop => {
-                debug!("Message stopped");
-                // Flush any remaining text
-                self.flush_current_line();
-            }
-        }
-    }
-
-    fn start_command(&mut self) -> Result<()> {
-        if self.status == AppStatus::Running {
-            self.show_already_running_popup = true;
-            return Ok(());
-        }
-
-        // Check if prompt file exists (using config path)
-        let prompt_path = self.config.prompt_path();
-        if !prompt_path.exists() {
-            self.status = AppStatus::Error;
-            self.add_line(format!("Error: {} not found", prompt_path.display()));
-            return Ok(());
-        }
-
-        // Increment loop counter and log loop_start
-        self.loop_count += 1;
-        info!(loop_number = self.loop_count, "loop_start");
-
-        // Add divider if not first run
-        if !self.output_lines.is_empty() {
-            self.add_line("─".repeat(40));
-        }
-
-        // Reset streaming state for new command
-        self.content_blocks.clear();
-        self.current_line.clear();
-
-        // Spawn the command using shell to handle the pipe
-        // Use config values for claude path and prompt path
-        // Args are hardcoded - Ralph depends on this specific format for streaming output
-        let claude_path = self.config.claude_path();
-        const CLAUDE_ARGS: &str =
-            "--output-format=stream-json --verbose --print --include-partial-messages";
-        let command = format!(
-            "cat {} | {} {}",
-            prompt_path.display(),
-            claude_path.display(),
-            CLAUDE_ARGS
-        );
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-
-        match child {
-            Ok(mut child) => {
-                // Log command_spawned with PID
-                debug!(pid = child.id(), "command_spawned");
-
-                let (tx, rx) = mpsc::channel();
-
-                // Read stdout in a background thread
-                if let Some(stdout) = child.stdout.take() {
-                    let tx_stdout = tx.clone();
-                    thread::spawn(move || {
-                        let reader = BufReader::new(stdout);
-                        for line in reader.lines().map_while(Result::ok) {
-                            if tx_stdout.send(OutputMessage::Line(line)).is_err() {
-                                break;
-                            }
-                        }
-                    });
-                }
-
-                // Read stderr in a background thread
-                if let Some(stderr) = child.stderr.take() {
-                    let tx_stderr = tx.clone();
-                    thread::spawn(move || {
-                        let reader = BufReader::new(stderr);
-                        for line in reader.lines().map_while(Result::ok) {
-                            if tx_stderr
-                                .send(OutputMessage::Line(format!("[stderr] {}", line)))
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    });
-                }
-
-                self.child_process = Some(child);
-                self.output_receiver = Some(rx);
-                self.status = AppStatus::Running;
-                self.run_start_time = Some(Instant::now());
-            }
-            Err(e) => {
-                self.status = AppStatus::Error;
-                self.add_line(format!("Error starting command: {}", e));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn kill_child(&mut self) {
-        if let Some(mut child) = self.child_process.take() {
-            let pid = child.id();
-            let _ = child.kill();
-            let _ = child.wait();
-            info!(pid, "process_killed");
-        }
-        self.output_receiver = None;
-    }
-
-    /// Stop the running command (user-initiated)
-    fn stop_command(&mut self) {
-        if self.status != AppStatus::Running {
-            return;
-        }
-        info!("manual_stop");
-        self.kill_child();
-        self.status = AppStatus::Stopped;
-        self.current_spec = None;
-        self.run_start_time = None;
-    }
-
-    fn poll_output(&mut self) {
-        // First, collect all pending messages
-        let mut messages = Vec::new();
-        let mut channel_disconnected = false;
-
-        if let Some(rx) = &self.output_receiver {
-            loop {
-                match rx.try_recv() {
-                    Ok(msg) => messages.push(msg),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        channel_disconnected = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Process collected messages
-        for msg in messages {
-            let OutputMessage::Line(line) = msg;
-            self.process_line(&line);
-        }
-
-        // Check if the channel disconnected (all senders dropped = readers finished)
-        if channel_disconnected {
-            debug!("channel_disconnected");
-
-            // Try to get exit status from child process
-            let (exit_code, exit_status): (Option<i32>, Option<String>) =
-                if let Some(mut child) = self.child_process.take() {
-                    match child.try_wait() {
-                        Ok(Some(status)) => {
-                            if let Some(code) = status.code() {
-                                if code != 0 {
-                                    warn!(exit_code = code, "process_exit_nonzero");
-                                    self.add_line(format!("[Process exited with code {}]", code));
-                                }
-                                (Some(code), Some(format!("exit_code={}", code)))
-                            } else {
-                                // Process was terminated by signal (Unix)
-                                #[cfg(unix)]
-                                {
-                                    use std::os::unix::process::ExitStatusExt;
-                                    if let Some(signal) = status.signal() {
-                                        info!(signal, "process_killed_by_signal");
-                                        (None, Some(format!("signal={}", signal)))
-                                    } else {
-                                        (None, Some("unknown".to_string()))
-                                    }
-                                }
-                                #[cfg(not(unix))]
-                                {
-                                    (None, Some("unknown".to_string()))
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            // Still running, put it back (shouldn't happen if channel disconnected)
-                            self.child_process = Some(child);
-                            return;
-                        }
-                        Err(_) => (None, None),
-                    }
-                } else {
-                    (None, None)
-                };
-
-            // Log loop_end with exit status
-            let status_str = exit_status.unwrap_or_else(|| "unknown".to_string());
-            info!(
-                loop_number = self.loop_count,
-                exit_status = %status_str,
-                "loop_end"
-            );
-
-            self.output_receiver = None;
-            self.current_spec = None;
-            self.run_start_time = None;
-
-            // Determine next state based on exit code and auto-continue setting
-            match exit_code {
-                Some(0) if self.config.behavior.auto_continue => {
-                    // Check if there are specs remaining
-                    match check_specs_remaining(&self.config.specs_path()) {
-                        SpecsRemaining::Yes => {
-                            info!("auto_continue");
-                            self.add_line(
-                                "══════════════════ AUTO-CONTINUING ══════════════════".to_string(),
-                            );
-                            self.auto_continue_pending = true;
-                            self.status = AppStatus::Stopped;
-                        }
-                        SpecsRemaining::No => {
-                            info!("all_specs_complete");
-                            self.add_line(
-                                "══════════════════ ALL SPECS COMPLETE ══════════════════"
-                                    .to_string(),
-                            );
-                            self.status = AppStatus::Stopped;
-                        }
-                        SpecsRemaining::Missing => {
-                            warn!("specs_readme_missing");
-                            self.add_line("[Error: specs/README.md not found]".to_string());
-                            self.status = AppStatus::Error;
-                        }
-                        SpecsRemaining::ReadError(e) => {
-                            warn!(error = %e, "specs_readme_read_error");
-                            self.add_line(format!("[Error reading specs/README.md: {}]", e));
-                            self.status = AppStatus::Error;
-                        }
-                    }
-                }
-                Some(0) => {
-                    // Auto-continue disabled, just stop
-                    self.status = AppStatus::Stopped;
-                }
-                Some(_code) => {
-                    // Non-zero exit code → Error state
-                    self.status = AppStatus::Error;
-                }
-                None => {
-                    // Killed by signal (manual stop) → Stopped state
-                    self.status = AppStatus::Stopped;
-                }
-            }
-        }
-    }
-
-    fn poll_spec(&mut self) {
-        // Only poll when running
-        if self.status != AppStatus::Running {
-            return;
-        }
-
-        // Throttle: poll every 2 seconds
-        if self.last_spec_poll.elapsed() < Duration::from_secs(2) {
-            return;
-        }
-
-        self.last_spec_poll = Instant::now();
-        self.current_spec = detect_current_spec(&self.config.specs_path());
-    }
-
-    fn poll_config(&mut self) {
-        // Throttle: poll every 2 seconds
-        if self.last_config_poll.elapsed() < Duration::from_secs(2) {
-            return;
-        }
-
-        self.last_config_poll = Instant::now();
-
-        // Get current mtime
-        let current_mtime = match get_file_mtime(&self.config_path) {
-            Some(mtime) => mtime,
-            None => {
-                debug!(path = ?self.config_path, "config_mtime_check_failed");
-                return;
-            }
-        };
-
-        // Check if mtime changed
-        let mtime_changed = match self.config_mtime {
-            Some(prev_mtime) => current_mtime != prev_mtime,
-            None => true, // No previous mtime, treat as changed
-        };
-
-        if !mtime_changed {
-            return;
-        }
-
-        // Mtime changed, attempt to reload config
-        self.config_mtime = Some(current_mtime);
-
-        match reload_config(&self.config_path) {
-            Ok(new_config) => {
-                // Check if log level changed and update if we have a reload handle
-                let new_log_level = &new_config.logging.level;
-                if new_log_level != &self.current_log_level
-                    && let Some(ref handle) = self.log_level_handle
-                {
-                    match logging::update_log_level(handle, new_log_level) {
-                        Ok(()) => {
-                            debug!(
-                                old_level = %self.current_log_level,
-                                new_level = %new_log_level,
-                                "log_level_updated"
-                            );
-                            self.current_log_level = new_log_level.clone();
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "log_level_update_failed");
-                            // Continue with config reload, just don't update log level
-                        }
-                    }
-                }
-
-                self.config = new_config;
-                self.config_reload_error = None;
-                self.config_reloaded_at = Some(Instant::now());
-            }
-            Err(error) => {
-                // Keep previous config, show error
-                self.config_reload_error = Some(error);
-            }
-        }
-    }
-}
-
-/// Result of checking if there's more spec work to do
-enum SpecsRemaining {
-    /// There are specs with Ready or In Progress status
-    Yes,
-    /// All specs are Done or Blocked
-    No,
-    /// README file doesn't exist
-    Missing,
-    /// README file couldn't be read (permissions, etc.)
-    ReadError(String),
-}
-
-/// Check if there are specs remaining (Ready or In Progress status)
-fn check_specs_remaining(specs_dir: &std::path::Path) -> SpecsRemaining {
-    let readme_path = specs_dir.join("README.md");
-
-    let contents = match std::fs::read_to_string(&readme_path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return SpecsRemaining::Missing;
-        }
-        Err(e) => {
-            return SpecsRemaining::ReadError(e.to_string());
-        }
-    };
-
-    for line in contents.lines() {
-        // Look for table rows with "Ready" or "In Progress" status
-        if line.contains("| Ready |")
-            || line.contains("| Ready|")
-            || line.contains("| In Progress |")
-            || line.contains("| In Progress|")
-        {
-            return SpecsRemaining::Yes;
-        }
-    }
-
-    SpecsRemaining::No
-}
-
-/// Detect the currently in-progress spec from specs/README.md
-fn detect_current_spec(specs_dir: &std::path::Path) -> Option<String> {
-    let readme_path = specs_dir.join("README.md");
-
-    let contents = match std::fs::read_to_string(&readme_path) {
-        Ok(c) => c,
-        Err(e) => {
-            debug!(path = ?readme_path, error = %e, "spec_readme_read_failed");
-            return None;
-        }
-    };
-
-    let mut found_specs: Vec<String> = Vec::new();
-
-    for line in contents.lines() {
-        // Look for table rows with "In Progress" status
-        // Pattern: | [spec-name](...)  | In Progress | ... |
-        if line.contains("| In Progress |") || line.contains("| In Progress|") {
-            // Extract spec name from the link: | [spec-name](spec-name.md) |
-            if let Some(start) = line.find("| [") {
-                let after_bracket = &line[start + 3..];
-                if let Some(end) = after_bracket.find(']') {
-                    let spec_name = after_bracket[..end].to_string();
-                    found_specs.push(spec_name);
-                }
-            }
-        }
-    }
-
-    if found_specs.len() > 1 {
-        warn!(
-            specs = ?found_specs,
-            "multiple_specs_in_progress"
-        );
-    }
-
-    found_specs.into_iter().next()
+/// Get the modification time of a file, or None if it can't be determined.
+pub fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn main() -> Result<()> {
@@ -1697,152 +117,6 @@ fn main() -> Result<()> {
     result
 }
 
-/// Handle keyboard input for the config modal.
-fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyModifiers) {
-    let Some(state) = &mut app.config_modal_state else {
-        return;
-    };
-
-    // Clear any previous error when user takes action
-    if state.error.is_some() && key_code != KeyCode::Esc {
-        state.error = None;
-    }
-
-    match key_code {
-        // Navigation between fields
-        KeyCode::Tab => {
-            if modifiers.contains(KeyModifiers::SHIFT) {
-                state.focus_prev();
-            } else {
-                state.focus_next();
-            }
-        }
-        KeyCode::BackTab => {
-            state.focus_prev();
-        }
-
-        // Cancel / close
-        KeyCode::Esc => {
-            app.show_config_modal = false;
-            app.config_modal_state = None;
-        }
-
-        // Enter - context-dependent
-        KeyCode::Enter => match state.focus {
-            ConfigModalField::SaveButton => {
-                // Don't save if there are validation errors
-                if state.has_validation_errors() {
-                    return;
-                }
-                // Save config to file
-                let new_config = state.to_config();
-                match save_config(&new_config, &app.config_path) {
-                    Ok(()) => {
-                        // Update app config and close modal
-                        app.config = new_config;
-                        // Update mtime so we don't trigger a reload
-                        app.config_mtime = get_file_mtime(&app.config_path);
-                        app.show_config_modal = false;
-                        app.config_modal_state = None;
-                        debug!("Config saved successfully via modal");
-                    }
-                    Err(e) => {
-                        // Show error in modal, don't close
-                        state.error = Some(e);
-                    }
-                }
-            }
-            ConfigModalField::CancelButton => {
-                app.show_config_modal = false;
-                app.config_modal_state = None;
-            }
-            _ => {
-                // Enter in text fields moves to next field
-                state.focus_next();
-            }
-        },
-
-        // Text input handling
-        KeyCode::Char(c) => {
-            if matches!(
-                state.focus,
-                ConfigModalField::ClaudePath
-                    | ConfigModalField::PromptFile
-                    | ConfigModalField::SpecsDirectory
-            ) {
-                state.insert_char(c);
-            }
-        }
-
-        KeyCode::Backspace => {
-            state.delete_char_before();
-        }
-
-        KeyCode::Delete => {
-            state.delete_char_at();
-        }
-
-        // Cursor movement within text fields
-        KeyCode::Left => match state.focus {
-            ConfigModalField::LogLevel => state.log_level_prev(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
-            _ => state.cursor_left(),
-        },
-
-        KeyCode::Right => match state.focus {
-            ConfigModalField::LogLevel => state.log_level_next(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
-            _ => state.cursor_right(),
-        },
-
-        KeyCode::Home => {
-            state.cursor_home();
-        }
-
-        KeyCode::End => {
-            state.cursor_end();
-        }
-
-        // Up/Down for log level dropdown, auto-continue toggle, and button navigation
-        KeyCode::Up => match state.focus {
-            ConfigModalField::LogLevel => state.log_level_prev(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
-            ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
-            _ => {}
-        },
-
-        KeyCode::Down => match state.focus {
-            ConfigModalField::LogLevel => state.log_level_next(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
-            ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
-            _ => {}
-        },
-
-        _ => {}
-    }
-}
-
-/// Handle keyboard input for the specs panel.
-fn handle_specs_panel_input(app: &mut App, key_code: KeyCode) {
-    let Some(state) = &mut app.specs_panel_state else {
-        return;
-    };
-
-    match key_code {
-        KeyCode::Esc => {
-            app.show_specs_panel = false;
-            app.specs_panel_state = None;
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            state.select_prev();
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            state.select_next();
-        }
-        _ => {}
-    }
-}
-
 fn run_app(
     mut terminal: DefaultTerminal,
     session_id: String,
@@ -1861,12 +135,12 @@ fn run_app(
 
     loop {
         // Poll for output from child process
-        app.poll_output();
+        poll_output(&mut app);
 
         // Handle auto-continue if pending
         if app.auto_continue_pending {
             app.auto_continue_pending = false;
-            app.start_command()?;
+            start_command(&mut app)?;
         }
 
         // Poll for current spec (throttled to every 2 seconds)
@@ -1916,7 +190,7 @@ fn run_app(
                     }
                     KeyCode::Char('s') => match app.status {
                         AppStatus::Stopped => {
-                            app.start_command()?;
+                            start_command(&mut app)?;
                         }
                         AppStatus::Running => {
                             app.stop_command();
@@ -1977,605 +251,308 @@ fn run_app(
     }
 }
 
-fn draw_ui(f: &mut Frame, app: &mut App) {
-    // Increment frame counter for animations
-    app.frame_count = app.frame_count.wrapping_add(1);
-
-    // Two-panel layout: output (flexible) + command (fixed height 3)
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),    // Output panel (flexible)
-            Constraint::Length(3), // Command panel (border + 1 content row + border)
-        ])
-        .split(f.area());
-
-    // Update main pane dimensions for scroll calculations
-    app.main_pane_height = chunks[0].height.saturating_sub(2); // Account for borders
-    app.main_pane_width = chunks[0].width;
-
-    // Output panel with session ID as title
-    let mut content: Vec<Line> = app.output_lines.iter().map(Line::raw).collect();
-    if !app.current_line.is_empty() {
-        content.push(Line::raw(&app.current_line));
+/// Start the command.
+fn start_command(app: &mut App) -> Result<()> {
+    if app.status == AppStatus::Running {
+        app.show_already_running_popup = true;
+        return Ok(());
     }
 
-    let mut output_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(app.status.border_type())
-        .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count)))
-        .title(Line::from(format!(" {} ", app.session_id)).left_aligned());
-
-    if let Some(spec) = &app.current_spec {
-        output_block = output_block.title(Line::from(format!(" {} ", spec)).right_aligned());
+    // Check if prompt file exists (using config path)
+    let prompt_path = app.config.prompt_path();
+    if !prompt_path.exists() {
+        app.status = AppStatus::Error;
+        app.add_line(format!("Error: {} not found", prompt_path.display()));
+        return Ok(());
     }
 
-    let output_panel = Paragraph::new(content)
-        .block(output_block)
-        .wrap(Wrap { trim: false })
-        .scroll((app.scroll_offset, 0));
+    // Increment loop counter and log loop_start
+    app.loop_count += 1;
+    info!(loop_number = app.loop_count, "loop_start");
 
-    f.render_widget(output_panel, chunks[0]);
-
-    // Scrollbar - only visible when content exceeds viewport
-    let visual_lines = app.visual_line_count();
-    if visual_lines > app.main_pane_height {
-        let scrollbar = Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"));
-
-        let mut scrollbar_state = ScrollbarState::default()
-            .content_length(visual_lines as usize)
-            .position(app.scroll_offset as usize)
-            .viewport_content_length(app.main_pane_height as usize);
-
-        f.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
+    // Add divider if not first run
+    if !app.output_lines.is_empty() {
+        app.add_line("─".repeat(40));
     }
 
-    // Command panel with keyboard shortcuts (left) and status indicator (right)
-    let shortcuts = match app.status {
-        AppStatus::Error => "[l] Specs  [q] Quit",
-        AppStatus::Stopped => "[s] Start  [c] Config  [l] Specs  [q] Quit",
-        AppStatus::Running => "[s] Stop  [l] Specs  [q] Quit",
-    };
+    // Reset streaming state for new command
+    app.content_blocks.clear();
+    app.current_line.clear();
 
-    // Status indicator: colored dot + text (elapsed time when running)
-    let status_dot = "● ";
-    let status_text = match app.status {
-        AppStatus::Stopped => "IDLE".to_string(),
-        AppStatus::Running => {
-            if let Some(start_time) = app.run_start_time {
-                format_elapsed(start_time.elapsed())
-            } else {
-                "RUNNING".to_string()
-            }
-        }
-        AppStatus::Error => {
-            // Show frozen elapsed time if available, otherwise just ERROR
-            if let Some(start_time) = app.run_start_time {
-                format_elapsed(start_time.elapsed())
-            } else {
-                "ERROR".to_string()
-            }
-        }
-    };
-    let status_color = app.status.pulsing_color(app.frame_count);
-
-    // Calculate spacing to right-align the status indicator
-    // Total width minus borders (2), shortcuts length, status indicator length
-    let inner_width = chunks[1].width.saturating_sub(2) as usize;
-    let status_len = status_dot.len() + status_text.len();
-    let shortcuts_len = shortcuts.len();
-    let spacing = inner_width.saturating_sub(shortcuts_len + status_len);
-
-    let command_line = Line::from(vec![
-        Span::styled(shortcuts, Style::default().fg(Color::DarkGray)),
-        Span::raw(" ".repeat(spacing)),
-        Span::styled(status_dot, Style::default().fg(status_color)),
-        Span::styled(status_text, Style::default().fg(status_color)),
-    ]);
-
-    let command_panel = Paragraph::new(command_line).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(app.status.border_type())
-            .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count))),
+    // Spawn the command using shell to handle the pipe
+    // Use config values for claude path and prompt path
+    // Args are hardcoded - Ralph depends on this specific format for streaming output
+    let claude_path = app.config.claude_path();
+    const CLAUDE_ARGS: &str =
+        "--output-format=stream-json --verbose --print --include-partial-messages";
+    let command = format!(
+        "cat {} | {} {}",
+        prompt_path.display(),
+        claude_path.display(),
+        CLAUDE_ARGS
     );
+    let child = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
 
-    f.render_widget(command_panel, chunks[1]);
+    match child {
+        Ok(mut child) => {
+            // Log command_spawned with PID
+            debug!(pid = child.id(), "command_spawned");
 
-    // Popup dialog if needed
-    if app.show_already_running_popup {
-        let popup_area = centered_rect(40, 5, f.area());
-        f.render_widget(Clear, popup_area);
-        let popup = Paragraph::new("Command already running")
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Notice")
-                    .style(Style::default().fg(Color::Yellow)),
-            )
-            .style(Style::default());
-        f.render_widget(popup, popup_area);
+            let (tx, rx) = mpsc::channel();
+
+            // Read stdout in a background thread
+            if let Some(stdout) = child.stdout.take() {
+                let tx_stdout = tx.clone();
+                thread::spawn(move || {
+                    let reader = BufReader::new(stdout);
+                    for line in reader.lines().map_while(Result::ok) {
+                        if tx_stdout.send(OutputMessage::Line(line)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+
+            // Read stderr in a background thread
+            if let Some(stderr) = child.stderr.take() {
+                let tx_stderr = tx.clone();
+                thread::spawn(move || {
+                    let reader = BufReader::new(stderr);
+                    for line in reader.lines().map_while(Result::ok) {
+                        if tx_stderr
+                            .send(OutputMessage::Line(format!("[stderr] {}", line)))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+            }
+
+            app.child_process = Some(child);
+            app.output_receiver = Some(rx);
+            app.status = AppStatus::Running;
+            app.run_start_time = Some(std::time::Instant::now());
+        }
+        Err(e) => {
+            app.status = AppStatus::Error;
+            app.add_line(format!("Error starting command: {}", e));
+        }
     }
 
-    // Config modal
-    if app.show_config_modal {
-        draw_config_modal(f, app);
-    }
-
-    // Specs panel modal
-    if app.show_specs_panel {
-        draw_specs_panel(f, app);
-    }
+    Ok(())
 }
 
-fn draw_config_modal(f: &mut Frame, app: &App) {
-    let modal_width = 70;
-    // Increased height to accommodate validation error lines
-    let modal_height = 24;
-    let modal_area = centered_rect(modal_width, modal_height, f.area());
+/// Poll for output from the child process.
+fn poll_output(app: &mut App) {
+    // First, collect all pending messages
+    let mut messages = Vec::new();
+    let mut channel_disconnected = false;
 
-    // Clear the area behind the modal
-    f.render_widget(Clear, modal_area);
+    if let Some(rx) = &app.output_receiver {
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => messages.push(msg),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    channel_disconnected = true;
+                    break;
+                }
+            }
+        }
+    }
 
-    // Get form state (fall back to read-only view if no state)
-    let state = app.config_modal_state.as_ref();
+    // Process collected messages
+    for msg in messages {
+        let OutputMessage::Line(line) = msg;
+        process_line(app, &line);
+    }
 
-    // Build the modal content
-    let config_path_display = app.config_path.display().to_string();
-    let log_dir_display = app
-        .log_directory
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "(not configured)".to_string());
+    // Check if the channel disconnected (all senders dropped = readers finished)
+    if channel_disconnected {
+        debug!("channel_disconnected");
 
-    let separator = "─".repeat(modal_width.saturating_sub(4) as usize);
-    let field_width = 40;
-
-    // Helper to render a text input field - returns owned Spans
-    let render_field = |value: &str, focused: bool, cursor_pos: usize| -> Vec<Span<'static>> {
-        let display_value: String = if value.len() > field_width {
-            // Show the portion around the cursor
-            let start = cursor_pos.saturating_sub(field_width / 2);
-            let end = (start + field_width).min(value.len());
-            let start = end.saturating_sub(field_width);
-            value[start..end].to_string()
-        } else {
-            value.to_string()
-        };
-
-        // Calculate cursor position within displayed text
-        let visible_cursor = if value.len() > field_width {
-            let start = cursor_pos.saturating_sub(field_width / 2);
-            let end = (start + field_width).min(value.len());
-            let start = end.saturating_sub(field_width);
-            cursor_pos - start
-        } else {
-            cursor_pos
-        };
-
-        if focused {
-            // Split at cursor for visual indication
-            let char_indices: Vec<_> = display_value.char_indices().collect();
-            let (before, cursor_char, rest) = if visible_cursor < char_indices.len() {
-                let (idx, _) = char_indices[visible_cursor];
-                let before = display_value[..idx].to_string();
-                let cursor_char = display_value[idx..]
-                    .chars()
-                    .next()
-                    .unwrap_or(' ')
-                    .to_string();
-                let rest_start = idx + cursor_char.len();
-                let rest = if rest_start < display_value.len() {
-                    display_value[rest_start..].to_string()
-                } else {
-                    String::new()
-                };
-                (before, cursor_char, rest)
+        // Try to get exit status from child process
+        let (exit_code, exit_status): (Option<i32>, Option<String>) =
+            if let Some(mut child) = app.child_process.take() {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        if let Some(code) = status.code() {
+                            if code != 0 {
+                                warn!(exit_code = code, "process_exit_nonzero");
+                                app.add_line(format!("[Process exited with code {}]", code));
+                            }
+                            (Some(code), Some(format!("exit_code={}", code)))
+                        } else {
+                            // Process was terminated by signal (Unix)
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::process::ExitStatusExt;
+                                if let Some(signal) = status.signal() {
+                                    info!(signal, "process_killed_by_signal");
+                                    (None, Some(format!("signal={}", signal)))
+                                } else {
+                                    (None, Some("unknown".to_string()))
+                                }
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                (None, Some("unknown".to_string()))
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // Still running, put it back (shouldn't happen if channel disconnected)
+                        app.child_process = Some(child);
+                        return;
+                    }
+                    Err(_) => (None, None),
+                }
             } else {
-                (display_value.clone(), " ".to_string(), String::new())
+                (None, None)
             };
 
-            vec![
-                Span::styled(before, Style::default().fg(Color::White)),
-                Span::styled(
-                    cursor_char,
-                    Style::default().fg(Color::Black).bg(Color::White),
-                ),
-                Span::styled(rest, Style::default().fg(Color::White)),
-            ]
-        } else {
-            vec![Span::styled(
-                display_value,
-                Style::default().fg(Color::White),
-            )]
-        }
-    };
-
-    // Helper for label styling
-    let label_style = Style::default().fg(Color::DarkGray);
-    let focused_label_style = Style::default().fg(Color::Cyan);
-
-    // Get values from state or config
-    let (
-        claude_path,
-        prompt_file,
-        specs_dir,
-        log_level,
-        auto_continue,
-        cursor_pos,
-        focus,
-        has_errors,
-    ) = if let Some(s) = state {
-        (
-            s.claude_path.as_str(),
-            s.prompt_file.as_str(),
-            s.specs_dir.as_str(),
-            s.selected_log_level(),
-            s.auto_continue,
-            s.cursor_pos,
-            Some(s.focus),
-            s.has_validation_errors(),
-        )
-    } else {
-        (
-            app.config.claude.path.as_str(),
-            app.config.paths.prompt.as_str(),
-            app.config.paths.specs.as_str(),
-            app.config.logging.level.as_str(),
-            app.config.behavior.auto_continue,
-            0,
-            None,
-            false,
-        )
-    };
-
-    // Helper to get validation error for a field
-    let get_field_error = |field: ConfigModalField| -> Option<&str> {
-        state.and_then(|s| s.validation_errors.get(&field).map(|e| e.as_str()))
-    };
-
-    // Style for validation error messages
-    let error_style = Style::default().fg(Color::Yellow);
-
-    // Build content lines
-    let mut content = vec![
-        Line::from(vec![
-            Span::styled("  Config file: ", label_style),
-            Span::raw(&config_path_display),
-        ]),
-        Line::from(vec![
-            Span::styled("  Log directory: ", label_style),
-            Span::raw(&log_dir_display),
-        ]),
-        Line::from(format!("  {separator}")),
-    ];
-
-    // Claude CLI path field
-    let path_focused = focus == Some(ConfigModalField::ClaudePath);
-    let path_label_style = if path_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let mut path_line = vec![Span::styled("  Claude CLI path: ", path_label_style)];
-    path_line.extend(render_field(claude_path, path_focused, cursor_pos));
-    content.push(Line::from(path_line));
-    // Validation error for Claude CLI path
-    if let Some(error) = get_field_error(ConfigModalField::ClaudePath) {
-        content.push(Line::from(Span::styled(
-            format!("                     \u{26a0} {}", error),
-            error_style,
-        )));
-    }
-
-    // Prompt file field
-    let prompt_focused = focus == Some(ConfigModalField::PromptFile);
-    let prompt_label_style = if prompt_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let mut prompt_line = vec![Span::styled("  Prompt file:     ", prompt_label_style)];
-    prompt_line.extend(render_field(prompt_file, prompt_focused, cursor_pos));
-    content.push(Line::from(prompt_line));
-    // Validation error for Prompt file
-    if let Some(error) = get_field_error(ConfigModalField::PromptFile) {
-        content.push(Line::from(Span::styled(
-            format!("                     \u{26a0} {}", error),
-            error_style,
-        )));
-    }
-
-    // Specs directory field
-    let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
-    let specs_label_style = if specs_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
-    specs_line.extend(render_field(specs_dir, specs_focused, cursor_pos));
-    content.push(Line::from(specs_line));
-    // Validation error for Specs directory
-    if let Some(error) = get_field_error(ConfigModalField::SpecsDirectory) {
-        content.push(Line::from(Span::styled(
-            format!("                     \u{26a0} {}", error),
-            error_style,
-        )));
-    }
-
-    // Log level dropdown
-    let level_focused = focus == Some(ConfigModalField::LogLevel);
-    let level_label_style = if level_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let level_display = if level_focused {
-        format!("< {} >", log_level)
-    } else {
-        log_level.to_string()
-    };
-    let level_value_style = if level_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::White)
-    };
-    content.push(Line::from(vec![
-        Span::styled("  Log level:       ", level_label_style),
-        Span::styled(level_display, level_value_style),
-    ]));
-
-    // Auto-continue toggle
-    let auto_focused = focus == Some(ConfigModalField::AutoContinue);
-    let auto_label_style = if auto_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let auto_value = if auto_continue { "On" } else { "Off" };
-    let auto_display = if auto_focused {
-        format!("< {} >", auto_value)
-    } else {
-        auto_value.to_string()
-    };
-    let auto_value_style = if auto_focused {
-        Style::default().fg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::White)
-    };
-    content.push(Line::from(vec![
-        Span::styled("  Auto-continue:   ", auto_label_style),
-        Span::styled(auto_display, auto_value_style),
-    ]));
-
-    content.push(Line::from(""));
-
-    // Error message if any
-    if let Some(s) = state {
-        if let Some(error) = &s.error {
-            content.push(Line::from(Span::styled(
-                format!("  Error: {}", error),
-                Style::default().fg(Color::Red),
-            )));
-        } else {
-            content.push(Line::from(""));
-        }
-    } else {
-        content.push(Line::from(""));
-    }
-
-    // Buttons
-    let save_focused = focus == Some(ConfigModalField::SaveButton);
-    let cancel_focused = focus == Some(ConfigModalField::CancelButton);
-
-    // Save button is dimmed when there are validation errors
-    let save_style = if has_errors {
-        Style::default().fg(Color::DarkGray)
-    } else if save_focused {
-        Style::default().fg(Color::Black).bg(Color::Cyan)
-    } else {
-        Style::default().fg(Color::Cyan)
-    };
-    let cancel_style = if cancel_focused {
-        Style::default().fg(Color::Black).bg(Color::White)
-    } else {
-        Style::default().fg(Color::White)
-    };
-
-    content.push(Line::from(vec![
-        Span::raw("                    "),
-        Span::styled(" Save ", save_style),
-        Span::raw("    "),
-        Span::styled(" Cancel ", cancel_style),
-    ]));
-
-    content.push(Line::from(""));
-
-    let modal = Paragraph::new(content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Configuration ")
-            .title_alignment(ratatui::layout::Alignment::Center)
-            .style(Style::default().fg(Color::White)),
-    );
-
-    f.render_widget(modal, modal_area);
-}
-
-fn draw_specs_panel(f: &mut Frame, app: &mut App) {
-    let modal_width: u16 = 70;
-    let modal_height: u16 = 24;
-    let modal_area = centered_rect(modal_width, modal_height, f.area());
-
-    // Clear the area behind the modal
-    f.render_widget(Clear, modal_area);
-
-    let Some(state) = &mut app.specs_panel_state else {
-        return;
-    };
-
-    // Calculate inner area (minus borders)
-    let inner_height = modal_height.saturating_sub(2) as usize;
-    let inner_width = modal_width.saturating_sub(2) as usize;
-    let blocked_count = state.blocked_count();
-
-    // Reserve space for warning banner if there are blocked specs
-    let banner_height = if blocked_count > 0 { 3 } else { 0 };
-
-    // Split layout: list (~40%), separator (1), preview (~60%)
-    let list_area_height = ((inner_height - banner_height) * 40 / 100).max(3);
-    let separator_height = 1;
-    let preview_area_height =
-        inner_height.saturating_sub(banner_height + list_area_height + separator_height);
-
-    // Ensure selected item is visible
-    state.ensure_visible(list_area_height);
-
-    let mut content: Vec<Line> = Vec::new();
-
-    // Warning banner for blocked specs
-    if blocked_count > 0 {
-        let banner_width = inner_width;
-        let banner_fill = "\u{2588}".repeat(banner_width);
-        let warning_text = format!(
-            "\u{2588}\u{2588}  \u{26a0} {} BLOCKED SPEC{} - ACTION REQUIRED",
-            blocked_count,
-            if blocked_count == 1 { "" } else { "S" }
+        // Log loop_end with exit status
+        let status_str = exit_status.unwrap_or_else(|| "unknown".to_string());
+        info!(
+            loop_number = app.loop_count,
+            exit_status = %status_str,
+            "loop_end"
         );
-        let padding = banner_width.saturating_sub(warning_text.chars().count());
-        let padded_warning = format!("{}{}", warning_text, " ".repeat(padding.saturating_sub(2)));
-        let padded_warning = format!("{}\u{2588}\u{2588}", padded_warning);
 
-        content.push(Line::from(Span::styled(
-            banner_fill.clone(),
-            Style::default().fg(Color::White).bg(Color::Red),
-        )));
-        content.push(Line::from(Span::styled(
-            padded_warning,
-            Style::default().fg(Color::Yellow).bg(Color::Red),
-        )));
-        content.push(Line::from(Span::styled(
-            banner_fill,
-            Style::default().fg(Color::White).bg(Color::Red),
-        )));
+        app.handle_channel_disconnected(exit_code);
     }
-
-    // Handle error case
-    if let Some(error) = &state.error {
-        content.push(Line::from(""));
-        content.push(Line::from(Span::styled(
-            format!("  Error: {}", error),
-            Style::default().fg(Color::Red),
-        )));
-    } else if state.specs.is_empty() {
-        content.push(Line::from(""));
-        content.push(Line::from(Span::styled(
-            "  No specs found",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        // Render visible specs
-        let visible_start = state.scroll_offset;
-        let visible_end = (state.scroll_offset + list_area_height).min(state.specs.len());
-
-        for spec_idx in visible_start..visible_end {
-            let spec = &state.specs[spec_idx];
-            let is_selected = spec_idx == state.selected;
-
-            // Build the line: "  [Status] spec-name"
-            let status_label = format!("[{}]", spec.status.label());
-            let status_width = 14; // Fixed width for alignment
-            let padded_status = format!("{:width$}", status_label, width = status_width);
-
-            let line_style = if is_selected {
-                Style::default().fg(Color::Black).bg(Color::White)
-            } else {
-                Style::default()
-            };
-
-            let status_style = if is_selected {
-                Style::default().fg(Color::Black).bg(Color::White)
-            } else {
-                Style::default().fg(spec.status.color())
-            };
-
-            let name_style = if is_selected {
-                Style::default().fg(Color::Black).bg(Color::White)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            // Calculate padding needed for full-width selection highlight
-            let line_content = format!("  {}{}", padded_status, spec.name);
-            let padding = inner_width.saturating_sub(line_content.len());
-
-            content.push(Line::from(vec![
-                Span::styled("  ", line_style),
-                Span::styled(padded_status, status_style),
-                Span::styled(&spec.name, name_style),
-                Span::styled(" ".repeat(padding), line_style),
-            ]));
-        }
-
-        // Fill remaining list space if list is shorter than allocated height
-        let rendered_lines = visible_end - visible_start;
-        for _ in rendered_lines..list_area_height {
-            content.push(Line::from(""));
-        }
-
-        // Horizontal separator between list and preview
-        let separator = "\u{2500}".repeat(inner_width);
-        content.push(Line::from(Span::styled(
-            separator,
-            Style::default().fg(Color::DarkGray),
-        )));
-
-        // Preview pane
-        match state.read_selected_spec_head(preview_area_height) {
-            Ok(lines) => {
-                for line in lines.iter().take(preview_area_height) {
-                    // Truncate long lines to fit width
-                    let display_line: String = line.chars().take(inner_width).collect();
-                    content.push(Line::from(Span::styled(
-                        display_line,
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-                // Fill remaining preview space
-                for _ in lines.len()..preview_area_height {
-                    content.push(Line::from(""));
-                }
-            }
-            Err(error) => {
-                content.push(Line::from(Span::styled(
-                    format!("  {}", error),
-                    Style::default().fg(Color::Yellow),
-                )));
-                // Fill remaining preview space
-                for _ in 1..preview_area_height {
-                    content.push(Line::from(""));
-                }
-            }
-        }
-    }
-
-    let modal = Paragraph::new(content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Specs ")
-            .title_alignment(ratatui::layout::Alignment::Center)
-            .style(Style::default().fg(Color::White)),
-    );
-
-    f.render_widget(modal, modal_area);
 }
 
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width.min(area.width), height.min(area.height))
+/// Parse and process a single NDJSON line.
+fn process_line(app: &mut App, line: &str) {
+    // Skip empty lines
+    if line.trim().is_empty() {
+        return;
+    }
+
+    // Log raw JSON at TRACE level for protocol debugging
+    trace!(json = line, "raw_json_line");
+
+    // Handle stderr lines (pass through as-is)
+    if line.starts_with("[stderr]") {
+        app.add_line(line.to_string());
+        return;
+    }
+
+    // Try to parse as JSON
+    match serde_json::from_str::<ClaudeEvent>(line) {
+        Ok(event) => process_event(app, event),
+        Err(e) => {
+            // Check if this is an unknown event type by trying to parse as generic JSON
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(event_type) = json.get("type").and_then(|v| v.as_str()) {
+                    warn!(event_type, "Unknown event type, skipping");
+                } else {
+                    warn!(?e, "Failed to parse JSON line (no type field)");
+                }
+            } else {
+                warn!(?e, "Malformed JSON line, skipping");
+            }
+        }
+    }
+}
+
+/// Process a parsed Claude event.
+fn process_event(app: &mut App, event: ClaudeEvent) {
+    match event {
+        ClaudeEvent::Ping => {
+            // Silently ignore ping events
+            debug!("Received ping");
+        }
+        ClaudeEvent::System(sys) => {
+            debug!(?sys, "System event");
+        }
+        ClaudeEvent::Assistant(asst) => {
+            debug!(?asst, "Assistant event");
+        }
+        ClaudeEvent::User(_) => {
+            // Skip user events (tool results, etc.)
+            debug!("User event (skipped)");
+        }
+        ClaudeEvent::StreamEvent { event: inner } => {
+            // Unwrap and process the inner streaming event
+            process_stream_event(app, inner);
+        }
+        ClaudeEvent::Result(result) => {
+            debug!(?result, "Result event");
+            // Display usage summary
+            let summary = format_usage_summary(&result);
+            for line in summary.lines() {
+                app.add_line(line.to_string());
+            }
+        }
+    }
+}
+
+/// Process inner streaming events (unwrapped from stream_event).
+fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
+    match event {
+        StreamInnerEvent::MessageStart(msg) => {
+            debug!(?msg, "Message start");
+            // Clear content blocks for new message
+            app.content_blocks.clear();
+        }
+        StreamInnerEvent::ContentBlockStart(block_start) => {
+            let index = block_start.index;
+            let mut state = ContentBlockState::default();
+
+            match block_start.content_block {
+                ContentBlock::Text { text } => {
+                    state.text = text;
+                }
+                ContentBlock::ToolUse { name, .. } => {
+                    state.tool_name = Some(name);
+                }
+            }
+
+            app.content_blocks.insert(index, state);
+            debug!(index, "Content block started");
+        }
+        StreamInnerEvent::ContentBlockDelta(delta_event) => {
+            let index = delta_event.index;
+            let state = app.content_blocks.entry(index).or_default();
+
+            match delta_event.delta {
+                Delta::TextDelta { text } => {
+                    state.text.push_str(&text);
+                    // Display text immediately as it streams
+                    app.append_text(&text);
+                }
+                Delta::InputJsonDelta { partial_json } => {
+                    state.input_json.push_str(&partial_json);
+                }
+            }
+        }
+        StreamInnerEvent::ContentBlockStop(stop) => {
+            debug!(index = stop.index, "Content block stopped");
+            // Always flush any pending text first to maintain order
+            app.flush_current_line();
+            // Then process tool_use blocks
+            if let Some(state) = app.content_blocks.get(&stop.index)
+                && let Some(tool_name) = &state.tool_name
+            {
+                let summary = format_tool_summary(tool_name, &state.input_json);
+                app.add_line(summary);
+            }
+        }
+        StreamInnerEvent::MessageDelta(delta) => {
+            debug!(?delta, "Message delta");
+        }
+        StreamInnerEvent::MessageStop => {
+            debug!("Message stopped");
+            // Flush any remaining text
+            app.flush_current_line();
+        }
+    }
 }
