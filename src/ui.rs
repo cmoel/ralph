@@ -42,17 +42,6 @@ pub fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Contract a path by replacing the home directory with `~` for display.
-#[allow(dead_code)] // Will be used in later UI slices
-pub fn contract_path(path: &std::path::Path) -> String {
-    if let Some(home) = dirs::home_dir()
-        && let Ok(suffix) = path.strip_prefix(&home)
-    {
-        return format!("~/{}", suffix.display());
-    }
-    path.display().to_string()
-}
-
 /// Formats a tool invocation for display.
 ///
 /// Returns a formatted string like `[Tool: Bash] git status` for known tools,

@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use tracing::{debug, info, warn};
 
 use crate::config::reload_config;
-use crate::config::{Config, ConfigLoadStatus, LoadedConfig};
+use crate::config::{Config, LoadedConfig};
 use crate::logging::ReloadHandle;
 use crate::modals::{ConfigModalState, SpecsPanelState};
 use crate::specs::{SpecsRemaining, check_specs_remaining, detect_current_spec};
@@ -28,15 +28,6 @@ pub enum AppStatus {
 }
 
 impl AppStatus {
-    #[allow(dead_code)] // May be used in later UI slices
-    pub fn label(&self) -> &'static str {
-        match self {
-            AppStatus::Stopped => "IDLE",
-            AppStatus::Running => "RUNNING",
-            AppStatus::Error => "ERROR",
-        }
-    }
-
     pub fn border_type(&self) -> BorderType {
         match self {
             AppStatus::Stopped => BorderType::Rounded,
@@ -93,18 +84,11 @@ pub struct App {
     /// Loop counter for logging, incremented each time start_command() is called.
     pub loop_count: u64,
     /// Directory where logs are written.
-    #[allow(dead_code)] // Will be used in later UI slices
     pub log_directory: Option<PathBuf>,
-    /// Error that occurred during logging initialization.
-    #[allow(dead_code)] // Will be used in later UI slices
-    pub logging_error: Option<String>,
     /// Loaded configuration.
     pub config: Config,
     /// Path to the configuration file.
     pub config_path: PathBuf,
-    /// Status of config loading.
-    #[allow(dead_code)] // Will be used in later UI slices
-    pub config_load_status: ConfigLoadStatus,
     /// Last known mtime of the config file for change detection.
     pub config_mtime: Option<SystemTime>,
     /// Last time we polled for config changes.
@@ -139,7 +123,6 @@ impl App {
     pub fn new(
         session_id: String,
         log_directory: Option<PathBuf>,
-        logging_error: Option<String>,
         loaded_config: LoadedConfig,
         log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     ) -> Self {
@@ -160,10 +143,8 @@ impl App {
             session_id,
             loop_count: 0,
             log_directory,
-            logging_error,
             config: loaded_config.config,
             config_path: loaded_config.config_path.clone(),
-            config_load_status: loaded_config.status,
             config_mtime: get_file_mtime(&loaded_config.config_path),
             // Initialize to "long ago" so we poll immediately on start
             last_config_poll: Instant::now() - Duration::from_secs(10),

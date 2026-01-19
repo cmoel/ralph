@@ -61,21 +61,20 @@ fn main() -> Result<()> {
     let loaded_config = config::load_config();
 
     // Initialize logging with config log level
-    let (log_directory, logging_error, _guard, reload_handle) =
+    let (log_directory, _guard, reload_handle) =
         match logging::init(session_id.clone(), &loaded_config.config.logging.level) {
             Ok(ctx) => {
                 // Clean up old log files after logging is initialized
                 logging::cleanup_old_logs(&ctx.log_directory);
                 (
                     Some(ctx.log_directory),
-                    None,
                     Some(ctx._guard),
                     Some(ctx.reload_handle),
                 )
             }
             Err(e) => {
                 eprintln!("Warning: Failed to initialize logging: {}", e);
-                (None, Some(e.message), None, None)
+                (None, None, None)
             }
         };
 
@@ -97,7 +96,6 @@ fn main() -> Result<()> {
         terminal,
         session_id.clone(),
         log_directory,
-        logging_error,
         loaded_config,
         reload_handle,
     );
@@ -121,17 +119,10 @@ fn run_app(
     mut terminal: DefaultTerminal,
     session_id: String,
     log_directory: Option<PathBuf>,
-    logging_error: Option<String>,
     loaded_config: LoadedConfig,
     log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
 ) -> Result<()> {
-    let mut app = App::new(
-        session_id,
-        log_directory,
-        logging_error,
-        loaded_config,
-        log_level_handle,
-    );
+    let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
 
     loop {
         // Poll for output from child process

@@ -14,9 +14,9 @@ These have `#[allow(dead_code)]` but are actually used:
 
 ### Acceptance Criteria
 
-- [ ] Remove `#[allow(dead_code)]` from `ConfigLoadStatus::Error`
-- [ ] Remove `#[allow(dead_code)]` and outdated comment from `specs_path()`
-- [ ] Remove `#[allow(dead_code)]` from `log_directory`
+- [x] Remove `#[allow(dead_code)]` from `ConfigLoadStatus::Error` (kept with clearer comment - inner String is only used via Debug)
+- [x] Remove `#[allow(dead_code)]` and outdated comment from `specs_path()`
+- [x] Remove `#[allow(dead_code)]` from `log_directory`
 
 ## Delete Dead Code
 
@@ -31,12 +31,12 @@ These are truly dead — defined but never used:
 
 ### Acceptance Criteria
 
-- [ ] Delete `contract_path()` function from ui.rs
-- [ ] Delete `AppStatus::label()` method from app.rs
-- [ ] Delete `logging_error` field from App struct and all usages
-- [ ] Delete `config_load_status` field from App struct and all usages
-- [ ] `devbox run test` passes
-- [ ] `devbox run check` passes (no new warnings)
+- [x] Delete `contract_path()` function from ui.rs
+- [x] Delete `AppStatus::label()` method from app.rs
+- [x] Delete `logging_error` field from App struct and all usages
+- [x] Delete `config_load_status` field from App struct and all usages
+- [x] `devbox run test` passes
+- [x] `devbox run check` passes (no new warnings)
 
 ## Keep As-Is
 

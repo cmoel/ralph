@@ -13,8 +13,9 @@ pub enum ConfigLoadStatus {
     Loaded,
     /// Created default config file (first run)
     Created,
-    /// Error occurred during loading, using defaults
-    #[allow(dead_code)] // Will be used in later UI slices
+    /// Error occurred during loading, using defaults.
+    /// String is used in Debug output for logging.
+    #[allow(dead_code)]
     Error(String),
 }
 
@@ -121,7 +122,6 @@ impl Config {
     }
 
     /// Get the expanded specs directory path
-    #[allow(dead_code)] // Used by future current-spec-detection spec
     pub fn specs_path(&self) -> PathBuf {
         Self::expand_tilde(&self.paths.specs)
     }
