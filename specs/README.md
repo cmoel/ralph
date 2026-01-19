@@ -24,6 +24,8 @@ Single source of truth for specification status.
 | [remove-cli-args-field](remove-cli-args-field.md) | Done | Remove non-configurable CLI args field from config modal | config-modal |
 | [auto-continue](auto-continue.md) | Done | Auto-continue claude until all specs complete | configuration |
 | [specs-panel](specs-panel.md) | Done | Browse all specs with blocked specs highlighted | — |
+| [release-process](release-process.md) | Ready | GitHub Actions release workflow with pre-built binaries | — |
+| [project-readme](project-readme.md) | Ready | Root README.md with install, config, and contributing docs | release-process |
 
 ## Notes
 
