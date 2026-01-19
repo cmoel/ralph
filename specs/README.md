@@ -26,7 +26,8 @@ Single source of truth for specification status.
 | [specs-panel](specs-panel.md) | Done | Browse all specs with blocked specs highlighted | — |
 | [config-modal-auto-continue](config-modal-auto-continue.md) | Done | Add auto-continue toggle to config modal | config-modal |
 | [code-organization](code-organization.md) | Done | Split main.rs into logical files for readability | — |
-| [release-process](release-process.md) | Ready | GitHub Actions release workflow with pre-built binaries | config-modal-auto-continue |
+| [testing](testing.md) | Ready | Unit tests for pure logic, refactor to separate I/O | code-organization |
+| [release-process](release-process.md) | Ready | GitHub Actions release workflow with pre-built binaries | testing |
 | [project-readme](project-readme.md) | Ready | Root README.md with install, config, and contributing docs | release-process |
 
 ## Notes
