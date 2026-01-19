@@ -137,7 +137,7 @@ pub struct LoadedConfig {
 
 /// Get the platform-appropriate config directory
 fn get_config_dir() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "cmoel", "ralph").map(|dirs| dirs.config_dir().to_path_buf())
+    ProjectDirs::from("com", "cmoel", "ralph").map(|dirs| dirs.config_dir().to_path_buf())
 }
 
 /// Get the full path to the config file
