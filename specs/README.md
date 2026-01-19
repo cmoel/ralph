@@ -30,6 +30,7 @@ Single source of truth for specification status.
 | [testing](testing.md) | Done | Unit tests for pure logic, refactor to separate I/O | code-organization |
 | [release-process](release-process.md) | Ready | GitHub Actions release workflow with pre-built binaries | testing |
 | [project-readme](project-readme.md) | Ready | Root README.md with install, config, and contributing docs | release-process |
+| [iteration-control](iteration-control.md) | Ready | Configurable iteration count replacing boolean auto-continue | auto-continue, config-modal-auto-continue |
 
 ## Notes
 
