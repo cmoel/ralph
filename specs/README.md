@@ -27,7 +27,7 @@ Single source of truth for specification status.
 | [config-modal-auto-continue](config-modal-auto-continue.md) | Done | Add auto-continue toggle to config modal | config-modal |
 | [code-organization](code-organization.md) | Done | Split main.rs into logical files for readability | — |
 | [dead-code-cleanup](dead-code-cleanup.md) | Ready | Remove dead code and unnecessary allow annotations | — |
-| [testing](testing.md) | In Progress | Unit tests for pure logic, refactor to separate I/O | code-organization |
+| [testing](testing.md) | Done | Unit tests for pure logic, refactor to separate I/O | code-organization |
 | [release-process](release-process.md) | Ready | GitHub Actions release workflow with pre-built binaries | testing |
 | [project-readme](project-readme.md) | Ready | Root README.md with install, config, and contributing docs | release-process |
 

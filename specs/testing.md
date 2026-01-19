@@ -117,9 +117,9 @@ pub fn validate_executable_path(path: &str) -> Option<String> {
 
 ### Acceptance Criteria
 
-- [ ] Validation logic extracted from I/O for all three validators
-- [ ] Tests for validation logic (using constructed metadata or trait abstraction)
-- [ ] `devbox run test` and `devbox run check` pass
+- [x] Validation logic extracted from I/O for all three validators
+- [x] Tests for validation logic (using constructed metadata or trait abstraction)
+- [x] `devbox run test` and `devbox run check` pass
 
 ## Out of Scope
 
