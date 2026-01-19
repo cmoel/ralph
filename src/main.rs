@@ -369,6 +369,7 @@ enum ConfigModalField {
     PromptFile,
     SpecsDirectory,
     LogLevel,
+    AutoContinue,
     SaveButton,
     CancelButton,
 }
@@ -379,7 +380,8 @@ impl ConfigModalField {
             Self::ClaudePath => Self::PromptFile,
             Self::PromptFile => Self::SpecsDirectory,
             Self::SpecsDirectory => Self::LogLevel,
-            Self::LogLevel => Self::SaveButton,
+            Self::LogLevel => Self::AutoContinue,
+            Self::AutoContinue => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
         }
@@ -391,7 +393,8 @@ impl ConfigModalField {
             Self::PromptFile => Self::ClaudePath,
             Self::SpecsDirectory => Self::PromptFile,
             Self::LogLevel => Self::SpecsDirectory,
-            Self::SaveButton => Self::LogLevel,
+            Self::AutoContinue => Self::LogLevel,
+            Self::SaveButton => Self::AutoContinue,
             Self::CancelButton => Self::SaveButton,
         }
     }
@@ -410,6 +413,8 @@ struct ConfigModalState {
     specs_dir: String,
     /// Currently selected log level index in LOG_LEVELS.
     log_level_index: usize,
+    /// Auto-continue enabled.
+    auto_continue: bool,
     /// Cursor position within the focused text field.
     cursor_pos: usize,
     /// Error message to display (e.g., save failed).
@@ -432,6 +437,7 @@ impl ConfigModalState {
             prompt_file: config.paths.prompt.clone(),
             specs_dir: config.paths.specs.clone(),
             log_level_index,
+            auto_continue: config.behavior.auto_continue,
             cursor_pos: config.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -616,6 +622,11 @@ impl ConfigModalState {
         LOG_LEVELS[self.log_level_index]
     }
 
+    /// Toggle auto-continue setting.
+    fn toggle_auto_continue(&mut self) {
+        self.auto_continue = !self.auto_continue;
+    }
+
     /// Check if there are any validation errors.
     fn has_validation_errors(&self) -> bool {
         !self.validation_errors.is_empty()
@@ -657,8 +668,9 @@ impl ConfigModalState {
             logging: crate::config::LoggingConfig {
                 level: self.selected_log_level().to_string(),
             },
-            // Use default behavior config - modal doesn't edit this
-            behavior: crate::config::BehaviorConfig::default(),
+            behavior: crate::config::BehaviorConfig {
+                auto_continue: self.auto_continue,
+            },
         }
     }
 }
@@ -1771,21 +1783,17 @@ fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyMod
         }
 
         // Cursor movement within text fields
-        KeyCode::Left => {
-            if matches!(state.focus, ConfigModalField::LogLevel) {
-                state.log_level_prev();
-            } else {
-                state.cursor_left();
-            }
-        }
+        KeyCode::Left => match state.focus {
+            ConfigModalField::LogLevel => state.log_level_prev(),
+            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
+            _ => state.cursor_left(),
+        },
 
-        KeyCode::Right => {
-            if matches!(state.focus, ConfigModalField::LogLevel) {
-                state.log_level_next();
-            } else {
-                state.cursor_right();
-            }
-        }
+        KeyCode::Right => match state.focus {
+            ConfigModalField::LogLevel => state.log_level_next(),
+            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
+            _ => state.cursor_right(),
+        },
 
         KeyCode::Home => {
             state.cursor_home();
@@ -1795,15 +1803,17 @@ fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyMod
             state.cursor_end();
         }
 
-        // Up/Down for log level dropdown and button navigation
+        // Up/Down for log level dropdown, auto-continue toggle, and button navigation
         KeyCode::Up => match state.focus {
             ConfigModalField::LogLevel => state.log_level_prev(),
+            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
         },
 
         KeyCode::Down => match state.focus {
             ConfigModalField::LogLevel => state.log_level_next(),
+            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
         },
@@ -2189,28 +2199,38 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     let focused_label_style = Style::default().fg(Color::Cyan);
 
     // Get values from state or config
-    let (claude_path, prompt_file, specs_dir, log_level, cursor_pos, focus, has_errors) =
-        if let Some(s) = state {
-            (
-                s.claude_path.as_str(),
-                s.prompt_file.as_str(),
-                s.specs_dir.as_str(),
-                s.selected_log_level(),
-                s.cursor_pos,
-                Some(s.focus),
-                s.has_validation_errors(),
-            )
-        } else {
-            (
-                app.config.claude.path.as_str(),
-                app.config.paths.prompt.as_str(),
-                app.config.paths.specs.as_str(),
-                app.config.logging.level.as_str(),
-                0,
-                None,
-                false,
-            )
-        };
+    let (
+        claude_path,
+        prompt_file,
+        specs_dir,
+        log_level,
+        auto_continue,
+        cursor_pos,
+        focus,
+        has_errors,
+    ) = if let Some(s) = state {
+        (
+            s.claude_path.as_str(),
+            s.prompt_file.as_str(),
+            s.specs_dir.as_str(),
+            s.selected_log_level(),
+            s.auto_continue,
+            s.cursor_pos,
+            Some(s.focus),
+            s.has_validation_errors(),
+        )
+    } else {
+        (
+            app.config.claude.path.as_str(),
+            app.config.paths.prompt.as_str(),
+            app.config.paths.specs.as_str(),
+            app.config.logging.level.as_str(),
+            app.config.behavior.auto_continue,
+            0,
+            None,
+            false,
+        )
+    };
 
     // Helper to get validation error for a field
     let get_field_error = |field: ConfigModalField| -> Option<&str> {
@@ -2307,6 +2327,29 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     content.push(Line::from(vec![
         Span::styled("  Log level:       ", level_label_style),
         Span::styled(level_display, level_value_style),
+    ]));
+
+    // Auto-continue toggle
+    let auto_focused = focus == Some(ConfigModalField::AutoContinue);
+    let auto_label_style = if auto_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let auto_value = if auto_continue { "On" } else { "Off" };
+    let auto_display = if auto_focused {
+        format!("< {} >", auto_value)
+    } else {
+        auto_value.to_string()
+    };
+    let auto_value_style = if auto_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    content.push(Line::from(vec![
+        Span::styled("  Auto-continue:   ", auto_label_style),
+        Span::styled(auto_display, auto_value_style),
     ]));
 
     content.push(Line::from(""));

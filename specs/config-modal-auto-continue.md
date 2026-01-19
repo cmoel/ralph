@@ -36,13 +36,13 @@ The config modal includes a toggle for auto-continue, displayed alongside the ot
 
 ## Acceptance Criteria
 
-- [ ] Auto-continue field appears in config modal after Log level
-- [ ] Field uses same `< value >` cycling style as Log level (left/right arrows)
-- [ ] Options are `On` and `Off`
-- [ ] Field displays current value from `config.behavior.auto_continue`
-- [ ] Tab/Shift+Tab includes auto-continue field in navigation order
-- [ ] Save persists the auto-continue setting to config file
-- [ ] No validation needed (boolean field, always valid)
+- [x] Auto-continue field appears in config modal after Log level
+- [x] Field uses same `< value >` cycling style as Log level (left/right arrows)
+- [x] Options are `On` and `Off`
+- [x] Field displays current value from `config.behavior.auto_continue`
+- [x] Tab/Shift+Tab includes auto-continue field in navigation order
+- [x] Save persists the auto-continue setting to config file
+- [x] No validation needed (boolean field, always valid)
 
 ## Technical Constraints
 
