@@ -1,18 +1,75 @@
-# ralph
+# Ralph
 
-TUI wrapper for `claude` CLI that displays formatted streaming output.
+A TUI for running [Ralph loops](https://ghuntley.com/ralph/).
 
-![Demo](assets/demo.gif)
+## Prerequisites
+
+- [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+
+## Quick Start
+
+```bash
+ralph
+```
+
+Run from a directory containing your `PROMPT.md` and `specs/` folder. Press `s` to start, `q` to quit.
+
+## How It Works
+
+Ralph runs Claude Code in a loop, feeding it your prompt and specs until all specs are complete.
+
+**You provide:**
+
+1. `PROMPT.md` — Instructions for Claude (what to build, constraints, workflow)
+2. `specs/*.md` — Individual feature specifications
+3. `specs/README.md` — Index of all specs with status (Ready, In Progress, Done, Blocked)
+
+**Ralph handles:**
+
+- Spawning Claude with your prompt
+- Streaming and formatting output
+- Tracking iterations and token usage
+- Auto-continuing until specs are complete (configurable)
+- Keeping your system awake during long runs
+
+Press `c` to open the config panel and customize behavior.
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `s` | Start/Stop |
+| `q` | Quit |
+| `c` | Open config panel |
+| `l` | Open specs panel |
+| `Tab` | Switch panel (Output/Tasks) |
+| `t` | Toggle tasks panel collapsed |
+| `j` / `↓` | Scroll down |
+| `k` / `↑` | Scroll up |
+| `Ctrl+d` | Scroll down half page |
+| `Ctrl+u` | Scroll up half page |
+| `Ctrl+f` | Scroll down full page |
+| `Ctrl+b` | Scroll up full page |
+
+## Environment Variables
+
+Override config values for scripting and CI:
+
+| Variable | Description |
+|----------|-------------|
+| `RALPH_CLAUDE_PATH` | Path to Claude CLI |
+| `RALPH_PROMPT_PATH` | Path to prompt file |
+| `RALPH_SPECS_DIR` | Path to specs directory |
+| `RALPH_LOG` | Log level (debug, info, warn, error) |
 
 ## Installation
 
 ### Pre-built Binaries
 
-Download the latest release for your platform from the [GitHub Releases page](https://github.com/cmoel/ralph/releases).
+Download from [GitHub Releases](https://github.com/cmoel/ralph/releases):
 
-Available platforms:
 - macOS (Intel and Apple Silicon)
-- Linux (x86_64 and ARM64, musl)
+- Linux (x86_64 and ARM64)
 - Windows (x86_64 and ARM64)
 
 ### Build from Source
@@ -23,74 +80,7 @@ cd ralph
 cargo build --release
 ```
 
-The binary will be at `target/release/ralph`.
-
-## Usage
-
-Run ralph from a directory containing:
-- `PROMPT.md` — The prompt file to pass to claude
-- `specs/` — A directory containing your specification files
-
-```bash
-ralph
-```
-
-Ralph spawns the `claude` CLI, streams its JSON output, and renders it as formatted text with tool use summaries and token usage.
-
-### Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `q` | Quit |
-| `s` | Start/Stop |
-| `l` | Open specs panel |
-| `c` | Open config modal |
-| `j/↓` | Scroll down |
-| `k/↑` | Scroll up |
-| `Ctrl+d` | Scroll down half page |
-| `Ctrl+u` | Scroll up half page |
-| `Ctrl+f` | Scroll down full page |
-| `Ctrl+b` | Scroll up full page |
-
-## Configuration
-
-Ralph uses a TOML configuration file. On first run, a default config is created.
-
-### Config File Location
-
-| Platform | Path |
-|----------|------|
-| Linux | `~/.config/ralph/config.toml` |
-| macOS | `~/Library/Application Support/ralph/config.toml` |
-| Windows | `%APPDATA%\cmoel\ralph\config.toml` |
-
-### Options
-
-```toml
-[claude]
-path = "~/.claude/local/claude"  # Path to claude CLI
-
-[paths]
-prompt = "./PROMPT.md"  # Prompt file path
-specs = "./specs"       # Specs directory path
-
-[logging]
-level = "info"  # Log level: debug, info, warn, error
-
-[behavior]
-iterations = -1  # -1 = infinite, 0 = stopped, N = run N times
-```
-
-### Environment Variables
-
-Environment variables override config file values:
-
-| Variable | Overrides |
-|----------|-----------|
-| `RALPH_CLAUDE_PATH` | `claude.path` |
-| `RALPH_PROMPT_PATH` | `paths.prompt` |
-| `RALPH_SPECS_DIR` | `paths.specs` |
-| `RALPH_LOG` | `logging.level` |
+Binary: `target/release/ralph`
 
 ## Contributing
 
@@ -99,11 +89,9 @@ Ralph uses [devbox](https://www.jetify.com/devbox) for development.
 ```bash
 devbox run build    # Compile
 devbox run test     # Run tests
-devbox run check    # Run clippy (must pass before commit)
+devbox run check    # Run clippy
 devbox run fmt      # Format code
 ```
-
-See the [specs/](specs/) directory for feature specifications and project roadmap.
 
 ## License
 
