@@ -29,7 +29,7 @@ Single source of truth for specification status.
 | [dead-code-cleanup](dead-code-cleanup.md) | Done | Remove dead code and unnecessary allow annotations | — |
 | [testing](testing.md) | Done | Unit tests for pure logic, refactor to separate I/O | code-organization |
 | [release-process](release-process.md) | Done | GitHub Actions release workflow with pre-built binaries | testing |
-| [project-readme](project-readme.md) | Ready | Root README.md with install, config, and contributing docs | release-process |
+| [project-readme](project-readme.md) | In Progress | Root README.md with install, config, and contributing docs | release-process |
 | [iteration-control](iteration-control.md) | Done | Configurable iteration count replacing boolean auto-continue | auto-continue, config-modal-auto-continue |
 | [output-panel-enhancements](output-panel-enhancements.md) | Done | Todo display, cumulative tokens, per-exchange tokens | formatted-output-display, status-panel |
 
