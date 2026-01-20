@@ -81,14 +81,27 @@ pub struct ContentBlockState {
     pub text: String,
     /// For tool_use blocks: the tool name.
     pub tool_name: Option<String>,
+    /// For tool_use blocks: the tool use ID (for correlating with results).
+    pub tool_use_id: Option<String>,
     /// For tool_use blocks: accumulated JSON input string.
     pub input_json: String,
+    /// Whether we've shown the assistant header for this text block.
+    pub header_shown: bool,
+}
+
+/// A pending tool call waiting for its result.
+#[derive(Debug, Clone)]
+pub struct PendingToolCall {
+    /// The tool name (e.g., "Read", "Bash").
+    pub tool_name: String,
+    /// The styled line to display.
+    pub styled_line: Line<'static>,
 }
 
 /// Main application state.
 pub struct App {
     pub status: AppStatus,
-    pub output_lines: Vec<String>,
+    pub output_lines: Vec<Line<'static>>,
     pub scroll_offset: u16,
     pub is_auto_following: bool,
     pub show_already_running_popup: bool,
@@ -164,6 +177,12 @@ pub struct App {
     pub tasks_panel_collapsed: bool,
     /// Wake lock to prevent system idle sleep while running.
     pub wake_lock: Option<WakeLock>,
+    /// Maps tool_use_id to tool name for correlating results with calls.
+    pub tool_id_to_name: HashMap<String, String>,
+    /// Pending tool calls waiting for their results (keyed by tool_use_id).
+    pub pending_tool_calls: HashMap<String, PendingToolCall>,
+    /// Whether we're currently in an indented text block (for flush).
+    pub in_indented_text: bool,
 }
 
 impl App {
@@ -219,6 +238,9 @@ impl App {
             selected_panel: SelectedPanel::default(),
             tasks_panel_collapsed: false,
             wake_lock: None,
+            tool_id_to_name: HashMap::new(),
+            pending_tool_calls: HashMap::new(),
+            in_indented_text: false,
         }
     }
 
@@ -227,7 +249,7 @@ impl App {
             return 0;
         }
         // Include both completed lines and the current partial line
-        let mut content: Vec<Line> = self.output_lines.iter().map(Line::raw).collect();
+        let mut content: Vec<Line> = self.output_lines.to_vec();
         if !self.current_line.is_empty() {
             content.push(Line::raw(&self.current_line));
         }
@@ -262,20 +284,28 @@ impl App {
         self.is_auto_following = true;
     }
 
-    pub fn add_line(&mut self, line: String) {
+    /// Adds a styled line to the output.
+    pub fn add_line(&mut self, line: Line<'static>) {
         self.output_lines.push(line);
         if self.is_auto_following {
             self.scroll_to_bottom();
         }
     }
 
-    /// Appends text to the current line, flushing complete lines to output.
-    pub fn append_text(&mut self, text: &str) {
+    /// Adds a plain text line to the output (convenience method).
+    pub fn add_text_line(&mut self, text: String) {
+        self.add_line(Line::raw(text));
+    }
+
+    /// Appends text with indentation to the current line, flushing complete lines to output.
+    /// Used for assistant text which should be indented under the header.
+    pub fn append_indented_text(&mut self, text: &str) {
+        self.in_indented_text = true;
         for ch in text.chars() {
             if ch == '\n' {
-                // Flush current line to output
+                // Flush current line to output (with indentation prefix)
                 let line = std::mem::take(&mut self.current_line);
-                self.add_line(line);
+                self.add_text_line(format!("  {}", line));
             } else {
                 self.current_line.push(ch);
             }
@@ -287,11 +317,17 @@ impl App {
     }
 
     /// Flushes any remaining text in current_line to output.
+    /// Uses indentation if we're in an indented text block.
     pub fn flush_current_line(&mut self) {
         if !self.current_line.is_empty() {
             let line = std::mem::take(&mut self.current_line);
-            self.add_line(line);
+            if self.in_indented_text {
+                self.add_text_line(format!("  {}", line));
+            } else {
+                self.add_text_line(line);
+            }
         }
+        self.in_indented_text = false;
     }
 
     pub fn kill_child(&mut self) {
@@ -415,7 +451,7 @@ impl App {
                             total = self.total_iterations,
                             "auto_continue"
                         );
-                        self.add_line(
+                        self.add_text_line(
                             "══════════════════ AUTO-CONTINUING ══════════════════".to_string(),
                         );
                         self.auto_continue_pending = true;
@@ -424,7 +460,7 @@ impl App {
                     }
                     SpecsRemaining::No => {
                         info!("all_specs_complete");
-                        self.add_line(
+                        self.add_text_line(
                             "══════════════════ ALL SPECS COMPLETE ══════════════════".to_string(),
                         );
                         self.reset_iteration_state();
@@ -433,14 +469,14 @@ impl App {
                     }
                     SpecsRemaining::Missing => {
                         warn!("specs_readme_missing");
-                        self.add_line("[Error: specs/README.md not found]".to_string());
+                        self.add_text_line("[Error: specs/README.md not found]".to_string());
                         self.reset_iteration_state();
                         self.status = AppStatus::Error;
                         self.clear_tasks();
                     }
                     SpecsRemaining::ReadError(e) => {
                         warn!(error = %e, "specs_readme_read_error");
-                        self.add_line(format!("[Error reading specs/README.md: {}]", e));
+                        self.add_text_line(format!("[Error reading specs/README.md: {}]", e));
                         self.reset_iteration_state();
                         self.status = AppStatus::Error;
                         self.clear_tasks();

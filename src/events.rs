@@ -19,7 +19,6 @@ pub enum ClaudeEvent {
     #[serde(rename = "stream_event")]
     StreamEvent { event: StreamInnerEvent },
     #[serde(rename = "user")]
-    #[allow(dead_code)]
     User(UserEvent),
 
     // Heartbeat
@@ -27,12 +26,40 @@ pub enum ClaudeEvent {
     Ping,
 }
 
-/// User event (tool results, etc.) - we skip these.
+/// User event containing tool results from Claude.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct UserEvent {
     #[serde(default)]
-    pub message: Option<serde_json::Value>,
+    pub message: Option<UserMessage>,
+}
+
+/// User message containing tool results.
+#[derive(Debug, Deserialize)]
+pub struct UserMessage {
+    #[serde(default)]
+    pub content: Vec<UserContent>,
+}
+
+/// Content items in a user message.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum UserContent {
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        #[serde(default)]
+        content: Option<ToolResultContent>,
+        #[serde(default)]
+        is_error: Option<bool>,
+    },
+}
+
+/// Tool result content can be a string or structured.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ToolResultContent {
+    Text(String),
+    Structured(serde_json::Value),
 }
 
 /// Inner streaming events wrapped by stream_event.
@@ -129,7 +156,6 @@ pub enum ContentBlock {
     #[serde(rename = "tool_use")]
     ToolUse {
         #[serde(default)]
-        #[allow(dead_code)]
         id: Option<String>,
         name: String,
         #[serde(default)]

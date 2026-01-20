@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -15,6 +15,21 @@ use crate::modal_ui::{draw_config_modal, draw_specs_panel};
 
 /// Maximum length for truncated tool input display.
 pub const TOOL_INPUT_MAX_LEN: usize = 60;
+
+/// Maximum length for Bash command display (spec says 50 chars).
+const BASH_COMMAND_MAX_LEN: usize = 50;
+
+/// Icon for tool calls.
+const TOOL_ICON: &str = "⏺";
+
+/// Icon for successful results.
+const SUCCESS_ICON: &str = "✅";
+
+/// Icon for error results.
+const ERROR_ICON: &str = "❌";
+
+/// Icon for warnings (no result received).
+const WARNING_ICON: &str = "⚠";
 
 /// Formats a duration as M:SS (under 1 hour) or H:MM:SS (1+ hours).
 pub fn format_elapsed(duration: Duration) -> String {
@@ -42,91 +57,244 @@ pub fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
-/// Formats a tool invocation for display.
+/// Formats a tool invocation for display (plain text version for tests).
 ///
-/// Returns a formatted string like `[Tool: Bash] git status` for known tools,
-/// or a truncated JSON representation for unknown tools.
+/// Returns a formatted string like `⏺ Bash(git status)` for known tools,
+/// or `⏺ ToolName` for unknown tools.
+#[cfg(test)]
 pub fn format_tool_summary(tool_name: &str, input_json: &str) -> String {
-    let prefix = format!("[Tool: {}]", tool_name);
+    // Try to parse the accumulated JSON
+    let input: serde_json::Value = match serde_json::from_str(input_json) {
+        Ok(v) => v,
+        Err(_) => return format!("{} {}", TOOL_ICON, tool_name),
+    };
+
+    // Extract key argument based on tool type
+    let key_arg = match tool_name {
+        "Bash" => extract_bash_arg(&input),
+        "Read" => extract_file_path(&input),
+        "Edit" => extract_file_path(&input),
+        "Write" => extract_file_path(&input),
+        "Grep" => extract_pattern(&input),
+        "Glob" => extract_pattern(&input),
+        _ => None,
+    };
+
+    match key_arg {
+        Some(arg) => format!("{} {}({})", TOOL_ICON, tool_name, arg),
+        None => format!("{} {}", TOOL_ICON, tool_name),
+    }
+}
+
+/// Extract command argument for Bash tool (truncated to 50 chars).
+fn extract_bash_arg(input: &serde_json::Value) -> Option<String> {
+    input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(|cmd| truncate_str(cmd, BASH_COMMAND_MAX_LEN))
+}
+
+/// Extract file_path argument.
+fn extract_file_path(input: &serde_json::Value) -> Option<String> {
+    input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
+}
+
+/// Extract pattern argument.
+fn extract_pattern(input: &serde_json::Value) -> Option<String> {
+    input
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
+}
+
+/// Maximum number of preview lines to show for tool results.
+const RESULT_PREVIEW_LINES: usize = 3;
+
+/// Formats a tool invocation as a styled line.
+///
+/// Returns a styled `Line` with cyan icon and bold cyan tool name.
+pub fn format_tool_summary_styled(tool_name: &str, input_json: &str) -> Line<'static> {
+    let cyan = Style::default().fg(Color::Cyan);
+    let cyan_bold = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
 
     // Try to parse the accumulated JSON
     let input: serde_json::Value = match serde_json::from_str(input_json) {
         Ok(v) => v,
-        Err(_) => return format!("{} (input parsing failed)", prefix),
+        Err(_) => {
+            return Line::from(vec![
+                Span::styled(format!("{} ", TOOL_ICON), cyan),
+                Span::styled(tool_name.to_string(), cyan_bold),
+            ]);
+        }
     };
 
-    // Format based on tool type
-    let summary = match tool_name {
-        "Bash" => format_bash_tool(&input),
-        "Read" => format_read_tool(&input),
-        "Edit" => format_edit_tool(&input),
-        "Write" => format_write_tool(&input),
-        "Grep" => format_grep_tool(&input),
-        "Glob" => format_glob_tool(&input),
-        _ => format_unknown_tool(&input),
+    // Extract key argument based on tool type
+    let key_arg = match tool_name {
+        "Bash" => extract_bash_arg(&input),
+        "Read" => extract_file_path(&input),
+        "Edit" => extract_file_path(&input),
+        "Write" => extract_file_path(&input),
+        "Grep" => extract_pattern(&input),
+        "Glob" => extract_pattern(&input),
+        _ => None,
     };
 
-    format!("{} {}", prefix, summary)
-}
-
-fn format_bash_tool(input: &serde_json::Value) -> String {
-    input
-        .get("command")
-        .and_then(|v| v.as_str())
-        .map(|cmd| truncate_str(cmd, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no command)".to_string())
-}
-
-fn format_read_tool(input: &serde_json::Value) -> String {
-    input
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no path)".to_string())
-}
-
-fn format_edit_tool(input: &serde_json::Value) -> String {
-    let path = input
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("(no path)");
-
-    // Try to show context about what's being edited
-    if let Some(old_str) = input.get("old_string").and_then(|v| v.as_str()) {
-        let preview = truncate_str(old_str, 30);
-        format!("{} \"{}\"", truncate_str(path, 40), preview)
-    } else {
-        truncate_str(path, TOOL_INPUT_MAX_LEN)
+    match key_arg {
+        Some(arg) => Line::from(vec![
+            Span::styled(format!("{} ", TOOL_ICON), cyan),
+            Span::styled(tool_name.to_string(), cyan_bold),
+            Span::raw(format!("({})", arg)),
+        ]),
+        None => Line::from(vec![
+            Span::styled(format!("{} ", TOOL_ICON), cyan),
+            Span::styled(tool_name.to_string(), cyan_bold),
+        ]),
     }
 }
 
-fn format_write_tool(input: &serde_json::Value) -> String {
-    input
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no path)".to_string())
+/// Formats a tool result as styled lines.
+///
+/// Returns a vector of styled `Line`s with colored icons and dim metadata.
+pub fn format_tool_result_styled(
+    _tool_name: &str,
+    content: &str,
+    is_error: bool,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    let (icon, icon_style) = if is_error {
+        (ERROR_ICON, Style::default().fg(Color::Red))
+    } else {
+        (SUCCESS_ICON, Style::default().fg(Color::Green))
+    };
+    let dim = Style::default().fg(Color::DarkGray);
+
+    if content.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", icon), icon_style),
+            Span::styled("(empty)".to_string(), dim),
+        ]));
+        return lines;
+    }
+
+    let content_lines: Vec<&str> = content.lines().collect();
+    let line_count = content_lines.len();
+    let char_count = content.len();
+
+    // Build summary line with icon
+    lines.push(Line::from(vec![
+        Span::styled(format!("{} ", icon), icon_style),
+        Span::styled(format!("({} lines, {} chars)", line_count, char_count), dim),
+    ]));
+
+    // Add preview lines (indented) in default color
+    let preview_count = line_count.min(RESULT_PREVIEW_LINES);
+    for line in content_lines.iter().take(preview_count) {
+        lines.push(Line::raw(format!("  {}", line)));
+    }
+
+    // Add truncation indicator if needed
+    let remaining = line_count.saturating_sub(RESULT_PREVIEW_LINES);
+    if remaining > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  ({} more lines)", remaining),
+            dim,
+        )));
+    }
+
+    lines
 }
 
-fn format_grep_tool(input: &serde_json::Value) -> String {
-    input
-        .get("pattern")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no pattern)".to_string())
+/// Returns a styled warning line for tool calls with no result.
+pub fn format_no_result_warning_styled() -> Line<'static> {
+    let yellow = Style::default().fg(Color::Yellow);
+    Line::from(vec![Span::styled(
+        format!("{} no result received", WARNING_ICON),
+        yellow,
+    )])
 }
 
-fn format_glob_tool(input: &serde_json::Value) -> String {
-    input
-        .get("pattern")
-        .and_then(|v| v.as_str())
-        .map(|p| truncate_str(p, TOOL_INPUT_MAX_LEN))
-        .unwrap_or_else(|| "(no pattern)".to_string())
+/// Returns a styled assistant header line.
+pub fn format_assistant_header_styled() -> Line<'static> {
+    let green = Style::default().fg(Color::Green);
+    let green_bold = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    Line::from(vec![
+        Span::styled(format!("{} ", TOOL_ICON), green),
+        Span::styled("Assistant".to_string(), green_bold),
+    ])
 }
 
-fn format_unknown_tool(input: &serde_json::Value) -> String {
-    let json_str = input.to_string();
-    truncate_str(&json_str, TOOL_INPUT_MAX_LEN)
+/// Formats a tool result for display (plain text version for tests).
+///
+/// Returns a vector of lines:
+/// - First line: `✅ (N lines, M chars)` or `❌` followed by content for errors
+/// - Following lines: indented preview of first N lines
+/// - Final line: `(N more lines)` if truncated
+///
+/// Note: The `tool_name` parameter is kept for potential future use but not currently displayed
+/// since the tool call is shown above the result.
+#[cfg(test)]
+pub fn format_tool_result(_tool_name: &str, content: &str, is_error: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if content.is_empty() {
+        let icon = if is_error { ERROR_ICON } else { SUCCESS_ICON };
+        lines.push(format!("{} (empty)", icon));
+        return lines;
+    }
+
+    let content_lines: Vec<&str> = content.lines().collect();
+    let line_count = content_lines.len();
+    let char_count = content.len();
+
+    // Build summary line with icon
+    let icon = if is_error { ERROR_ICON } else { SUCCESS_ICON };
+    let summary = format!("{} ({} lines, {} chars)", icon, line_count, char_count);
+    lines.push(summary);
+
+    // Add preview lines (indented)
+    let preview_count = line_count.min(RESULT_PREVIEW_LINES);
+    for line in content_lines.iter().take(preview_count) {
+        lines.push(format!("  {}", line));
+    }
+
+    // Add truncation indicator if needed
+    let remaining = line_count.saturating_sub(RESULT_PREVIEW_LINES);
+    if remaining > 0 {
+        lines.push(format!("  ({} more lines)", remaining));
+    }
+
+    lines
+}
+
+/// Formats a malformed tool result (when parsing fails).
+#[allow(dead_code)]
+pub fn format_malformed_result(_tool_name: &str, raw_content: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!("{} error parsing result", ERROR_ICON));
+
+    // Show first 100 chars of raw content
+    let truncated = if raw_content.len() > 100 {
+        format!("{}...", &raw_content[..100])
+    } else {
+        raw_content.to_string()
+    };
+    lines.push(format!("  {}", truncated));
+
+    lines
+}
+
+/// Returns the warning message for tool calls with no result (plain text version for tests).
+#[cfg(test)]
+pub fn format_no_result_warning() -> String {
+    format!("{} no result received", WARNING_ICON)
 }
 
 /// Represents a single todo item parsed from TodoWrite input.
@@ -337,7 +505,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     app.tasks_pane_height = chunks[1].height.saturating_sub(2); // Account for borders
 
     // === Output Panel ===
-    let mut content: Vec<Line> = app.output_lines.iter().map(Line::raw).collect();
+    let mut content: Vec<Line> = app.output_lines.to_vec();
     if !app.current_line.is_empty() {
         content.push(Line::raw(&app.current_line));
     }
@@ -652,5 +820,98 @@ mod tests {
         assert_eq!(truncate_str("hello", 2), "...");
         assert_eq!(truncate_str("hello", 3), "...");
         assert_eq!(truncate_str("hello", 4), "h...");
+    }
+
+    // format_tool_result tests
+
+    #[test]
+    fn test_format_tool_result_empty() {
+        let result = format_tool_result("Read", "", false);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "✅ (empty)");
+    }
+
+    #[test]
+    fn test_format_tool_result_single_line() {
+        let result = format_tool_result("Read", "hello world", false);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "✅ (1 lines, 11 chars)");
+        assert_eq!(result[1], "  hello world");
+    }
+
+    #[test]
+    fn test_format_tool_result_three_lines() {
+        let content = "line1\nline2\nline3";
+        let result = format_tool_result("Bash", content, false);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], "✅ (3 lines, 17 chars)");
+        assert_eq!(result[1], "  line1");
+        assert_eq!(result[2], "  line2");
+        assert_eq!(result[3], "  line3");
+    }
+
+    #[test]
+    fn test_format_tool_result_truncated() {
+        let content = "line1\nline2\nline3\nline4\nline5";
+        let result = format_tool_result("Read", content, false);
+        assert_eq!(result.len(), 5);
+        assert_eq!(result[0], "✅ (5 lines, 29 chars)");
+        assert_eq!(result[1], "  line1");
+        assert_eq!(result[2], "  line2");
+        assert_eq!(result[3], "  line3");
+        assert_eq!(result[4], "  (2 more lines)");
+    }
+
+    #[test]
+    fn test_format_tool_result_error() {
+        let content = "error: could not compile";
+        let result = format_tool_result("Bash", content, true);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "❌ (1 lines, 24 chars)");
+        assert_eq!(result[1], "  error: could not compile");
+    }
+
+    // format_tool_summary tests
+
+    #[test]
+    fn test_format_tool_summary_bash() {
+        let result = format_tool_summary("Bash", r#"{"command": "git status"}"#);
+        assert_eq!(result, "⏺ Bash(git status)");
+    }
+
+    #[test]
+    fn test_format_tool_summary_read() {
+        let result = format_tool_summary("Read", r#"{"file_path": "/path/to/file.rs"}"#);
+        assert_eq!(result, "⏺ Read(/path/to/file.rs)");
+    }
+
+    #[test]
+    fn test_format_tool_summary_grep() {
+        let result = format_tool_summary("Grep", r#"{"pattern": "fn main"}"#);
+        assert_eq!(result, "⏺ Grep(fn main)");
+    }
+
+    #[test]
+    fn test_format_tool_summary_unknown_tool() {
+        let result = format_tool_summary("CustomTool", r#"{"custom": "arg"}"#);
+        assert_eq!(result, "⏺ CustomTool");
+    }
+
+    #[test]
+    fn test_format_tool_summary_invalid_json() {
+        let result = format_tool_summary("Read", "not valid json");
+        assert_eq!(result, "⏺ Read");
+    }
+
+    #[test]
+    fn test_format_tool_summary_missing_arg() {
+        let result = format_tool_summary("Read", r#"{"other_field": "value"}"#);
+        assert_eq!(result, "⏺ Read");
+    }
+
+    #[test]
+    fn test_format_no_result_warning() {
+        let result = format_no_result_warning();
+        assert_eq!(result, "⚠ no result received");
     }
 }

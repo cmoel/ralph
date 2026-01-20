@@ -11,14 +11,18 @@ mod ui;
 mod validators;
 mod wake_lock;
 
-use crate::app::{App, AppStatus, ContentBlockState, SelectedPanel};
+use crate::app::{App, AppStatus, ContentBlockState, PendingToolCall, SelectedPanel};
 use crate::config::LoadedConfig;
-use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
+use crate::events::{
+    ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
+};
 use crate::modals::{
     ConfigModalState, SpecsPanelState, handle_config_modal_input, handle_specs_panel_input,
 };
 use crate::ui::{
-    ExchangeType, draw_ui, format_tool_summary, format_usage_summary, parse_todos_from_json,
+    ExchangeType, draw_ui, format_assistant_header_styled, format_no_result_warning_styled,
+    format_tool_result_styled, format_tool_summary_styled, format_usage_summary,
+    parse_todos_from_json,
 };
 
 use std::io::{self, BufRead, BufReader};
@@ -39,12 +43,20 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, info, trace, warn};
 
 /// Message types for output processing.
 pub enum OutputMessage {
     Line(String),
+}
+
+/// Adds indentation to a styled Line by prepending "  " to the first span.
+fn indent_line(line: Line<'static>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+    spans.extend(line.spans);
+    Line::from(spans)
 }
 
 /// Direction for scroll operations.
@@ -299,7 +311,7 @@ fn start_command(app: &mut App) -> Result<()> {
     let prompt_path = app.config.prompt_path();
     if !prompt_path.exists() {
         app.status = AppStatus::Error;
-        app.add_line(format!("Error: {} not found", prompt_path.display()));
+        app.add_text_line(format!("Error: {} not found", prompt_path.display()));
         return Ok(());
     }
 
@@ -309,7 +321,7 @@ fn start_command(app: &mut App) -> Result<()> {
 
     // Add divider if not first run
     if !app.output_lines.is_empty() {
-        app.add_line("─".repeat(40));
+        app.add_text_line("─".repeat(40));
     }
 
     // Reset streaming state for new command
@@ -346,7 +358,7 @@ fn start_command(app: &mut App) -> Result<()> {
                     Some(lock) => Some(lock),
                     None => {
                         // Wake lock failed - display warning in output panel
-                        app.add_line(
+                        app.add_text_line(
                             "⚠ Warning: Could not acquire wake lock - system may sleep during execution"
                                 .to_string(),
                         );
@@ -396,7 +408,7 @@ fn start_command(app: &mut App) -> Result<()> {
         }
         Err(e) => {
             app.status = AppStatus::Error;
-            app.add_line(format!("Error starting command: {}", e));
+            app.add_text_line(format!("Error starting command: {}", e));
         }
     }
 
@@ -440,7 +452,7 @@ fn poll_output(app: &mut App) {
                         if let Some(code) = status.code() {
                             if code != 0 {
                                 warn!(exit_code = code, "process_exit_nonzero");
-                                app.add_line(format!("[Process exited with code {}]", code));
+                                app.add_text_line(format!("[Process exited with code {}]", code));
                             }
                             (Some(code), Some(format!("exit_code={}", code)))
                         } else {
@@ -496,7 +508,7 @@ fn process_line(app: &mut App, line: &str) {
 
     // Handle stderr lines (pass through as-is)
     if line.starts_with("[stderr]") {
-        app.add_line(line.to_string());
+        app.add_text_line(line.to_string());
         return;
     }
 
@@ -531,9 +543,69 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
         ClaudeEvent::Assistant(asst) => {
             debug!(?asst, "Assistant event");
         }
-        ClaudeEvent::User(_) => {
-            // Skip user events (tool results, etc.)
-            debug!("User event (skipped)");
+        ClaudeEvent::User(user_event) => {
+            debug!(?user_event, "User event");
+            // Process tool results from user event
+            if let Some(message) = user_event.message {
+                for content in message.content {
+                    match content {
+                        UserContent::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => {
+                            // Look up tool name from our mapping
+                            let tool_name = app
+                                .tool_id_to_name
+                                .get(&tool_use_id)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    warn!(tool_use_id, "Orphan tool result (unknown ID)");
+                                    "unknown".to_string()
+                                });
+
+                            // Skip TodoWrite results (already handled by tasks panel)
+                            if tool_name == "TodoWrite" {
+                                debug!("Skipping TodoWrite result (handled by tasks panel)");
+                                continue;
+                            }
+
+                            let is_error = is_error.unwrap_or(false);
+
+                            // Extract content string
+                            let content_str = match content {
+                                Some(ToolResultContent::Text(s)) => s,
+                                Some(ToolResultContent::Structured(v)) => v.to_string(),
+                                None => String::new(),
+                            };
+
+                            // Check for pending tool call to correlate with
+                            if let Some(pending) = app.pending_tool_calls.remove(&tool_use_id) {
+                                // Display tool call first
+                                app.add_line(pending.styled_line);
+                                // Display result indented under call
+                                let lines = format_tool_result_styled(
+                                    &pending.tool_name,
+                                    &content_str,
+                                    is_error,
+                                );
+                                for line in lines {
+                                    // Add indentation to styled line
+                                    let indented = indent_line(line);
+                                    app.add_line(indented);
+                                }
+                            } else {
+                                // No pending call found - display result standalone
+                                let lines =
+                                    format_tool_result_styled(&tool_name, &content_str, is_error);
+                                for line in lines {
+                                    app.add_line(line);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         ClaudeEvent::StreamEvent { event: inner } => {
             // Unwrap and process the inner streaming event
@@ -541,6 +613,12 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
         }
         ClaudeEvent::Result(result) => {
             debug!(?result, "Result event");
+            // Flush any pending tool calls that never received results
+            let pending_calls: Vec<_> = app.pending_tool_calls.drain().collect();
+            for (_id, pending) in pending_calls {
+                app.add_line(pending.styled_line);
+                app.add_line(indent_line(format_no_result_warning_styled()));
+            }
             // Increment exchange counter
             app.exchange_count += 1;
             // Accumulate tokens for session total
@@ -560,7 +638,7 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
             // Display usage summary with exchange info
             let summary = format_usage_summary(&result, app.exchange_count, exchange_type);
             for line in summary.lines() {
-                app.add_line(line.to_string());
+                app.add_text_line(line.to_string());
             }
         }
     }
@@ -573,6 +651,8 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             debug!(?msg, "Message start");
             // Clear content blocks for new message
             app.content_blocks.clear();
+            // Clear pending tool calls (new assistant turn)
+            app.pending_tool_calls.clear();
         }
         StreamInnerEvent::ContentBlockStart(block_start) => {
             let index = block_start.index;
@@ -582,8 +662,9 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                 ContentBlock::Text { text } => {
                     state.text = text;
                 }
-                ContentBlock::ToolUse { name, .. } => {
+                ContentBlock::ToolUse { id, name, .. } => {
                     state.tool_name = Some(name);
+                    state.tool_use_id = id;
                 }
             }
 
@@ -592,27 +673,48 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
         }
         StreamInnerEvent::ContentBlockDelta(delta_event) => {
             let index = delta_event.index;
-            let state = app.content_blocks.entry(index).or_default();
 
             match delta_event.delta {
                 Delta::TextDelta { text } => {
-                    state.text.push_str(&text);
-                    // Display text immediately as it streams
-                    app.append_text(&text);
+                    // Check if we need to show the header (without holding mutable borrow)
+                    let needs_header = app
+                        .content_blocks
+                        .get(&index)
+                        .map(|s| !s.header_shown)
+                        .unwrap_or(true);
+
+                    if needs_header {
+                        app.add_line(format_assistant_header_styled());
+                    }
+
+                    // Update state in a separate scope to release the borrow
+                    {
+                        let state = app.content_blocks.entry(index).or_default();
+                        state.header_shown = true;
+                        state.text.push_str(&text);
+                    }
+
+                    // Display text immediately as it streams (indented)
+                    app.append_indented_text(&text);
                 }
                 Delta::InputJsonDelta { partial_json } => {
+                    let state = app.content_blocks.entry(index).or_default();
                     state.input_json.push_str(&partial_json);
                 }
             }
         }
         StreamInnerEvent::ContentBlockStop(stop) => {
             debug!(index = stop.index, "Content block stopped");
-            // Always flush any pending text first to maintain order
+            // Flush any pending text (uses indentation flag automatically)
             app.flush_current_line();
             // Then process tool_use blocks
             if let Some(state) = app.content_blocks.get(&stop.index)
                 && let Some(tool_name) = &state.tool_name
             {
+                // Register tool_use_id → tool_name mapping for result correlation
+                if let Some(ref id) = state.tool_use_id {
+                    app.tool_id_to_name.insert(id.clone(), tool_name.clone());
+                }
                 // Track the last tool used for exchange categorization
                 app.last_tool_used = Some(tool_name.clone());
                 // Special handling for TodoWrite to update tasks panel
@@ -632,8 +734,20 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                         }
                     }
                 } else {
-                    let summary = format_tool_summary(tool_name, &state.input_json);
-                    app.add_line(summary);
+                    let styled_line = format_tool_summary_styled(tool_name, &state.input_json);
+                    // Buffer tool call if it has an ID (for correlation with result)
+                    if let Some(ref id) = state.tool_use_id {
+                        app.pending_tool_calls.insert(
+                            id.clone(),
+                            PendingToolCall {
+                                tool_name: tool_name.clone(),
+                                styled_line,
+                            },
+                        );
+                    } else {
+                        // No ID - display immediately
+                        app.add_line(styled_line);
+                    }
                 }
             }
         }

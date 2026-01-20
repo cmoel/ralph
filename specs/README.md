@@ -35,7 +35,7 @@ Single source of truth for specification status.
 | [output-panel-layout-refactor](output-panel-layout-refactor.md) | Done | Move iteration/tokens to bottom title, clean up command panel | output-panel-enhancements |
 | [tasks-panel](tasks-panel.md) | Done | Dedicated panel for task list with collapse/expand and panel selection | output-panel-enhancements, configuration |
 | [keep-awake](keep-awake.md) | Done | Prevent system sleep while claude is running | configuration |
-| [formatted-streaming-output](formatted-streaming-output.md) | In Progress | Formatted output with tool call/result correlation | formatted-output-display |
+| [formatted-streaming-output](formatted-streaming-output.md) | Done | Formatted output with tool call/result correlation | formatted-output-display |
 
 ## Notes
 

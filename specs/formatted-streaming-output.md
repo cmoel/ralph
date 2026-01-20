@@ -20,13 +20,13 @@ Example output:
 
 ### Acceptance Criteria
 
-- [ ] Parse `User` events instead of skipping them
-- [ ] Extract tool result content and metadata (tool name, content)
-- [ ] Display result summary: `[Result: ToolName] (N lines, M chars)`
-- [ ] Show first 3 lines of content as preview
-- [ ] Show "(N more lines)" when truncated
-- [ ] Handle malformed results: show `[Result: ToolName] error parsing result` + truncated raw content
-- [ ] Handle orphan results (unknown ID): display with `[Result: unknown]` and log warning
+- [x] Parse `User` events instead of skipping them
+- [x] Extract tool result content and metadata (tool name, content)
+- [x] Display result summary: `[Result: ToolName] (N lines, M chars)`
+- [x] Show first 3 lines of content as preview
+- [x] Show "(N more lines)" when truncated
+- [x] Handle malformed results: show `[Result: ToolName] error parsing result` + truncated raw content
+- [x] Handle orphan results (unknown ID): display with `[Result: unknown]` and log warning
 
 ### Technical Constraints
 
@@ -67,11 +67,11 @@ When the process exits with pending tool calls:
 
 ### Acceptance Criteria
 
-- [ ] Buffer tool calls by ID when `ContentBlockStop` fires
-- [ ] When result arrives, find matching call and display together
-- [ ] Indent result under its tool call
-- [ ] On process exit (`Result` event), flush pending calls with "⚠ no result received"
-- [ ] Tool calls without ID display immediately (no buffering)
+- [x] Buffer tool calls by ID when `ContentBlockStop` fires
+- [x] When result arrives, find matching call and display together
+- [x] Indent result under its tool call
+- [x] On process exit (`Result` event), flush pending calls with "⚠ no result received"
+- [x] Tool calls without ID display immediately (no buffering)
 
 ### Technical Constraints
 
@@ -111,11 +111,11 @@ Example output:
 
 ### Acceptance Criteria
 
-- [ ] Tool calls display as: `⏺ ToolName(key_arg)`
-- [ ] Successful results display as: `✅ (N lines, M chars)`
-- [ ] Error results display as: `❌` followed by content
-- [ ] No result displays as: `⚠ no result received`
-- [ ] Key argument extraction per tool:
+- [x] Tool calls display as: `⏺ ToolName(key_arg)`
+- [x] Successful results display as: `✅ (N lines, M chars)`
+- [x] Error results display as: `❌` followed by content
+- [x] No result displays as: `⚠ no result received`
+- [x] Key argument extraction per tool:
   - Bash: `command` (truncated to 50 chars)
   - Read: `file_path`
   - Edit: `file_path`
@@ -157,13 +157,13 @@ Different message types have distinct colors for faster visual scanning.
 
 ### Acceptance Criteria
 
-- [ ] Tool calls render in cyan
-- [ ] Success results render with green icon
-- [ ] Error results render with red icon
-- [ ] Warnings render with yellow icon
-- [ ] Result metadata (line count, char count) renders dim
-- [ ] Preview content renders in default color
-- [ ] Colors work with Ratatui's `Style` system
+- [x] Tool calls render in cyan
+- [x] Success results render with green icon
+- [x] Error results render with red icon
+- [x] Warnings render with yellow icon
+- [x] Result metadata (line count, char count) renders dim
+- [x] Preview content renders in default color
+- [x] Colors work with Ratatui's `Style` system
 
 ### Technical Constraints
 
@@ -198,10 +198,10 @@ Example output:
 
 ### Acceptance Criteria
 
-- [ ] Assistant text blocks display with `⏺ Assistant` header
-- [ ] Text content indented under header
+- [x] Assistant text blocks display with `⏺ Assistant` header
+- [x] Text content indented under header
 - [ ] Long text truncated with "(N more lines)" for consistency
-- [ ] Multiple text blocks in same message grouped appropriately
+- [x] Multiple text blocks in same message grouped appropriately
 
 ### Technical Constraints
 
