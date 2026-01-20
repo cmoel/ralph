@@ -34,6 +34,7 @@ Single source of truth for specification status.
 | [output-panel-enhancements](output-panel-enhancements.md) | Done | Todo display, cumulative tokens, per-exchange tokens | formatted-output-display, status-panel |
 | [output-panel-layout-refactor](output-panel-layout-refactor.md) | Done | Move iteration/tokens to bottom title, clean up command panel | output-panel-enhancements |
 | [tasks-panel](tasks-panel.md) | Done | Dedicated panel for task list with collapse/expand and panel selection | output-panel-enhancements, configuration |
+| [keep-awake](keep-awake.md) | Ready | Prevent system sleep while claude is running | configuration |
 
 ## Notes
 
