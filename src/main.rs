@@ -131,6 +131,7 @@ fn run_app(
         // Handle auto-continue if pending
         if app.auto_continue_pending {
             app.auto_continue_pending = false;
+            app.increment_iteration();
             start_command(&mut app)?;
         }
 
@@ -181,7 +182,11 @@ fn run_app(
                     }
                     KeyCode::Char('s') => match app.status {
                         AppStatus::Stopped => {
-                            start_command(&mut app)?;
+                            // Start new iteration run (reads config, sets up tracking)
+                            if app.start_iteration_run() {
+                                start_command(&mut app)?;
+                            }
+                            // If start_iteration_run returns false, iterations = 0, no-op
                         }
                         AppStatus::Running => {
                             app.stop_command();

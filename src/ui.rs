@@ -215,11 +215,23 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         content.push(Line::raw(&app.current_line));
     }
 
+    // Build iteration progress display
+    let iteration_display = if app.current_iteration == 0 {
+        // Not running or stopped
+        "─".to_string()
+    } else if app.total_iterations < 0 {
+        // Infinite mode
+        format!("{}/∞", app.current_iteration)
+    } else {
+        // Countdown mode
+        format!("{}/{}", app.current_iteration, app.total_iterations)
+    };
+
     let mut output_block = Block::default()
         .borders(Borders::ALL)
         .border_type(app.status.border_type())
         .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count)))
-        .title(Line::from(format!(" {} ", app.session_id)).left_aligned());
+        .title(Line::from(format!(" {} ── {} ", app.session_id, iteration_display)).left_aligned());
 
     if let Some(spec) = &app.current_spec {
         output_block = output_block.title(Line::from(format!(" {} ", spec)).right_aligned());

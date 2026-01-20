@@ -98,38 +98,30 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let focused_label_style = Style::default().fg(Color::Cyan);
 
     // Get values from state or config
-    let (
-        claude_path,
-        prompt_file,
-        specs_dir,
-        log_level,
-        auto_continue,
-        cursor_pos,
-        focus,
-        has_errors,
-    ) = if let Some(s) = state {
-        (
-            s.claude_path.as_str(),
-            s.prompt_file.as_str(),
-            s.specs_dir.as_str(),
-            s.selected_log_level(),
-            s.auto_continue,
-            s.cursor_pos,
-            Some(s.focus),
-            s.has_validation_errors(),
-        )
-    } else {
-        (
-            app.config.claude.path.as_str(),
-            app.config.paths.prompt.as_str(),
-            app.config.paths.specs.as_str(),
-            app.config.logging.level.as_str(),
-            app.config.behavior.auto_continue,
-            0,
-            None,
-            false,
-        )
-    };
+    let (claude_path, prompt_file, specs_dir, log_level, iterations, cursor_pos, focus, has_errors) =
+        if let Some(s) = state {
+            (
+                s.claude_path.as_str(),
+                s.prompt_file.as_str(),
+                s.specs_dir.as_str(),
+                s.selected_log_level(),
+                s.iterations,
+                s.cursor_pos,
+                Some(s.focus),
+                s.has_validation_errors(),
+            )
+        } else {
+            (
+                app.config.claude.path.as_str(),
+                app.config.paths.prompt.as_str(),
+                app.config.paths.specs.as_str(),
+                app.config.logging.level.as_str(),
+                app.config.behavior.iterations,
+                0,
+                None,
+                false,
+            )
+        };
 
     // Helper to get validation error for a field
     let get_field_error = |field: ConfigModalField| -> Option<&str> {
@@ -228,27 +220,32 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         Span::styled(level_display, level_value_style),
     ]));
 
-    // Auto-continue toggle
-    let auto_focused = focus == Some(ConfigModalField::AutoContinue);
-    let auto_label_style = if auto_focused {
+    // Iterations field
+    let iter_focused = focus == Some(ConfigModalField::Iterations);
+    let iter_label_style = if iter_focused {
         focused_label_style
     } else {
         label_style
     };
-    let auto_value = if auto_continue { "On" } else { "Off" };
-    let auto_display = if auto_focused {
-        format!("< {} >", auto_value)
+    // Display -1 as infinity symbol
+    let iter_value = if iterations < 0 {
+        "∞".to_string()
     } else {
-        auto_value.to_string()
+        iterations.to_string()
     };
-    let auto_value_style = if auto_focused {
+    let iter_display = if iter_focused {
+        format!("< {} >", iter_value)
+    } else {
+        iter_value
+    };
+    let iter_value_style = if iter_focused {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::White)
     };
     content.push(Line::from(vec![
-        Span::styled("  Auto-continue:   ", auto_label_style),
-        Span::styled(auto_display, auto_value_style),
+        Span::styled("  Iterations:      ", iter_label_style),
+        Span::styled(iter_display, iter_value_style),
     ]));
 
     content.push(Line::from(""));

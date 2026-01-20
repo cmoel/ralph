@@ -117,6 +117,13 @@ pub struct App {
     pub show_specs_panel: bool,
     /// State for the specs panel modal (when open).
     pub specs_panel_state: Option<SpecsPanelState>,
+    /// Current iteration number within a run (1-indexed, 0 when stopped).
+    pub current_iteration: u32,
+    /// Total iterations configured for the current run:
+    /// - Negative (-1): Infinite mode
+    /// - Zero (0): Stopped mode (shouldn't start)
+    /// - Positive (N): Countdown mode, runs N iterations
+    pub total_iterations: i32,
 }
 
 impl App {
@@ -161,6 +168,8 @@ impl App {
             auto_continue_pending: false,
             show_specs_panel: false,
             specs_panel_state: None,
+            current_iteration: 0,
+            total_iterations: 0,
         }
     }
 
@@ -343,13 +352,17 @@ impl App {
         self.current_spec = None;
         self.run_start_time = None;
 
-        // Determine next state based on exit code and auto-continue setting
+        // Determine next state based on exit code and iteration control
         match exit_code {
-            Some(0) if self.config.behavior.auto_continue => {
+            Some(0) if self.should_auto_continue() => {
                 // Check if there are specs remaining
                 match check_specs_remaining(&self.config.specs_path()) {
                     SpecsRemaining::Yes => {
-                        info!("auto_continue");
+                        info!(
+                            current = self.current_iteration,
+                            total = self.total_iterations,
+                            "auto_continue"
+                        );
                         self.add_line(
                             "══════════════════ AUTO-CONTINUING ══════════════════".to_string(),
                         );
@@ -361,32 +374,81 @@ impl App {
                         self.add_line(
                             "══════════════════ ALL SPECS COMPLETE ══════════════════".to_string(),
                         );
+                        self.reset_iteration_state();
                         self.status = AppStatus::Stopped;
                     }
                     SpecsRemaining::Missing => {
                         warn!("specs_readme_missing");
                         self.add_line("[Error: specs/README.md not found]".to_string());
+                        self.reset_iteration_state();
                         self.status = AppStatus::Error;
                     }
                     SpecsRemaining::ReadError(e) => {
                         warn!(error = %e, "specs_readme_read_error");
                         self.add_line(format!("[Error reading specs/README.md: {}]", e));
+                        self.reset_iteration_state();
                         self.status = AppStatus::Error;
                     }
                 }
             }
             Some(0) => {
-                // Auto-continue disabled, just stop
+                // Countdown exhausted or iterations = 0, just stop
+                self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
             Some(_code) => {
                 // Non-zero exit code → Error state
+                self.reset_iteration_state();
                 self.status = AppStatus::Error;
             }
             None => {
                 // Killed by signal (manual stop) → Stopped state
+                self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
         }
+    }
+
+    /// Determine if we should auto-continue based on iteration state.
+    /// - Infinite mode (total_iterations < 0): always continue
+    /// - Countdown mode (total_iterations > 0): continue if current < total
+    /// - Stopped mode (total_iterations = 0): never continue
+    fn should_auto_continue(&self) -> bool {
+        if self.total_iterations < 0 {
+            // Infinite mode
+            true
+        } else if self.total_iterations > 0 {
+            // Countdown mode
+            self.current_iteration < self.total_iterations as u32
+        } else {
+            // Stopped mode (shouldn't happen if we got here, but be safe)
+            false
+        }
+    }
+
+    /// Reset iteration state when stopping (error, manual stop, or run complete).
+    fn reset_iteration_state(&mut self) {
+        self.current_iteration = 0;
+        self.total_iterations = 0;
+    }
+
+    /// Start a new iteration run, reading config and setting up iteration tracking.
+    /// Returns false if iterations = 0 (stopped mode).
+    pub fn start_iteration_run(&mut self) -> bool {
+        let iterations = self.config.behavior.iterations;
+        if iterations == 0 {
+            // Stopped mode - don't start
+            info!("iterations_zero_no_start");
+            return false;
+        }
+
+        self.total_iterations = iterations;
+        self.current_iteration = 1;
+        true
+    }
+
+    /// Increment iteration counter for auto-continue.
+    pub fn increment_iteration(&mut self) {
+        self.current_iteration += 1;
     }
 }

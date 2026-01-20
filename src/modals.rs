@@ -25,7 +25,7 @@ pub enum ConfigModalField {
     PromptFile,
     SpecsDirectory,
     LogLevel,
-    AutoContinue,
+    Iterations,
     SaveButton,
     CancelButton,
 }
@@ -36,8 +36,8 @@ impl ConfigModalField {
             Self::ClaudePath => Self::PromptFile,
             Self::PromptFile => Self::SpecsDirectory,
             Self::SpecsDirectory => Self::LogLevel,
-            Self::LogLevel => Self::AutoContinue,
-            Self::AutoContinue => Self::SaveButton,
+            Self::LogLevel => Self::Iterations,
+            Self::Iterations => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
         }
@@ -49,8 +49,8 @@ impl ConfigModalField {
             Self::PromptFile => Self::ClaudePath,
             Self::SpecsDirectory => Self::PromptFile,
             Self::LogLevel => Self::SpecsDirectory,
-            Self::AutoContinue => Self::LogLevel,
-            Self::SaveButton => Self::AutoContinue,
+            Self::Iterations => Self::LogLevel,
+            Self::SaveButton => Self::Iterations,
             Self::CancelButton => Self::SaveButton,
         }
     }
@@ -69,8 +69,8 @@ pub struct ConfigModalState {
     pub specs_dir: String,
     /// Currently selected log level index in LOG_LEVELS.
     pub log_level_index: usize,
-    /// Auto-continue enabled.
-    pub auto_continue: bool,
+    /// Iterations value: -1 for infinite, 0 for stopped, positive for countdown.
+    pub iterations: i32,
     /// Cursor position within the focused text field.
     pub cursor_pos: usize,
     /// Error message to display (e.g., save failed).
@@ -93,7 +93,7 @@ impl ConfigModalState {
             prompt_file: config.paths.prompt.clone(),
             specs_dir: config.paths.specs.clone(),
             log_level_index,
-            auto_continue: config.behavior.auto_continue,
+            iterations: config.behavior.iterations,
             cursor_pos: config.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -278,9 +278,20 @@ impl ConfigModalState {
         LOG_LEVELS[self.log_level_index]
     }
 
-    /// Toggle auto-continue setting.
-    pub fn toggle_auto_continue(&mut self) {
-        self.auto_continue = !self.auto_continue;
+    /// Increment iterations value (towards positive/larger countdown).
+    pub fn iterations_increment(&mut self) {
+        // Don't allow going past a reasonable max (e.g., 999)
+        if self.iterations < 999 {
+            self.iterations += 1;
+        }
+    }
+
+    /// Decrement iterations value (towards -1/infinite).
+    pub fn iterations_decrement(&mut self) {
+        // Minimum is -1 (infinite mode)
+        if self.iterations > -1 {
+            self.iterations -= 1;
+        }
     }
 
     /// Check if there are any validation errors.
@@ -312,7 +323,7 @@ impl ConfigModalState {
 
     /// Build a Config from the current form values.
     pub fn to_config(&self) -> Config {
-        Config {
+        let mut config = Config {
             claude: crate::config::ClaudeConfig {
                 path: self.claude_path.clone(),
                 args: None,
@@ -324,10 +335,10 @@ impl ConfigModalState {
             logging: crate::config::LoggingConfig {
                 level: self.selected_log_level().to_string(),
             },
-            behavior: crate::config::BehaviorConfig {
-                auto_continue: self.auto_continue,
-            },
-        }
+            behavior: crate::config::BehaviorConfig::default(),
+        };
+        config.behavior.iterations = self.iterations;
+        config
     }
 }
 
@@ -538,13 +549,13 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         // Cursor movement within text fields
         KeyCode::Left => match state.focus {
             ConfigModalField::LogLevel => state.log_level_prev(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
+            ConfigModalField::Iterations => state.iterations_decrement(),
             _ => state.cursor_left(),
         },
 
         KeyCode::Right => match state.focus {
             ConfigModalField::LogLevel => state.log_level_next(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
+            ConfigModalField::Iterations => state.iterations_increment(),
             _ => state.cursor_right(),
         },
 
@@ -556,17 +567,17 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             state.cursor_end();
         }
 
-        // Up/Down for log level dropdown, auto-continue toggle, and button navigation
+        // Up/Down for log level dropdown, iterations field, and button navigation
         KeyCode::Up => match state.focus {
             ConfigModalField::LogLevel => state.log_level_prev(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
+            ConfigModalField::Iterations => state.iterations_increment(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
         },
 
         KeyCode::Down => match state.focus {
             ConfigModalField::LogLevel => state.log_level_next(),
-            ConfigModalField::AutoContinue => state.toggle_auto_continue(),
+            ConfigModalField::Iterations => state.iterations_decrement(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
         },
@@ -612,7 +623,7 @@ mod tests {
         let field = field.next();
         assert_eq!(field, ConfigModalField::LogLevel);
         let field = field.next();
-        assert_eq!(field, ConfigModalField::AutoContinue);
+        assert_eq!(field, ConfigModalField::Iterations);
         let field = field.next();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.next();
@@ -640,7 +651,7 @@ mod tests {
         let field = field.prev();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.prev();
-        assert_eq!(field, ConfigModalField::AutoContinue);
+        assert_eq!(field, ConfigModalField::Iterations);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::LogLevel);
         let field = field.prev();
@@ -667,7 +678,7 @@ mod tests {
             ConfigModalField::PromptFile,
             ConfigModalField::SpecsDirectory,
             ConfigModalField::LogLevel,
-            ConfigModalField::AutoContinue,
+            ConfigModalField::Iterations,
             ConfigModalField::SaveButton,
             ConfigModalField::CancelButton,
         ];

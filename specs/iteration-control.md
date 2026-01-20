@@ -21,17 +21,17 @@ Session: abc123 ── ─        # Stopped / not running
 
 ### Acceptance Criteria
 
-- [ ] Config field `iterations` (i32) replaces `auto_continue` (bool) in `[behavior]` section
-- [ ] Default value is `-1` (infinite, preserving current behavior)
-- [ ] Runtime state tracks `current_iteration` and `total_iterations`
-- [ ] Pressing `s` reads config, sets `total_iterations`, sets `current_iteration = 1`, starts
-- [ ] Infinite mode (`total_iterations < 0`): always auto-continues when specs remain
-- [ ] Countdown mode: auto-continues only if `current_iteration < total_iterations`
-- [ ] Iteration counter increments on each auto-continue
-- [ ] UI displays `current/total` (e.g., `2/5`) near session ID with `──` separator
-- [ ] Infinite mode displays `∞` for total (e.g., `3/∞`)
-- [ ] Stopped state displays `─`
-- [ ] Config value of `0` prevents any iteration from starting
+- [x] Config field `iterations` (i32) replaces `auto_continue` (bool) in `[behavior]` section
+- [x] Default value is `-1` (infinite, preserving current behavior)
+- [x] Runtime state tracks `current_iteration` and `total_iterations`
+- [x] Pressing `s` reads config, sets `total_iterations`, sets `current_iteration = 1`, starts
+- [x] Infinite mode (`total_iterations < 0`): always auto-continues when specs remain
+- [x] Countdown mode: auto-continues only if `current_iteration < total_iterations`
+- [x] Iteration counter increments on each auto-continue
+- [x] UI displays `current/total` (e.g., `2/5`) near session ID with `──` separator
+- [x] Infinite mode displays `∞` for total (e.g., `3/∞`)
+- [x] Stopped state displays `─`
+- [x] Config value of `0` prevents any iteration from starting
 
 ### Technical Constraints
 
@@ -56,11 +56,11 @@ The config modal shows an iterations field instead of the On/Off toggle. User ca
 
 ### Acceptance Criteria
 
-- [ ] Config modal replaces Auto-continue toggle with Iterations number input
-- [ ] Field accepts integers from -1 to any reasonable positive number
-- [ ] Value `-1` displays as `∞` in the modal
-- [ ] Left/right arrows or typing changes the value
-- [ ] Validation prevents values below -1
+- [x] Config modal replaces Auto-continue toggle with Iterations number input
+- [x] Field accepts integers from -1 to any reasonable positive number
+- [x] Value `-1` displays as `∞` in the modal
+- [x] Left/right arrows or typing changes the value
+- [x] Validation prevents values below -1
 
 ### Technical Constraints
 
