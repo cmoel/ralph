@@ -33,6 +33,7 @@ Single source of truth for specification status.
 | [iteration-control](iteration-control.md) | Done | Configurable iteration count replacing boolean auto-continue | auto-continue, config-modal-auto-continue |
 | [output-panel-enhancements](output-panel-enhancements.md) | Done | Todo display, cumulative tokens, per-exchange tokens | formatted-output-display, status-panel |
 | [output-panel-layout-refactor](output-panel-layout-refactor.md) | Done | Move iteration/tokens to bottom title, clean up command panel | output-panel-enhancements |
+| [tasks-panel](tasks-panel.md) | Ready | Dedicated panel for task list with collapse/expand and panel selection | output-panel-enhancements, configuration |
 
 ## Notes
 
