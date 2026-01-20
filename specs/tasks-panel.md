@@ -20,14 +20,14 @@ Task changes are logged for history preservation (since they no longer appear in
 
 ### Acceptance Criteria
 
-- [ ] Three-panel vertical layout: Output (flexible) → Tasks (dynamic, max height) → Command (fixed 3 lines)
-- [ ] Tasks stored in `App` state (e.g., `Vec<TodoItem>`) instead of appending to `output_lines`
-- [ ] `TodoWrite` events update the stored tasks (replace, not append)
-- [ ] Tasks panel renders current tasks with status indicators
-- [ ] Panel scrolls when tasks exceed max height
-- [ ] Panel collapses to single title line (`━━━ Tasks ━━━`) when no tasks
-- [ ] Panel clears and collapses when session stops
-- [ ] Task changes logged at info level (task count, status summary)
+- [x] Three-panel vertical layout: Output (flexible) → Tasks (dynamic, max height) → Command (fixed 3 lines)
+- [x] Tasks stored in `App` state (e.g., `Vec<TodoItem>`) instead of appending to `output_lines`
+- [x] `TodoWrite` events update the stored tasks (replace, not append)
+- [x] Tasks panel renders current tasks with status indicators
+- [x] Panel scrolls when tasks exceed max height
+- [x] Panel collapses to single title line (`━━━ Tasks ━━━`) when no tasks
+- [x] Panel clears and collapses when session stops
+- [x] Task changes logged at info level (task count, status summary)
 
 ### Technical Constraints
 
@@ -56,24 +56,24 @@ On app launch, the Main panel is selected by default. Selection state is not per
 
 ### Acceptance Criteria
 
-- [ ] `Tab` key toggles focus between Main and Tasks panels
-- [ ] Visual indicator shows which panel is selected (e.g., brighter border color or different style)
-- [ ] `j`/`k`, arrow keys scroll the selected panel
-- [ ] `Ctrl+u`/`Ctrl+d` (half page), `Ctrl+b`/`Ctrl+f` (full page) work on selected panel
-- [ ] Mouse wheel scrolls the selected panel
-- [ ] Main panel selected by default on launch
-- [ ] Selection state stored in `App` (e.g., `selected_panel: Panel` enum)
+- [x] `Tab` key toggles focus between Main and Tasks panels
+- [x] Visual indicator shows which panel is selected (e.g., brighter border color or different style)
+- [x] `j`/`k`, arrow keys scroll the selected panel
+- [x] `Ctrl+u`/`Ctrl+d` (half page), `Ctrl+b`/`Ctrl+f` (full page) work on selected panel
+- [x] Mouse wheel scrolls the selected panel
+- [x] Main panel selected by default on launch
+- [x] Selection state stored in `App` (e.g., `selected_panel: Panel` enum)
 
 ### Technical Constraints
 
-- Add `Panel` enum (e.g., `Main`, `Tasks`) to represent selectable panels
-- Each panel needs its own `scroll_offset` and potentially `is_auto_following` state
-- Refactor scroll handling to operate on the selected panel's state
+- [x] Add `Panel` enum (e.g., `Main`, `Tasks`) to represent selectable panels
+- [x] Each panel needs its own `scroll_offset` and potentially `is_auto_following` state
+- [x] Refactor scroll handling to operate on the selected panel's state
 
 ### Error Cases
 
-- Tab when Tasks panel is collapsed: Still toggles selection (panel can be selected while collapsed)
-- Scrolling Tasks panel when no tasks: No-op (nothing to scroll)
+- [x] Tab when Tasks panel is collapsed: Still toggles selection (panel can be selected while collapsed)
+- [x] Scrolling Tasks panel when no tasks: No-op (nothing to scroll)
 
 ---
 
@@ -89,21 +89,21 @@ Manual collapse state is remembered until tasks are cleared (session stops).
 
 ### Acceptance Criteria
 
-- [ ] `t` key toggles Tasks panel between collapsed and expanded
-- [ ] Collapsed state with tasks shows: `━━━ Tasks [3/7] ━━━`
-- [ ] Count format: `[completed/total]` where in-progress counts toward total but not completed
-- [ ] Manual collapse state tracked in `App` (e.g., `tasks_panel_collapsed: bool`)
-- [ ] Collapse state resets to auto-managed when tasks clear
+- [x] `t` key toggles Tasks panel between collapsed and expanded
+- [x] Collapsed state with tasks shows: `━━━ Tasks [3/7] ━━━`
+- [x] Count format: `[completed/total]` where in-progress counts toward total but not completed
+- [x] Manual collapse state tracked in `App` (e.g., `tasks_panel_collapsed: bool`)
+- [x] Collapse state resets to auto-managed when tasks clear
 
 ### Technical Constraints
 
-- `t` key only affects Tasks panel (not a panel selection toggle)
-- Count calculation: `completed = tasks.filter(status == Completed).count()`, `total = tasks.len()`
+- [x] `t` key only affects Tasks panel (not a panel selection toggle)
+- [x] Count calculation: `completed = tasks.filter(status == Completed).count()`, `total = tasks.len()`
 
 ### Error Cases
 
-- `t` when no tasks: No-op (panel already collapsed, nothing to toggle)
-- All tasks completed then new tasks arrive: Respect current collapse state
+- [x] `t` when no tasks: No-op (panel already collapsed, nothing to toggle)
+- [x] All tasks completed then new tasks arrive: Respect current collapse state
 
 ---
 
@@ -119,21 +119,21 @@ The setting appears in the config modal as a toggle.
 
 ### Acceptance Criteria
 
-- [ ] `auto_expand_tasks_panel` added to TOML config (default: `true`)
-- [ ] Setting respected when `TodoWrite` event received with non-empty tasks
-- [ ] Config modal includes toggle for this setting
-- [ ] Manual `t` toggle works regardless of this setting
+- [x] `auto_expand_tasks_panel` added to TOML config (default: `true`)
+- [x] Setting respected when `TodoWrite` event received with non-empty tasks
+- [x] Config modal includes toggle for this setting
+- [x] Manual `t` toggle works regardless of this setting
 
 ### Technical Constraints
 
-- Add field to `Config` struct in config handling code
-- Follow existing config modal patterns for boolean toggles
-- Default to `true` for backwards-compatible behavior (tasks visible by default)
+- [x] Add field to `Config` struct in config handling code
+- [x] Follow existing config modal patterns for boolean toggles
+- [x] Default to `true` for backwards-compatible behavior (tasks visible by default)
 
 ### Error Cases
 
-- Config file missing this field: Default to `true`
-- Setting changed while tasks visible: No immediate effect (applies to next task arrival)
+- [x] Config file missing this field: Default to `true`
+- [x] Setting changed while tasks visible: No immediate effect (applies to next task arrival)
 
 ---
 

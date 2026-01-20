@@ -81,6 +81,10 @@ pub struct BehaviorConfig {
     /// - Zero (0): Stopped mode, pressing 's' has no effect
     /// - Positive (N): Runs exactly N iterations then stops
     pub iterations: i32,
+    /// Whether to auto-expand the tasks panel when tasks arrive.
+    /// When true, receiving tasks expands the panel.
+    /// When false, the panel stays collapsed and shows the count.
+    pub auto_expand_tasks_panel: bool,
     /// Legacy field - converted to iterations on load.
     /// `true` becomes `-1` (infinite), `false` becomes `0` (stopped).
     #[serde(skip_serializing, default)]
@@ -90,7 +94,8 @@ pub struct BehaviorConfig {
 impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
-            iterations: -1, // Infinite mode by default
+            iterations: -1,                // Infinite mode by default
+            auto_expand_tasks_panel: true, // Auto-expand by default for backwards compatibility
             auto_continue: None,
         }
     }

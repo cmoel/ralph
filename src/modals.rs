@@ -26,6 +26,7 @@ pub enum ConfigModalField {
     SpecsDirectory,
     LogLevel,
     Iterations,
+    AutoExpandTasks,
     SaveButton,
     CancelButton,
 }
@@ -37,7 +38,8 @@ impl ConfigModalField {
             Self::PromptFile => Self::SpecsDirectory,
             Self::SpecsDirectory => Self::LogLevel,
             Self::LogLevel => Self::Iterations,
-            Self::Iterations => Self::SaveButton,
+            Self::Iterations => Self::AutoExpandTasks,
+            Self::AutoExpandTasks => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
         }
@@ -50,7 +52,8 @@ impl ConfigModalField {
             Self::SpecsDirectory => Self::PromptFile,
             Self::LogLevel => Self::SpecsDirectory,
             Self::Iterations => Self::LogLevel,
-            Self::SaveButton => Self::Iterations,
+            Self::AutoExpandTasks => Self::Iterations,
+            Self::SaveButton => Self::AutoExpandTasks,
             Self::CancelButton => Self::SaveButton,
         }
     }
@@ -71,6 +74,8 @@ pub struct ConfigModalState {
     pub log_level_index: usize,
     /// Iterations value: -1 for infinite, 0 for stopped, positive for countdown.
     pub iterations: i32,
+    /// Whether to auto-expand the tasks panel when tasks arrive.
+    pub auto_expand_tasks: bool,
     /// Cursor position within the focused text field.
     pub cursor_pos: usize,
     /// Error message to display (e.g., save failed).
@@ -94,6 +99,7 @@ impl ConfigModalState {
             specs_dir: config.paths.specs.clone(),
             log_level_index,
             iterations: config.behavior.iterations,
+            auto_expand_tasks: config.behavior.auto_expand_tasks_panel,
             cursor_pos: config.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -338,7 +344,13 @@ impl ConfigModalState {
             behavior: crate::config::BehaviorConfig::default(),
         };
         config.behavior.iterations = self.iterations;
+        config.behavior.auto_expand_tasks_panel = self.auto_expand_tasks;
         config
+    }
+
+    /// Toggle the auto-expand tasks setting.
+    pub fn toggle_auto_expand_tasks(&mut self) {
+        self.auto_expand_tasks = !self.auto_expand_tasks;
     }
 }
 
@@ -550,12 +562,14 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Left => match state.focus {
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_decrement(),
+            ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             _ => state.cursor_left(),
         },
 
         KeyCode::Right => match state.focus {
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_increment(),
+            ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             _ => state.cursor_right(),
         },
 
@@ -571,6 +585,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Up => match state.focus {
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_increment(),
+            ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
         },
@@ -578,6 +593,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Down => match state.focus {
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_decrement(),
+            ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
         },
@@ -625,6 +641,8 @@ mod tests {
         let field = field.next();
         assert_eq!(field, ConfigModalField::Iterations);
         let field = field.next();
+        assert_eq!(field, ConfigModalField::AutoExpandTasks);
+        let field = field.next();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.next();
         assert_eq!(field, ConfigModalField::CancelButton);
@@ -650,6 +668,8 @@ mod tests {
         assert_eq!(field, ConfigModalField::CancelButton);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::SaveButton);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::AutoExpandTasks);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::Iterations);
         let field = field.prev();
@@ -679,6 +699,7 @@ mod tests {
             ConfigModalField::SpecsDirectory,
             ConfigModalField::LogLevel,
             ConfigModalField::Iterations,
+            ConfigModalField::AutoExpandTasks,
             ConfigModalField::SaveButton,
             ConfigModalField::CancelButton,
         ];

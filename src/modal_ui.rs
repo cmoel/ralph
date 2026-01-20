@@ -12,8 +12,8 @@ use crate::ui::centered_rect;
 /// Draw the configuration modal.
 pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let modal_width = 70;
-    // Increased height to accommodate validation error lines
-    let modal_height = 24;
+    // Increased height to accommodate validation error lines and auto-expand toggle
+    let modal_height = 25;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -98,30 +98,41 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let focused_label_style = Style::default().fg(Color::Cyan);
 
     // Get values from state or config
-    let (claude_path, prompt_file, specs_dir, log_level, iterations, cursor_pos, focus, has_errors) =
-        if let Some(s) = state {
-            (
-                s.claude_path.as_str(),
-                s.prompt_file.as_str(),
-                s.specs_dir.as_str(),
-                s.selected_log_level(),
-                s.iterations,
-                s.cursor_pos,
-                Some(s.focus),
-                s.has_validation_errors(),
-            )
-        } else {
-            (
-                app.config.claude.path.as_str(),
-                app.config.paths.prompt.as_str(),
-                app.config.paths.specs.as_str(),
-                app.config.logging.level.as_str(),
-                app.config.behavior.iterations,
-                0,
-                None,
-                false,
-            )
-        };
+    let (
+        claude_path,
+        prompt_file,
+        specs_dir,
+        log_level,
+        iterations,
+        auto_expand_tasks,
+        cursor_pos,
+        focus,
+        has_errors,
+    ) = if let Some(s) = state {
+        (
+            s.claude_path.as_str(),
+            s.prompt_file.as_str(),
+            s.specs_dir.as_str(),
+            s.selected_log_level(),
+            s.iterations,
+            s.auto_expand_tasks,
+            s.cursor_pos,
+            Some(s.focus),
+            s.has_validation_errors(),
+        )
+    } else {
+        (
+            app.config.claude.path.as_str(),
+            app.config.paths.prompt.as_str(),
+            app.config.paths.specs.as_str(),
+            app.config.logging.level.as_str(),
+            app.config.behavior.iterations,
+            app.config.behavior.auto_expand_tasks_panel,
+            0,
+            None,
+            false,
+        )
+    };
 
     // Helper to get validation error for a field
     let get_field_error = |field: ConfigModalField| -> Option<&str> {
@@ -246,6 +257,29 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     content.push(Line::from(vec![
         Span::styled("  Iterations:      ", iter_label_style),
         Span::styled(iter_display, iter_value_style),
+    ]));
+
+    // Auto-expand tasks toggle
+    let auto_expand_focused = focus == Some(ConfigModalField::AutoExpandTasks);
+    let auto_expand_label_style = if auto_expand_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let auto_expand_value = if auto_expand_tasks { "ON" } else { "OFF" };
+    let auto_expand_display = if auto_expand_focused {
+        format!("< {} >", auto_expand_value)
+    } else {
+        auto_expand_value.to_string()
+    };
+    let auto_expand_value_style = if auto_expand_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    content.push(Line::from(vec![
+        Span::styled("  Auto-expand tasks: ", auto_expand_label_style),
+        Span::styled(auto_expand_display, auto_expand_value_style),
     ]));
 
     content.push(Line::from(""));

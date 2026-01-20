@@ -10,14 +10,14 @@ mod specs;
 mod ui;
 mod validators;
 
-use crate::app::{App, AppStatus, ContentBlockState};
+use crate::app::{App, AppStatus, ContentBlockState, SelectedPanel};
 use crate::config::LoadedConfig;
 use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
 use crate::modals::{
     ConfigModalState, SpecsPanelState, handle_config_modal_input, handle_specs_panel_input,
 };
 use crate::ui::{
-    ExchangeType, draw_ui, format_todo_block, format_tool_summary, format_usage_summary,
+    ExchangeType, draw_ui, format_tool_summary, format_usage_summary, parse_todos_from_json,
 };
 
 use std::io::{self, BufRead, BufReader};
@@ -44,6 +44,34 @@ use tracing::{debug, info, trace, warn};
 /// Message types for output processing.
 pub enum OutputMessage {
     Line(String),
+}
+
+/// Direction for scroll operations.
+enum ScrollDirection {
+    Up,
+    Down,
+}
+
+/// Scroll the currently selected panel.
+fn scroll_selected_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
+    match app.selected_panel {
+        SelectedPanel::Main => match direction {
+            ScrollDirection::Up => app.scroll_up(amount),
+            ScrollDirection::Down => app.scroll_down(amount),
+        },
+        SelectedPanel::Tasks => match direction {
+            ScrollDirection::Up => app.scroll_tasks_up(amount),
+            ScrollDirection::Down => app.scroll_tasks_down(amount),
+        },
+    }
+}
+
+/// Get the height of the currently selected panel.
+fn get_selected_pane_height(app: &App) -> u16 {
+    match app.selected_panel {
+        SelectedPanel::Main => app.main_pane_height,
+        SelectedPanel::Tasks => app.tasks_pane_height,
+    }
 }
 
 /// Get the modification time of a file, or None if it can't be determined.
@@ -209,34 +237,44 @@ fn run_app(
                         app.specs_panel_state =
                             Some(SpecsPanelState::new(&app.config.specs_path()));
                     }
+                    KeyCode::Tab => {
+                        // Toggle between Main and Tasks panels
+                        app.selected_panel = app.selected_panel.toggle();
+                    }
+                    KeyCode::Char('t') => {
+                        // Toggle tasks panel collapsed state
+                        app.toggle_tasks_panel_collapsed();
+                    }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        app.scroll_up(1);
+                        scroll_selected_panel(&mut app, ScrollDirection::Up, 1);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        app.scroll_down(1);
+                        scroll_selected_panel(&mut app, ScrollDirection::Down, 1);
                     }
                     KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let half_page = app.main_pane_height / 2;
-                        app.scroll_up(half_page);
+                        let half_page = get_selected_pane_height(&app) / 2;
+                        scroll_selected_panel(&mut app, ScrollDirection::Up, half_page);
                     }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let half_page = app.main_pane_height / 2;
-                        app.scroll_down(half_page);
+                        let half_page = get_selected_pane_height(&app) / 2;
+                        scroll_selected_panel(&mut app, ScrollDirection::Down, half_page);
                     }
                     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.scroll_up(app.main_pane_height);
+                        let full_page = get_selected_pane_height(&app);
+                        scroll_selected_panel(&mut app, ScrollDirection::Up, full_page);
                     }
                     KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.scroll_down(app.main_pane_height);
+                        let full_page = get_selected_pane_height(&app);
+                        scroll_selected_panel(&mut app, ScrollDirection::Down, full_page);
                     }
                     _ => {}
                 },
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollUp => {
-                        app.scroll_up(3);
+                        scroll_selected_panel(&mut app, ScrollDirection::Up, 3);
                     }
                     MouseEventKind::ScrollDown => {
-                        app.scroll_down(3);
+                        scroll_selected_panel(&mut app, ScrollDirection::Down, 3);
                     }
                     _ => {}
                 },
@@ -558,11 +596,21 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             {
                 // Track the last tool used for exchange categorization
                 app.last_tool_used = Some(tool_name.clone());
-                // Special handling for TodoWrite to show task block
+                // Special handling for TodoWrite to update tasks panel
                 if tool_name == "TodoWrite" {
-                    let block = format_todo_block(&state.input_json);
-                    for line in block.lines() {
-                        app.add_line(line.to_string());
+                    match parse_todos_from_json(&state.input_json) {
+                        Ok(tasks) => {
+                            if tasks.is_empty() {
+                                // Empty todos array clears the panel
+                                app.clear_tasks();
+                            } else {
+                                app.update_tasks(tasks);
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to parse TodoWrite input");
+                            // Preserve existing tasks on parse failure
+                        }
                     }
                 } else {
                     let summary = format_tool_summary(tool_name, &state.input_json);
