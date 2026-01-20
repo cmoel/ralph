@@ -2,6 +2,10 @@
 name = "ralph"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/cmoel/ralph"
+homepage = "https://github.com/cmoel/ralph"
+description = "TUI wrapper for claude CLI that displays formatted streaming output"
 
 [dependencies]
 anyhow = "1.0.100"

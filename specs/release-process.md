@@ -16,19 +16,19 @@ Developer workflow:
 
 ### Acceptance Criteria
 
-- [ ] LICENSE file exists with MIT license text
-- [ ] Cargo.toml has metadata: `license`, `repository`, `description`, `homepage`
-- [ ] Workflow triggers on tags matching `v[0-9]+.[0-9]+.[0-9]+`
-- [ ] Workflow fails if tag version doesn't match Cargo.toml version
-- [ ] Draft GitHub release is created with tag name as title
-- [ ] Binaries built for 4 native targets:
-  - [ ] macOS Intel (`x86_64-apple-darwin`)
-  - [ ] macOS Apple Silicon (`aarch64-apple-darwin`)
-  - [ ] Linux x86_64 (`x86_64-unknown-linux-musl`)
-  - [ ] Windows x86_64 (`x86_64-pc-windows-msvc`)
-- [ ] Archives uploaded: `.tar.gz` for Unix, `.zip` for Windows
-- [ ] SHA256 checksum file uploaded for each archive
-- [ ] Archive naming: `ralph-{version}-{target}.tar.gz` (or `.zip`)
+- [x] LICENSE file exists with MIT license text
+- [x] Cargo.toml has metadata: `license`, `repository`, `description`, `homepage`
+- [x] Workflow triggers on tags matching `v[0-9]+.[0-9]+.[0-9]+`
+- [x] Workflow fails if tag version doesn't match Cargo.toml version
+- [x] Draft GitHub release is created with tag name as title
+- [x] Binaries built for 4 native targets:
+  - [x] macOS Intel (`x86_64-apple-darwin`)
+  - [x] macOS Apple Silicon (`aarch64-apple-darwin`)
+  - [x] Linux x86_64 (`x86_64-unknown-linux-musl`)
+  - [x] Windows x86_64 (`x86_64-pc-windows-msvc`)
+- [x] Archives uploaded: `.tar.gz` for Unix, `.zip` for Windows
+- [x] SHA256 checksum file uploaded for each archive
+- [x] Archive naming: `ralph-{version}-{target}.tar.gz` (or `.zip`)
 
 ### Technical Constraints
 
