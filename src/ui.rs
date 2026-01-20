@@ -228,21 +228,6 @@ fn parse_todo_item(todo: &serde_json::Value) -> TodoItem {
     }
 }
 
-/// Formats a number with thousands separators (e.g., 7371 -> "7,371").
-pub fn format_with_thousands(n: u64) -> String {
-    let s = n.to_string();
-    let chars: Vec<char> = s.chars().collect();
-    let mut result = String::new();
-
-    for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (chars.len() - i).is_multiple_of(3) {
-            result.push(',');
-        }
-        result.push(*c);
-    }
-    result
-}
-
 /// Exchange type for categorizing what triggered this exchange.
 #[derive(Debug)]
 pub enum ExchangeType {
@@ -282,11 +267,11 @@ pub fn format_usage_summary(
     let tokens_str = if let Some(usage) = &result.usage {
         let input = usage
             .input_tokens
-            .map(format_with_thousands)
+            .map(|n| n.to_string())
             .unwrap_or_else(|| "—".to_string());
         let output = usage
             .output_tokens
-            .map(format_with_thousands)
+            .map(|n| n.to_string())
             .unwrap_or_else(|| "—".to_string());
         format!("{} in / {} out", input, output)
     } else {
@@ -356,26 +341,46 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         content.push(Line::raw(&app.current_line));
     }
 
-    // Build iteration progress display
+    // Build iteration progress display for bottom title
     let iteration_display = if app.current_iteration == 0 {
-        // Not running or stopped
-        "─".to_string()
+        None
     } else if app.total_iterations < 0 {
         // Infinite mode
-        format!("{}/∞", app.current_iteration)
+        Some(format!("{}/∞", app.current_iteration))
     } else {
         // Countdown mode
-        format!("{}/{}", app.current_iteration, app.total_iterations)
+        Some(format!(
+            "{}/{}",
+            app.current_iteration, app.total_iterations
+        ))
     };
 
+    // Build tokens display for bottom title
+    let tokens_display = if app.cumulative_tokens > 0 {
+        Some(format!("{} tokens", app.cumulative_tokens))
+    } else {
+        None
+    };
+
+    // Top title: session ID (left), spec name (right)
     let mut output_block = Block::default()
         .borders(Borders::ALL)
         .border_type(app.status.border_type())
         .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count)))
-        .title(Line::from(format!(" {} ── {} ", app.session_id, iteration_display)).left_aligned());
+        .title(Line::from(format!(" {} ", app.session_id)).left_aligned());
 
     if let Some(spec) = &app.current_spec {
         output_block = output_block.title(Line::from(format!(" {} ", spec)).right_aligned());
+    }
+
+    // Bottom title: iteration count (left), cumulative tokens (right)
+    // Only add bottom title if there's content to show
+    if let Some(iter) = &iteration_display {
+        output_block = output_block.title_bottom(Line::from(format!(" {} ", iter)).left_aligned());
+    }
+    if let Some(tokens) = &tokens_display {
+        output_block =
+            output_block.title_bottom(Line::from(format!(" {} ", tokens)).right_aligned());
     }
 
     let output_panel = Paragraph::new(content)
@@ -430,25 +435,15 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     };
     let status_color = app.status.pulsing_color(app.frame_count);
 
-    // Cumulative tokens display
-    let tokens_text = if app.cumulative_tokens > 0 {
-        format!("{} tokens  ", format_with_thousands(app.cumulative_tokens))
-    } else {
-        String::new()
-    };
-
-    // Calculate spacing to right-align the status indicator (with tokens)
-    // Total width minus borders (2), shortcuts length, tokens length, status indicator length
+    // Calculate spacing to right-align the status indicator
     let inner_width = chunks[1].width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
-    let tokens_len = tokens_text.len();
     let shortcuts_len = shortcuts.len();
-    let spacing = inner_width.saturating_sub(shortcuts_len + tokens_len + status_len);
+    let spacing = inner_width.saturating_sub(shortcuts_len + status_len);
 
     let command_line = Line::from(vec![
         Span::styled(shortcuts, Style::default().fg(Color::DarkGray)),
         Span::raw(" ".repeat(spacing)),
-        Span::styled(&tokens_text, Style::default().fg(Color::DarkGray)),
         Span::styled(status_dot, Style::default().fg(status_color)),
         Span::styled(status_text, Style::default().fg(status_color)),
     ]);
@@ -563,41 +558,5 @@ mod tests {
         assert_eq!(truncate_str("hello", 2), "...");
         assert_eq!(truncate_str("hello", 3), "...");
         assert_eq!(truncate_str("hello", 4), "h...");
-    }
-
-    // format_with_thousands tests
-
-    #[test]
-    fn test_format_with_thousands_zero() {
-        assert_eq!(format_with_thousands(0), "0");
-    }
-
-    #[test]
-    fn test_format_with_thousands_small() {
-        assert_eq!(format_with_thousands(1), "1");
-        assert_eq!(format_with_thousands(12), "12");
-        assert_eq!(format_with_thousands(123), "123");
-        assert_eq!(format_with_thousands(999), "999");
-    }
-
-    #[test]
-    fn test_format_with_thousands_thousands() {
-        assert_eq!(format_with_thousands(1000), "1,000");
-        assert_eq!(format_with_thousands(1234), "1,234");
-        assert_eq!(format_with_thousands(7371), "7,371");
-        assert_eq!(format_with_thousands(12345), "12,345");
-        assert_eq!(format_with_thousands(123456), "123,456");
-    }
-
-    #[test]
-    fn test_format_with_thousands_millions() {
-        assert_eq!(format_with_thousands(1000000), "1,000,000");
-        assert_eq!(format_with_thousands(1234567), "1,234,567");
-        assert_eq!(format_with_thousands(123456789), "123,456,789");
-    }
-
-    #[test]
-    fn test_format_with_thousands_billions() {
-        assert_eq!(format_with_thousands(1000000000), "1,000,000,000");
     }
 }

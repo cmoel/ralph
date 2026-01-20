@@ -41,14 +41,14 @@ The command panel shows only keyboard shortcuts and status indicator — no toke
 
 ## Acceptance Criteria
 
-- [ ] Top title shows session ID (left) and spec name (right) — no iteration count
-- [ ] Bottom title shows iteration count (left) when `current_iteration > 0`
-- [ ] Bottom title shows cumulative tokens (right) when `cumulative_tokens > 0`
-- [ ] Token format is raw number: `12510 tokens` (no thousands separator)
-- [ ] Bottom title content appears only when there's content (no empty spaces)
-- [ ] Command panel no longer displays tokens or iteration count
-- [ ] Remove `format_with_thousands` function from `ui.rs`
-- [ ] Iteration format unchanged: `1/5` or `2/∞`
+- [x] Top title shows session ID (left) and spec name (right) — no iteration count
+- [x] Bottom title shows iteration count (left) when `current_iteration > 0`
+- [x] Bottom title shows cumulative tokens (right) when `cumulative_tokens > 0`
+- [x] Token format is raw number: `12510 tokens` (no thousands separator)
+- [x] Bottom title content appears only when there's content (no empty spaces)
+- [x] Command panel no longer displays tokens or iteration count
+- [x] Remove `format_with_thousands` function from `ui.rs`
+- [x] Iteration format unchanged: `1/5` or `2/∞`
 
 ## Technical Constraints
 
