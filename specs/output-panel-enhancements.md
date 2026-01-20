@@ -19,12 +19,12 @@ Example display:
 
 ### Acceptance Criteria
 
-- [ ] Parse TodoWrite tool input JSON to extract todos array
-- [ ] Display in_progress tasks with `▶` prefix using `activeForm` text
-- [ ] Display pending tasks with `○` prefix using `content` text
-- [ ] Display completed tasks with `✓` prefix using `content` text
-- [ ] Each TodoWrite call adds a new block to the scroll (not replacing previous)
-- [ ] Block has visual separator (━━━ Tasks ━━━) to stand out from other output
+- [x] Parse TodoWrite tool input JSON to extract todos array
+- [x] Display in_progress tasks with `▶` prefix using `activeForm` text
+- [x] Display pending tasks with `○` prefix using `content` text
+- [x] Display completed tasks with `✓` prefix using `content` text
+- [x] Each TodoWrite call adds a new block to the scroll (not replacing previous)
+- [x] Block has visual separator (━━━ Tasks ━━━) to stand out from other output
 
 ### Technical Constraints
 
@@ -46,10 +46,10 @@ The status panel displays cumulative token usage for the session, updated after 
 
 ### Acceptance Criteria
 
-- [ ] Track cumulative input + output tokens across all exchanges in the session
-- [ ] Display total in status panel as `{total} tokens`
-- [ ] Update after each `result` event is received
-- [ ] Persists across the session (resets only on new session)
+- [x] Track cumulative input + output tokens across all exchanges in the session
+- [x] Display total in status panel as `{total} tokens`
+- [x] Update after each `result` event is received
+- [x] Persists across the session (resets only on new session)
 
 ### Technical Constraints
 
@@ -77,13 +77,13 @@ Cost: $0.05 | Duration: 2.3s
 
 ### Acceptance Criteria
 
-- [ ] Display exchange number (incrementing counter)
-- [ ] Categorize exchange type based on preceding events:
+- [x] Display exchange number (incrementing counter)
+- [x] Categorize exchange type based on preceding events:
   - "initial prompt" for first exchange
   - "after {tool_name}" when following a tool use
   - "continuation" for other cases
-- [ ] Show input and output tokens separately: `{in} in / {out} out`
-- [ ] Include in existing usage summary block
+- [x] Show input and output tokens separately: `{in} in / {out} out`
+- [x] Include in existing usage summary block
 
 ### Technical Constraints
 

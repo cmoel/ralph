@@ -16,7 +16,9 @@ use crate::events::{ClaudeEvent, ContentBlock, Delta, StreamInnerEvent};
 use crate::modals::{
     ConfigModalState, SpecsPanelState, handle_config_modal_input, handle_specs_panel_input,
 };
-use crate::ui::{draw_ui, format_tool_summary, format_usage_summary};
+use crate::ui::{
+    ExchangeType, draw_ui, format_todo_block, format_tool_summary, format_usage_summary,
+};
 
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
@@ -482,8 +484,24 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
         }
         ClaudeEvent::Result(result) => {
             debug!(?result, "Result event");
-            // Display usage summary
-            let summary = format_usage_summary(&result);
+            // Increment exchange counter
+            app.exchange_count += 1;
+            // Accumulate tokens for session total
+            if let Some(usage) = &result.usage {
+                let input = usage.input_tokens.unwrap_or(0);
+                let output = usage.output_tokens.unwrap_or(0);
+                app.cumulative_tokens += input + output;
+            }
+            // Determine exchange type
+            let exchange_type = if app.exchange_count == 1 {
+                ExchangeType::InitialPrompt
+            } else if let Some(tool_name) = app.last_tool_used.take() {
+                ExchangeType::AfterTool(tool_name)
+            } else {
+                ExchangeType::Continuation
+            };
+            // Display usage summary with exchange info
+            let summary = format_usage_summary(&result, app.exchange_count, exchange_type);
             for line in summary.lines() {
                 app.add_line(line.to_string());
             }
@@ -538,8 +556,18 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             if let Some(state) = app.content_blocks.get(&stop.index)
                 && let Some(tool_name) = &state.tool_name
             {
-                let summary = format_tool_summary(tool_name, &state.input_json);
-                app.add_line(summary);
+                // Track the last tool used for exchange categorization
+                app.last_tool_used = Some(tool_name.clone());
+                // Special handling for TodoWrite to show task block
+                if tool_name == "TodoWrite" {
+                    let block = format_todo_block(&state.input_json);
+                    for line in block.lines() {
+                        app.add_line(line.to_string());
+                    }
+                } else {
+                    let summary = format_tool_summary(tool_name, &state.input_json);
+                    app.add_line(summary);
+                }
             }
         }
         StreamInnerEvent::MessageDelta(delta) => {

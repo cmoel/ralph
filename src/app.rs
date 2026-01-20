@@ -124,6 +124,12 @@ pub struct App {
     /// - Zero (0): Stopped mode (shouldn't start)
     /// - Positive (N): Countdown mode, runs N iterations
     pub total_iterations: i32,
+    /// Cumulative token count (input + output) across all exchanges in the session.
+    pub cumulative_tokens: u64,
+    /// Exchange counter within the current session (incremented on each Result event).
+    pub exchange_count: u32,
+    /// Name of the last tool used (for categorizing exchanges).
+    pub last_tool_used: Option<String>,
 }
 
 impl App {
@@ -170,6 +176,9 @@ impl App {
             specs_panel_state: None,
             current_iteration: 0,
             total_iterations: 0,
+            cumulative_tokens: 0,
+            exchange_count: 0,
+            last_tool_used: None,
         }
     }
 

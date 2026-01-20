@@ -129,6 +129,105 @@ fn format_unknown_tool(input: &serde_json::Value) -> String {
     truncate_str(&json_str, TOOL_INPUT_MAX_LEN)
 }
 
+/// Represents a single todo item parsed from TodoWrite input.
+#[derive(Debug)]
+pub struct TodoItem {
+    pub content: String,
+    pub active_form: String,
+    pub status: TodoStatus,
+}
+
+/// Status of a todo item.
+#[derive(Debug, PartialEq)]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Unknown,
+}
+
+/// Formats a TodoWrite tool invocation as a task block.
+///
+/// Returns a multi-line string with visual separator and status indicators:
+/// - ▶ for in_progress (uses activeForm)
+/// - ○ for pending (uses content)
+/// - ✓ for completed (uses content)
+/// - ? for unknown status
+pub fn format_todo_block(input_json: &str) -> String {
+    let input: serde_json::Value = match serde_json::from_str(input_json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to parse TodoWrite input");
+            return "[Tool: TodoWrite] (parse error)".to_string();
+        }
+    };
+
+    let todos = match input.get("todos").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => {
+            tracing::warn!("TodoWrite input missing todos array");
+            // Show empty block with just separator
+            return "━━━ Tasks ━━━━━━━━━━━━━━━━━━━━━\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string();
+        }
+    };
+
+    if todos.is_empty() {
+        tracing::warn!("TodoWrite input has empty todos array");
+        return "━━━ Tasks ━━━━━━━━━━━━━━━━━━━━━\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string();
+    }
+
+    let mut lines = vec!["━━━ Tasks ━━━━━━━━━━━━━━━━━━━━━".to_string()];
+
+    for todo in todos {
+        let item = parse_todo_item(todo);
+        let (prefix, text) = match item.status {
+            TodoStatus::InProgress => ("▶", item.active_form),
+            TodoStatus::Pending => ("○", item.content),
+            TodoStatus::Completed => ("✓", item.content),
+            TodoStatus::Unknown => ("?", item.content),
+        };
+        lines.push(format!("{} {}", prefix, text));
+    }
+
+    lines.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".to_string());
+    lines.join("\n")
+}
+
+/// Parse a single todo item from JSON.
+fn parse_todo_item(todo: &serde_json::Value) -> TodoItem {
+    let content = todo
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let active_form = todo
+        .get("activeForm")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| content.clone());
+
+    let status = match todo.get("status").and_then(|v| v.as_str()) {
+        Some("pending") => TodoStatus::Pending,
+        Some("in_progress") => TodoStatus::InProgress,
+        Some("completed") => TodoStatus::Completed,
+        _ => TodoStatus::Unknown,
+    };
+
+    // If content is empty but activeForm exists, use activeForm for content
+    let content = if content.is_empty() && !active_form.is_empty() {
+        active_form.clone()
+    } else {
+        content
+    };
+
+    TodoItem {
+        content,
+        active_form,
+        status,
+    }
+}
+
 /// Formats a number with thousands separators (e.g., 7371 -> "7,371").
 pub fn format_with_thousands(n: u64) -> String {
     let s = n.to_string();
@@ -144,41 +243,83 @@ pub fn format_with_thousands(n: u64) -> String {
     result
 }
 
-/// Formats the usage summary from a Result event.
+/// Exchange type for categorizing what triggered this exchange.
+#[derive(Debug)]
+pub enum ExchangeType {
+    InitialPrompt,
+    AfterTool(String),
+    Continuation,
+}
+
+impl std::fmt::Display for ExchangeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExchangeType::InitialPrompt => write!(f, "initial prompt"),
+            ExchangeType::AfterTool(name) => write!(f, "after {}", name),
+            ExchangeType::Continuation => write!(f, "continuation"),
+        }
+    }
+}
+
+/// Formats the usage summary from a Result event with exchange information.
 ///
-/// Returns a two-line string: a separator line followed by the summary.
-/// Example: "───────────────────────────────────\nCost: $0.05 | Tokens: 7,371 in / 9 out | Duration: 2.3s"
-pub fn format_usage_summary(result: &crate::events::ResultEvent) -> String {
+/// Returns a multi-line string: a separator line, exchange info, and the summary.
+/// Example:
+/// ```text
+/// ───────────────────────────────────
+/// Exchange 1 (initial prompt): 7,371 in / 892 out
+/// Cost: $0.05 | Duration: 2.3s
+/// ───────────────────────────────────
+/// ```
+pub fn format_usage_summary(
+    result: &crate::events::ResultEvent,
+    exchange_num: u32,
+    exchange_type: ExchangeType,
+) -> String {
+    let separator = "─".repeat(35);
+
+    // Format exchange header with tokens
+    let tokens_str = if let Some(usage) = &result.usage {
+        let input = usage
+            .input_tokens
+            .map(format_with_thousands)
+            .unwrap_or_else(|| "—".to_string());
+        let output = usage
+            .output_tokens
+            .map(format_with_thousands)
+            .unwrap_or_else(|| "—".to_string());
+        format!("{} in / {} out", input, output)
+    } else {
+        "— in / — out".to_string()
+    };
+
+    let exchange_line = format!(
+        "Exchange {} ({}): {}",
+        exchange_num, exchange_type, tokens_str
+    );
+
+    // Format additional metrics
     let mut parts = Vec::new();
 
-    // Format cost
     if let Some(cost) = result.total_cost_usd {
         parts.push(format!("Cost: ${:.2}", cost));
     }
 
-    // Format tokens
-    if let Some(usage) = &result.usage {
-        let input = usage
-            .input_tokens
-            .map(format_with_thousands)
-            .unwrap_or_else(|| "?".to_string());
-        let output = usage
-            .output_tokens
-            .map(format_with_thousands)
-            .unwrap_or_else(|| "?".to_string());
-        parts.push(format!("Tokens: {} in / {} out", input, output));
-    }
-
-    // Format duration
     if let Some(duration_ms) = result.duration_ms {
         let seconds = duration_ms as f64 / 1000.0;
         parts.push(format!("Duration: {:.1}s", seconds));
     }
 
-    // Build the summary line
-    let separator = "─".repeat(35);
-    let summary = parts.join(" | ");
-    format!("{}\n{}", separator, summary)
+    // Build the summary
+    if parts.is_empty() {
+        format!("{}\n{}\n{}", separator, exchange_line, separator)
+    } else {
+        let metrics = parts.join(" | ");
+        format!(
+            "{}\n{}\n{}\n{}",
+            separator, exchange_line, metrics, separator
+        )
+    }
 }
 
 /// Calculate a centered rectangle within the given area.
@@ -289,16 +430,25 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     };
     let status_color = app.status.pulsing_color(app.frame_count);
 
-    // Calculate spacing to right-align the status indicator
-    // Total width minus borders (2), shortcuts length, status indicator length
+    // Cumulative tokens display
+    let tokens_text = if app.cumulative_tokens > 0 {
+        format!("{} tokens  ", format_with_thousands(app.cumulative_tokens))
+    } else {
+        String::new()
+    };
+
+    // Calculate spacing to right-align the status indicator (with tokens)
+    // Total width minus borders (2), shortcuts length, tokens length, status indicator length
     let inner_width = chunks[1].width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
+    let tokens_len = tokens_text.len();
     let shortcuts_len = shortcuts.len();
-    let spacing = inner_width.saturating_sub(shortcuts_len + status_len);
+    let spacing = inner_width.saturating_sub(shortcuts_len + tokens_len + status_len);
 
     let command_line = Line::from(vec![
         Span::styled(shortcuts, Style::default().fg(Color::DarkGray)),
         Span::raw(" ".repeat(spacing)),
+        Span::styled(&tokens_text, Style::default().fg(Color::DarkGray)),
         Span::styled(status_dot, Style::default().fg(status_color)),
         Span::styled(status_text, Style::default().fg(status_color)),
     ]);
