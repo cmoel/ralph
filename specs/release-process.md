@@ -67,9 +67,9 @@ Same workflow as Slice 1. Releases now include ARM binaries for Linux and Window
 
 ### Acceptance Criteria
 
-- [ ] Linux arm64 binary built (`aarch64-unknown-linux-musl`)
-- [ ] Windows arm64 binary built (`aarch64-pc-windows-msvc`)
-- [ ] Both archives and checksums uploaded to release
+- [x] Linux arm64 binary built (`aarch64-unknown-linux-musl`)
+- [x] Windows arm64 binary built (`aarch64-pc-windows-msvc`)
+- [x] Both archives and checksums uploaded to release
 
 ### Technical Constraints
 

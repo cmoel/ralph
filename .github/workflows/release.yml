@@ -10,6 +10,7 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
 
 jobs:
   create-release:
@@ -37,7 +38,7 @@ jobs:
 
       - name: Create draft release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME"
 
   build-release:
@@ -54,8 +55,13 @@ jobs:
             os: macos-14
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
 
     steps:
       - name: Checkout
@@ -66,16 +72,32 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install musl-tools (Linux)
+      - name: Install musl-tools (Linux x86_64)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Build
+      - name: Install cross (Linux ARM64)
+        if: matrix.cross
+        run: cargo install cross --version 0.2.5
+
+      - name: Build (native)
+        if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Unix native)
+        if: runner.os != 'Windows' && !matrix.cross
         run: strip target/${{ matrix.target }}/release/ralph
+
+      - name: Strip binary (cross-compiled)
+        if: matrix.cross
+        run: |
+          docker run --rm -v "$PWD/target:/target" \
+            ghcr.io/cross-rs/${{ matrix.target }}:main \
+            aarch64-linux-musl-strip /target/${{ matrix.target }}/release/ralph
 
       - name: Create archive (Unix)
         if: runner.os != 'Windows'
@@ -96,6 +118,7 @@ jobs:
           echo "ARCHIVE=$ARCHIVE" >> $env:GITHUB_ENV
 
       - name: Upload release assets
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" ${{ env.ARCHIVE }} ${{ env.ARCHIVE }}.sha256
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "$ARCHIVE" "$ARCHIVE.sha256"
