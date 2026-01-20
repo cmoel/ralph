@@ -32,6 +32,7 @@ Single source of truth for specification status.
 | [project-readme](project-readme.md) | Done | Root README.md with install, config, and contributing docs | release-process |
 | [iteration-control](iteration-control.md) | Done | Configurable iteration count replacing boolean auto-continue | auto-continue, config-modal-auto-continue |
 | [output-panel-enhancements](output-panel-enhancements.md) | Done | Todo display, cumulative tokens, per-exchange tokens | formatted-output-display, status-panel |
+| [output-panel-layout-refactor](output-panel-layout-refactor.md) | Ready | Move iteration/tokens to bottom title, clean up command panel | output-panel-enhancements |
 
 ## Notes
 
