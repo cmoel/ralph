@@ -12,24 +12,26 @@ Developers visiting the GitHub repo can:
 
 ## Acceptance Criteria
 
-- [ ] README.md exists in repo root
-- [ ] One-line description explains what ralph is
+- [x] README.md exists in repo root
+- [x] One-line description explains what ralph is
 - [ ] GIF shows ralph in action (streaming output, tool summaries)
-- [ ] Installation section covers:
-  - [ ] Download from GitHub releases (link to releases page)
-  - [ ] Build from source (`cargo build --release`)
-- [ ] Usage section explains:
-  - [ ] How to run ralph
-  - [ ] What ralph expects (PROMPT.md, specs directory)
-- [ ] Configuration section documents:
-  - [ ] Config file location (platform-specific)
-  - [ ] Key options: `claude.path`, `paths.prompt`, `paths.specs`, `behavior.auto_continue`
-  - [ ] Environment variable overrides
-  - [ ] Points to config file for full options
-- [ ] Contributing section includes:
-  - [ ] devbox commands (`build`, `test`, `check`, `fmt`)
-  - [ ] Link to specs directory for feature development
-- [ ] License section states MIT
+- [x] Installation section covers:
+  - [x] Download from GitHub releases (link to releases page)
+  - [x] Build from source (`cargo build --release`)
+- [x] Usage section explains:
+  - [x] How to run ralph
+  - [x] What ralph expects (PROMPT.md, specs directory)
+- [x] Configuration section documents:
+  - [x] Config file location (platform-specific)
+  - [x] Key options: `claude.path`, `paths.prompt`, `paths.specs`, `behavior.iterations`
+  - [x] Environment variable overrides
+  - [x] Points to config file for full options
+- [x] Contributing section includes:
+  - [x] devbox commands (`build`, `test`, `check`, `fmt`)
+  - [x] Link to specs directory for feature development
+- [x] License section states MIT
+
+Note: GIF placeholder created at `assets/demo.gif`. Actual recording requires manual creation with vhs or asciinema.
 
 ## Technical Constraints
 
