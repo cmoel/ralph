@@ -9,6 +9,7 @@ mod modals;
 mod specs;
 mod ui;
 mod validators;
+mod wake_lock;
 
 use crate::app::{App, AppStatus, ContentBlockState, SelectedPanel};
 use crate::config::LoadedConfig;
@@ -338,6 +339,24 @@ fn start_command(app: &mut App) -> Result<()> {
         Ok(mut child) => {
             // Log command_spawned with PID
             debug!(pid = child.id(), "command_spawned");
+
+            // Attempt to acquire wake lock (prevents system idle sleep)
+            let wake_lock = if app.config.behavior.keep_awake {
+                match wake_lock::acquire() {
+                    Some(lock) => Some(lock),
+                    None => {
+                        // Wake lock failed - display warning in output panel
+                        app.add_line(
+                            "⚠ Warning: Could not acquire wake lock - system may sleep during execution"
+                                .to_string(),
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            app.wake_lock = wake_lock;
 
             let (tx, rx) = mpsc::channel();
 

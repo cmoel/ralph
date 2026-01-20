@@ -18,6 +18,7 @@ use crate::logging::ReloadHandle;
 use crate::modals::{ConfigModalState, SpecsPanelState};
 use crate::specs::{SpecsRemaining, check_specs_remaining, detect_current_spec};
 use crate::ui::{TodoItem, TodoStatus};
+use crate::wake_lock::WakeLock;
 use crate::{OutputMessage, get_file_mtime, logging};
 
 /// Application status states.
@@ -161,6 +162,8 @@ pub struct App {
     pub selected_panel: SelectedPanel,
     /// Whether the tasks panel is manually collapsed.
     pub tasks_panel_collapsed: bool,
+    /// Wake lock to prevent system idle sleep while running.
+    pub wake_lock: Option<WakeLock>,
 }
 
 impl App {
@@ -215,6 +218,7 @@ impl App {
             tasks_pane_height: 0,
             selected_panel: SelectedPanel::default(),
             tasks_panel_collapsed: false,
+            wake_lock: None,
         }
     }
 
@@ -397,6 +401,8 @@ impl App {
         self.output_receiver = None;
         self.current_spec = None;
         self.run_start_time = None;
+        // Release wake lock when process ends (drop releases it)
+        self.wake_lock = None;
 
         // Determine next state based on exit code and iteration control
         match exit_code {

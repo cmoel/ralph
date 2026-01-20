@@ -85,6 +85,10 @@ pub struct BehaviorConfig {
     /// When true, receiving tasks expands the panel.
     /// When false, the panel stays collapsed and shows the count.
     pub auto_expand_tasks_panel: bool,
+    /// Whether to acquire a wake lock to prevent system idle sleep.
+    /// When true, the system won't sleep while claude is running.
+    /// Display may still sleep. Default: true.
+    pub keep_awake: bool,
     /// Legacy field - converted to iterations on load.
     /// `true` becomes `-1` (infinite), `false` becomes `0` (stopped).
     #[serde(skip_serializing, default)]
@@ -96,6 +100,7 @@ impl Default for BehaviorConfig {
         Self {
             iterations: -1,                // Infinite mode by default
             auto_expand_tasks_panel: true, // Auto-expand by default for backwards compatibility
+            keep_awake: true,              // Prevent system sleep by default
             auto_continue: None,
         }
     }
@@ -540,5 +545,22 @@ auto_continue = true
         config.normalize();
         // After normalize, legacy auto_continue=true becomes -1 (infinite)
         assert_eq!(config.behavior.iterations, -1);
+    }
+
+    #[test]
+    fn test_keep_awake_default() {
+        let config = Config::default();
+        assert!(config.behavior.keep_awake); // Default: true
+    }
+
+    #[test]
+    fn test_keep_awake_explicit() {
+        let toml_str = r#"
+[behavior]
+keep_awake = false
+"#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.behavior.keep_awake);
     }
 }

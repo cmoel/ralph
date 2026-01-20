@@ -18,18 +18,18 @@ The command continues running regardless of wake lock success.
 
 ### Acceptance Criteria
 
-- [ ] Add `keepawake` crate dependency
-- [ ] Create `src/wake_lock.rs` module with `WakeLock` struct
-- [ ] `WakeLock::new()` returns `Result<Self, Error>` wrapping `keepawake::Builder`
-- [ ] Configure keepawake with `idle(true)` only (display can sleep)
-- [ ] Set reason to "Running claude CLI" and app_name to "ralph"
-- [ ] Acquire wake lock in `start_command()` before spawning process
-- [ ] Store `Option<WakeLock>` in `App` struct
-- [ ] Release wake lock when process ends (drop the struct)
-- [ ] On wake lock failure: log warning via tracing
-- [ ] On wake lock failure: display styled warning line in output panel
-- [ ] Warning uses bright/bold styling to stand out
-- [ ] Wake lock works on macOS, Linux, and Windows
+- [x] Add `keepawake` crate dependency
+- [x] Create `src/wake_lock.rs` module with `WakeLock` struct
+- [x] `WakeLock::new()` returns `Result<Self, Error>` wrapping `keepawake::Builder`
+- [x] Configure keepawake with `idle(true)` only (display can sleep)
+- [x] Set reason to "Running claude CLI" and app_name to "ralph"
+- [x] Acquire wake lock in `start_command()` before spawning process
+- [x] Store `Option<WakeLock>` in `App` struct
+- [x] Release wake lock when process ends (drop the struct)
+- [x] On wake lock failure: log warning via tracing
+- [x] On wake lock failure: display styled warning line in output panel
+- [x] Warning uses bright/bold styling to stand out
+- [x] Wake lock works on macOS, Linux, and Windows
 
 ### Technical Constraints
 
@@ -56,11 +56,11 @@ The warning message only appears if keep-awake is enabled AND acquisition fails.
 
 ### Acceptance Criteria
 
-- [ ] Add `keep_awake: bool` field to `Config` struct (default: `true`)
-- [ ] Add toggle to config modal UI
-- [ ] Skip wake lock acquisition when `keep_awake` is `false`
-- [ ] Config change takes effect on next command start (not mid-command)
-- [ ] Document setting in config file comments
+- [x] Add `keep_awake: bool` field to `Config` struct (default: `true`)
+- [x] Add toggle to config modal UI
+- [x] Skip wake lock acquisition when `keep_awake` is `false`
+- [x] Config change takes effect on next command start (not mid-command)
+- [x] Document setting in config file comments
 
 ### Technical Constraints
 

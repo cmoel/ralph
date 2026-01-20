@@ -12,8 +12,8 @@ use crate::ui::centered_rect;
 /// Draw the configuration modal.
 pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let modal_width = 70;
-    // Increased height to accommodate validation error lines and auto-expand toggle
-    let modal_height = 25;
+    // Increased height to accommodate validation error lines and toggle fields
+    let modal_height = 26;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -105,6 +105,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         log_level,
         iterations,
         auto_expand_tasks,
+        keep_awake,
         cursor_pos,
         focus,
         has_errors,
@@ -116,6 +117,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
             s.selected_log_level(),
             s.iterations,
             s.auto_expand_tasks,
+            s.keep_awake,
             s.cursor_pos,
             Some(s.focus),
             s.has_validation_errors(),
@@ -128,6 +130,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
             app.config.logging.level.as_str(),
             app.config.behavior.iterations,
             app.config.behavior.auto_expand_tasks_panel,
+            app.config.behavior.keep_awake,
             0,
             None,
             false,
@@ -280,6 +283,29 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     content.push(Line::from(vec![
         Span::styled("  Auto-expand tasks: ", auto_expand_label_style),
         Span::styled(auto_expand_display, auto_expand_value_style),
+    ]));
+
+    // Keep awake toggle
+    let keep_awake_focused = focus == Some(ConfigModalField::KeepAwake);
+    let keep_awake_label_style = if keep_awake_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let keep_awake_value = if keep_awake { "ON" } else { "OFF" };
+    let keep_awake_display = if keep_awake_focused {
+        format!("< {} >", keep_awake_value)
+    } else {
+        keep_awake_value.to_string()
+    };
+    let keep_awake_value_style = if keep_awake_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    content.push(Line::from(vec![
+        Span::styled("  Keep awake:        ", keep_awake_label_style),
+        Span::styled(keep_awake_display, keep_awake_value_style),
     ]));
 
     content.push(Line::from(""));

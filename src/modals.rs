@@ -27,6 +27,7 @@ pub enum ConfigModalField {
     LogLevel,
     Iterations,
     AutoExpandTasks,
+    KeepAwake,
     SaveButton,
     CancelButton,
 }
@@ -39,7 +40,8 @@ impl ConfigModalField {
             Self::SpecsDirectory => Self::LogLevel,
             Self::LogLevel => Self::Iterations,
             Self::Iterations => Self::AutoExpandTasks,
-            Self::AutoExpandTasks => Self::SaveButton,
+            Self::AutoExpandTasks => Self::KeepAwake,
+            Self::KeepAwake => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
         }
@@ -53,7 +55,8 @@ impl ConfigModalField {
             Self::LogLevel => Self::SpecsDirectory,
             Self::Iterations => Self::LogLevel,
             Self::AutoExpandTasks => Self::Iterations,
-            Self::SaveButton => Self::AutoExpandTasks,
+            Self::KeepAwake => Self::AutoExpandTasks,
+            Self::SaveButton => Self::KeepAwake,
             Self::CancelButton => Self::SaveButton,
         }
     }
@@ -76,6 +79,8 @@ pub struct ConfigModalState {
     pub iterations: i32,
     /// Whether to auto-expand the tasks panel when tasks arrive.
     pub auto_expand_tasks: bool,
+    /// Whether to acquire wake lock to prevent system idle sleep.
+    pub keep_awake: bool,
     /// Cursor position within the focused text field.
     pub cursor_pos: usize,
     /// Error message to display (e.g., save failed).
@@ -100,6 +105,7 @@ impl ConfigModalState {
             log_level_index,
             iterations: config.behavior.iterations,
             auto_expand_tasks: config.behavior.auto_expand_tasks_panel,
+            keep_awake: config.behavior.keep_awake,
             cursor_pos: config.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -345,12 +351,18 @@ impl ConfigModalState {
         };
         config.behavior.iterations = self.iterations;
         config.behavior.auto_expand_tasks_panel = self.auto_expand_tasks;
+        config.behavior.keep_awake = self.keep_awake;
         config
     }
 
     /// Toggle the auto-expand tasks setting.
     pub fn toggle_auto_expand_tasks(&mut self) {
         self.auto_expand_tasks = !self.auto_expand_tasks;
+    }
+
+    /// Toggle the keep-awake setting.
+    pub fn toggle_keep_awake(&mut self) {
+        self.keep_awake = !self.keep_awake;
     }
 }
 
@@ -563,6 +575,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_decrement(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
+            ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             _ => state.cursor_left(),
         },
 
@@ -570,6 +583,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_increment(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
+            ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             _ => state.cursor_right(),
         },
 
@@ -586,6 +600,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_increment(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
+            ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
         },
@@ -594,6 +609,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_decrement(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
+            ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
         },
@@ -643,6 +659,8 @@ mod tests {
         let field = field.next();
         assert_eq!(field, ConfigModalField::AutoExpandTasks);
         let field = field.next();
+        assert_eq!(field, ConfigModalField::KeepAwake);
+        let field = field.next();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.next();
         assert_eq!(field, ConfigModalField::CancelButton);
@@ -668,6 +686,8 @@ mod tests {
         assert_eq!(field, ConfigModalField::CancelButton);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::SaveButton);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::AutoExpandTasks);
         let field = field.prev();
@@ -700,6 +720,7 @@ mod tests {
             ConfigModalField::LogLevel,
             ConfigModalField::Iterations,
             ConfigModalField::AutoExpandTasks,
+            ConfigModalField::KeepAwake,
             ConfigModalField::SaveButton,
             ConfigModalField::CancelButton,
         ];
