@@ -38,7 +38,7 @@ Single source of truth for specification status.
 | [formatted-streaming-output](formatted-streaming-output.md) | Done | Formatted output with tool call/result correlation | formatted-output-display |
 | [project-init](project-init.md) | Done | Initialize project with Ralph scaffolding via `i` key | configuration |
 | [simplified-command-panel](simplified-command-panel.md) | Done | Minimal command panel with color styling and Help modal | ui-overhaul |
-| [task-tool-display](task-tool-display.md) | Ready | Task tool results display extracted text instead of raw JSON | formatted-streaming-output |
+| [task-tool-display](task-tool-display.md) | In Progress | Task tool results display extracted text instead of raw JSON | formatted-streaming-output |
 
 ## Notes
 
