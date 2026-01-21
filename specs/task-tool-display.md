@@ -19,10 +19,10 @@ When Claude spawns a subagent via the Task tool, the user sees a summarized resu
 
 ## Acceptance Criteria
 
-- [ ] Task tool results parse the `[{"text":"..."}]` JSON format
-- [ ] Text from all objects in the array is concatenated
-- [ ] Extracted text displays using existing `format_tool_result_styled` (icon, line/char count, 3-line preview)
-- [ ] Malformed JSON falls back to displaying raw content
+- [x] Task tool results parse the `[{"text":"..."}]` JSON format
+- [x] Text from all objects in the array is concatenated
+- [x] Extracted text displays using existing `format_tool_result_styled` (icon, line/char count, 3-line preview)
+- [x] Malformed JSON falls back to displaying raw content
 
 ## Technical Constraints
 

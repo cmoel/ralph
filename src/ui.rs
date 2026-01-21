@@ -363,6 +363,25 @@ fn parse_todo_item(todo: &serde_json::Value) -> TodoItem {
     }
 }
 
+/// Extract text content from Task tool results.
+/// Task results are JSON arrays of objects with "text" fields: `[{"text":"..."},...]`
+/// Returns the concatenated text from all objects, or None if parsing fails.
+pub fn extract_text_from_task_result(content: &str) -> Option<String> {
+    let items: serde_json::Value = serde_json::from_str(content).ok()?;
+    let array = items.as_array()?;
+
+    let texts: Vec<&str> = array
+        .iter()
+        .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
+        .collect();
+
+    if texts.is_empty() {
+        return None;
+    }
+
+    Some(texts.join("\n"))
+}
+
 /// Exchange type for categorizing what triggered this exchange.
 #[derive(Debug)]
 pub enum ExchangeType {
@@ -935,5 +954,56 @@ mod tests {
     fn test_format_no_result_warning() {
         let result = format_no_result_warning();
         assert_eq!(result, "⚠ no result received");
+    }
+
+    // extract_text_from_task_result tests
+
+    #[test]
+    fn test_extract_text_from_task_result_single_item() {
+        let json = r#"[{"text":"Hello world"}]"#;
+        let result = extract_text_from_task_result(json);
+        assert_eq!(result, Some("Hello world".to_string()));
+    }
+
+    #[test]
+    fn test_extract_text_from_task_result_multiple_items() {
+        let json = r#"[{"text":"First"},{"text":"Second"}]"#;
+        let result = extract_text_from_task_result(json);
+        assert_eq!(result, Some("First\nSecond".to_string()));
+    }
+
+    #[test]
+    fn test_extract_text_from_task_result_empty_array() {
+        let json = r#"[]"#;
+        let result = extract_text_from_task_result(json);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_text_from_task_result_invalid_json() {
+        let json = "not valid json";
+        let result = extract_text_from_task_result(json);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_text_from_task_result_not_array() {
+        let json = r#"{"text":"Hello"}"#;
+        let result = extract_text_from_task_result(json);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_text_from_task_result_missing_text_field() {
+        let json = r#"[{"other":"value"}]"#;
+        let result = extract_text_from_task_result(json);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_text_from_task_result_skips_items_without_text() {
+        let json = r#"[{"text":"First"},{"other":"skip"},{"text":"Third"}]"#;
+        let result = extract_text_from_task_result(json);
+        assert_eq!(result, Some("First\nThird".to_string()));
     }
 }

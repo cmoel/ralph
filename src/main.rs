@@ -22,9 +22,9 @@ use crate::modals::{
     handle_init_modal_input, handle_specs_panel_input,
 };
 use crate::ui::{
-    ExchangeType, draw_ui, format_assistant_header_styled, format_no_result_warning_styled,
-    format_tool_result_styled, format_tool_summary_styled, format_usage_summary,
-    parse_todos_from_json,
+    ExchangeType, draw_ui, extract_text_from_task_result, format_assistant_header_styled,
+    format_no_result_warning_styled, format_tool_result_styled, format_tool_summary_styled,
+    format_usage_summary, parse_todos_from_json,
 };
 
 use std::io::{self, BufRead, BufReader};
@@ -603,6 +603,13 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
                                 Some(ToolResultContent::Text(s)) => s,
                                 Some(ToolResultContent::Structured(v)) => v.to_string(),
                                 None => String::new(),
+                            };
+
+                            // For Task tool results, extract text from JSON array format
+                            let content_str = if tool_name == "Task" {
+                                extract_text_from_task_result(&content_str).unwrap_or(content_str)
+                            } else {
+                                content_str
                             };
 
                             // Check for pending tool call to correlate with
