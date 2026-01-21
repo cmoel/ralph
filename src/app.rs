@@ -156,6 +156,8 @@ pub struct App {
     pub show_init_modal: bool,
     /// State for the init modal (when open).
     pub init_modal_state: Option<InitModalState>,
+    /// Whether the help modal is visible.
+    pub show_help_modal: bool,
     /// Current iteration number within a run (1-indexed, 0 when stopped).
     pub current_iteration: u32,
     /// Total iterations configured for the current run:
@@ -233,6 +235,7 @@ impl App {
             specs_panel_state: None,
             show_init_modal: false,
             init_modal_state: None,
+            show_help_modal: false,
             current_iteration: 0,
             total_iterations: 0,
             cumulative_tokens: 0,

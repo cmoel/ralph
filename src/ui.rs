@@ -11,7 +11,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, AppStatus, SelectedPanel};
-use crate::modal_ui::{draw_config_modal, draw_init_modal, draw_specs_panel};
+use crate::modal_ui::{draw_config_modal, draw_help_modal, draw_init_modal, draw_specs_panel};
 
 /// Maximum length for truncated tool input display.
 pub const TOOL_INPUT_MAX_LEN: usize = 60;
@@ -582,10 +582,12 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     draw_tasks_panel(f, app, chunks[1]);
 
     // === Command Panel ===
-    let shortcuts = match app.status {
-        AppStatus::Error => "[i] Init  [l] Specs  [q] Quit",
-        AppStatus::Stopped => "[s] Start  [c] Config  [i] Init  [l] Specs  [q] Quit",
-        AppStatus::Running => "[s] Stop  [l] Specs  [q] Quit",
+    let key_style = Style::default().fg(Color::Cyan);
+    let label_style = Style::default().fg(Color::DarkGray);
+
+    let start_stop_label = match app.status {
+        AppStatus::Running => "Stop",
+        _ => "Start",
     };
 
     let status_dot = "● ";
@@ -608,17 +610,27 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     };
     let status_color = app.status.pulsing_color(app.frame_count);
 
+    // Build command spans: "s Start  q Quit  ? Help"
+    let command_spans = vec![
+        Span::styled("s", key_style),
+        Span::styled(format!(" {}  ", start_stop_label), label_style),
+        Span::styled("q", key_style),
+        Span::styled(" Quit  ", label_style),
+        Span::styled("?", key_style),
+        Span::styled(" Help", label_style),
+    ];
+
+    let commands_len: usize = command_spans.iter().map(|s| s.content.len()).sum();
     let inner_width = chunks[2].width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
-    let shortcuts_len = shortcuts.len();
-    let spacing = inner_width.saturating_sub(shortcuts_len + status_len);
+    let spacing = inner_width.saturating_sub(commands_len + status_len);
 
-    let command_line = Line::from(vec![
-        Span::styled(shortcuts, Style::default().fg(Color::DarkGray)),
-        Span::raw(" ".repeat(spacing)),
-        Span::styled(status_dot, Style::default().fg(status_color)),
-        Span::styled(status_text, Style::default().fg(status_color)),
-    ]);
+    let mut line_spans = command_spans;
+    line_spans.push(Span::raw(" ".repeat(spacing)));
+    line_spans.push(Span::styled(status_dot, Style::default().fg(status_color)));
+    line_spans.push(Span::styled(status_text, Style::default().fg(status_color)));
+
+    let command_line = Line::from(line_spans);
 
     let command_panel = Paragraph::new(command_line).block(
         Block::default()
@@ -657,6 +669,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Init modal
     if app.show_init_modal {
         draw_init_modal(f, app);
+    }
+
+    // Help modal
+    if app.show_help_modal {
+        draw_help_modal(f, app);
     }
 }
 

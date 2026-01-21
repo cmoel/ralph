@@ -23,12 +23,12 @@ The right side of the command panel continues to show the status indicator (dot 
 
 ### Acceptance Criteria
 
-- [ ] Command panel shows only three commands: `s`, `q`, `?`
-- [ ] Keys are styled in bright accent color (choose a vibrant color like Cyan, Yellow, or Magenta)
-- [ ] Labels are styled in dim gray (`Color::DarkGray`)
-- [ ] `s` label toggles between "Start" and "Stop" based on `AppStatus`
-- [ ] Status indicator (right side) remains unchanged
-- [ ] Removed commands from display: `c` (Config), `i` (Init), `l` (Specs)
+- [x] Command panel shows only three commands: `s`, `q`, `?`
+- [x] Keys are styled in bright accent color (choose a vibrant color like Cyan, Yellow, or Magenta)
+- [x] Labels are styled in dim gray (`Color::DarkGray`)
+- [x] `s` label toggles between "Start" and "Stop" based on `AppStatus`
+- [x] Status indicator (right side) remains unchanged
+- [x] Removed commands from display: `c` (Config), `i` (Init), `l` (Specs)
 
 ### Technical Constraints
 
@@ -80,18 +80,18 @@ Pressing `?` again or `Esc` closes the modal.
 
 ### Acceptance Criteria
 
-- [ ] `?` key opens Help modal from any state (not inside another modal)
-- [ ] `?` key closes Help modal when open (toggle behavior)
-- [ ] `Esc` closes Help modal
-- [ ] Modal is centered and compact (sized to fit content)
-- [ ] Commands organized into three categories: Control, Panels, Scroll
-- [ ] Keys styled in bright accent color (same as command panel)
-- [ ] Descriptions styled in dim gray
-- [ ] Category headers visually distinct (bold or different color)
-- [ ] Footer shows "? or Esc to close" right-aligned
-- [ ] `c` (Config) works while running
-- [ ] `i` (Init) works while running
-- [ ] `l` (Specs) already works in all states — no change needed
+- [x] `?` key opens Help modal from any state (not inside another modal)
+- [x] `?` key closes Help modal when open (toggle behavior)
+- [x] `Esc` closes Help modal
+- [x] Modal is centered and compact (sized to fit content)
+- [x] Commands organized into three categories: Control, Panels, Scroll
+- [x] Keys styled in bright accent color (same as command panel)
+- [x] Descriptions styled in dim gray
+- [x] Category headers visually distinct (bold or different color)
+- [x] Footer shows "? or Esc to close" right-aligned
+- [x] `c` (Config) works while running
+- [x] `i` (Init) works while running
+- [x] `l` (Specs) already works in all states — no change needed
 
 ### Technical Constraints
 

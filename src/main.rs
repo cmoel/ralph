@@ -227,6 +227,16 @@ fn run_app(
                 continue;
             }
 
+            // Handle help modal input
+            if app.show_help_modal {
+                if let Event::Key(key) = event
+                    && (key.code == KeyCode::Esc || key.code == KeyCode::Char('?'))
+                {
+                    app.show_help_modal = false;
+                }
+                continue;
+            }
+
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
@@ -247,12 +257,9 @@ fn run_app(
                         AppStatus::Error => {}
                     },
                     KeyCode::Char('c') => {
-                        // Only allow config modal when not running
-                        if app.status != AppStatus::Running {
-                            app.show_config_modal = true;
-                            app.config_modal_state =
-                                Some(ConfigModalState::from_config(&app.config));
-                        }
+                        // Open config modal
+                        app.show_config_modal = true;
+                        app.config_modal_state = Some(ConfigModalState::from_config(&app.config));
                     }
                     KeyCode::Char('l') => {
                         // Open specs panel (available in all states)
@@ -261,11 +268,13 @@ fn run_app(
                             Some(SpecsPanelState::new(&app.config.specs_path()));
                     }
                     KeyCode::Char('i') => {
-                        // Open init modal (only when not running)
-                        if app.status != AppStatus::Running {
-                            app.show_init_modal = true;
-                            app.init_modal_state = Some(InitModalState::new(&app.config));
-                        }
+                        // Open init modal
+                        app.show_init_modal = true;
+                        app.init_modal_state = Some(InitModalState::new(&app.config));
+                    }
+                    KeyCode::Char('?') => {
+                        // Open help modal
+                        app.show_help_modal = true;
                     }
                     KeyCode::Tab => {
                         // Toggle between Main and Tasks panels
