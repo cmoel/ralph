@@ -36,6 +36,7 @@ Single source of truth for specification status.
 | [tasks-panel](tasks-panel.md) | Done | Dedicated panel for task list with collapse/expand and panel selection | output-panel-enhancements, configuration |
 | [keep-awake](keep-awake.md) | Done | Prevent system sleep while claude is running | configuration |
 | [formatted-streaming-output](formatted-streaming-output.md) | Done | Formatted output with tool call/result correlation | formatted-output-display |
+| [project-init](project-init.md) | Ready | Initialize project with Ralph scaffolding via `i` key | configuration |
 
 ## Notes
 
