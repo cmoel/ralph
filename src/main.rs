@@ -7,6 +7,7 @@ mod logging;
 mod modal_ui;
 mod modals;
 mod specs;
+mod templates;
 mod ui;
 mod validators;
 mod wake_lock;
@@ -17,7 +18,8 @@ use crate::events::{
     ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
 };
 use crate::modals::{
-    ConfigModalState, SpecsPanelState, handle_config_modal_input, handle_specs_panel_input,
+    ConfigModalState, InitModalState, SpecsPanelState, handle_config_modal_input,
+    handle_init_modal_input, handle_specs_panel_input,
 };
 use crate::ui::{
     ExchangeType, draw_ui, format_assistant_header_styled, format_no_result_warning_styled,
@@ -217,6 +219,14 @@ fn run_app(
                 continue;
             }
 
+            // Handle init modal input
+            if app.show_init_modal {
+                if let Event::Key(key) = event {
+                    handle_init_modal_input(&mut app, key.code);
+                }
+                continue;
+            }
+
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
@@ -249,6 +259,13 @@ fn run_app(
                         app.show_specs_panel = true;
                         app.specs_panel_state =
                             Some(SpecsPanelState::new(&app.config.specs_path()));
+                    }
+                    KeyCode::Char('i') => {
+                        // Open init modal (only when not running)
+                        if app.status != AppStatus::Running {
+                            app.show_init_modal = true;
+                            app.init_modal_state = Some(InitModalState::new(&app.config));
+                        }
                     }
                     KeyCode::Tab => {
                         // Toggle between Main and Tasks panels

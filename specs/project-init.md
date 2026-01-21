@@ -21,11 +21,11 @@ User can press Escape or click Cancel to dismiss.
 
 ### Acceptance Criteria
 
-- [ ] `i` key opens init modal (only when not running)
-- [ ] Modal displays list of 4 files with their full paths
-- [ ] Each file shows ✓ or ✗ based on existence check
-- [ ] Escape or Cancel closes modal
-- [ ] Add `i` to command panel shortcuts hint
+- [x] `i` key opens init modal (only when not running)
+- [x] Modal displays list of 4 files with their full paths
+- [x] Each file shows ✓ or ✗ based on existence check
+- [x] Escape or Cancel closes modal
+- [x] Add `i` to command panel shortcuts hint
 
 ### Technical Constraints
 
@@ -62,12 +62,12 @@ After success, modal closes automatically.
 
 ### Acceptance Criteria
 
-- [ ] "Initialize" button visible when no conflicts
-- [ ] Enter key triggers Initialize when button focused
-- [ ] Creates parent directories if needed (e.g., `.claude/commands/`)
-- [ ] Creates all 4 files with correct content
-- [ ] Shows success message briefly before closing
-- [ ] Files use config paths (not hardcoded)
+- [x] "Initialize" button visible when no conflicts
+- [x] Enter key triggers Initialize when button focused
+- [x] Creates parent directories if needed (e.g., `.claude/commands/`)
+- [x] Creates all 4 files with correct content
+- [x] Shows success message briefly before closing
+- [x] Files use config paths (not hardcoded)
 
 ### Technical Constraints
 
@@ -107,12 +107,12 @@ User can only Cancel/Escape to dismiss.
 
 ### Acceptance Criteria
 
-- [ ] Warning panel shown when any file has conflict status
-- [ ] Lists only the conflicting files
-- [ ] Suggests renaming or updating config
-- [ ] Mentions `c` key to open config
-- [ ] No Initialize button when conflicts exist
-- [ ] Non-conflicting files still show with ✓
+- [x] Warning panel shown when any file has conflict status
+- [x] Lists only the conflicting files
+- [x] Suggests renaming or updating config
+- [x] Mentions `c` key to open config
+- [x] No Initialize button when conflicts exist
+- [x] Non-conflicting files still show with ✓
 
 ### Technical Constraints
 

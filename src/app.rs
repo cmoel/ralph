@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 use crate::config::reload_config;
 use crate::config::{Config, LoadedConfig};
 use crate::logging::ReloadHandle;
-use crate::modals::{ConfigModalState, SpecsPanelState};
+use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState};
 use crate::specs::{SpecsRemaining, check_specs_remaining, detect_current_spec};
 use crate::ui::{TodoItem, TodoStatus};
 use crate::wake_lock::WakeLock;
@@ -152,6 +152,10 @@ pub struct App {
     pub show_specs_panel: bool,
     /// State for the specs panel modal (when open).
     pub specs_panel_state: Option<SpecsPanelState>,
+    /// Whether the init modal is visible.
+    pub show_init_modal: bool,
+    /// State for the init modal (when open).
+    pub init_modal_state: Option<InitModalState>,
     /// Current iteration number within a run (1-indexed, 0 when stopped).
     pub current_iteration: u32,
     /// Total iterations configured for the current run:
@@ -227,6 +231,8 @@ impl App {
             auto_continue_pending: false,
             show_specs_panel: false,
             specs_panel_state: None,
+            show_init_modal: false,
+            init_modal_state: None,
             current_iteration: 0,
             total_iterations: 0,
             cumulative_tokens: 0,

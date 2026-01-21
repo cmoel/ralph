@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::App;
-use crate::modals::ConfigModalField;
+use crate::modals::{ConfigModalField, InitFileStatus, InitModalField};
 use crate::ui::centered_rect;
 
 /// Draw the configuration modal.
@@ -524,6 +524,134 @@ pub fn draw_specs_panel(f: &mut Frame, app: &mut App) {
         Block::default()
             .borders(Borders::ALL)
             .title(" Specs ")
+            .title_alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(Color::White)),
+    );
+
+    f.render_widget(modal, modal_area);
+}
+
+/// Draw the project init modal.
+pub fn draw_init_modal(f: &mut Frame, app: &App) {
+    let modal_width: u16 = 60;
+    let modal_height: u16 = 18;
+    let modal_area = centered_rect(modal_width, modal_height, f.area());
+
+    // Clear the area behind the modal
+    f.render_widget(Clear, modal_area);
+
+    let Some(state) = &app.init_modal_state else {
+        return;
+    };
+
+    let label_style = Style::default().fg(Color::DarkGray);
+    let warning_style = Style::default().fg(Color::Yellow);
+    let has_conflicts = state.has_conflicts();
+
+    let mut content: Vec<Line> = Vec::new();
+
+    // Title/description
+    content.push(Line::from(""));
+    content.push(Line::from(Span::styled(
+        "  Initialize project scaffolding:",
+        label_style,
+    )));
+    content.push(Line::from(""));
+
+    // File list with status indicators
+    for file in &state.files {
+        let (icon, icon_style) = match file.status {
+            InitFileStatus::WillCreate => ("✓", Style::default().fg(Color::Green)),
+            InitFileStatus::Conflict => ("✗", Style::default().fg(Color::Red)),
+        };
+
+        content.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(icon, icon_style),
+            Span::raw(" "),
+            Span::styled(&file.display_path, Style::default().fg(Color::White)),
+        ]));
+    }
+
+    content.push(Line::from(""));
+
+    // Show conflict warning or error/success messages
+    if has_conflicts {
+        // Warning panel for conflicts
+        content.push(Line::from(Span::styled(
+            "  ⚠ Cannot initialize — files already exist:",
+            warning_style,
+        )));
+        for file in state.conflicting_files() {
+            content.push(Line::from(Span::styled(
+                format!("    ✗ {}", file.display_path),
+                warning_style,
+            )));
+        }
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "  Rename them or update config (press `c`).",
+            warning_style,
+        )));
+    } else if let Some(error) = &state.error {
+        content.push(Line::from(Span::styled(
+            format!("  Error: {}", error),
+            Style::default().fg(Color::Red),
+        )));
+    } else if let Some(success) = &state.success {
+        content.push(Line::from(Span::styled(
+            format!("  {}", success),
+            Style::default().fg(Color::Green),
+        )));
+    } else {
+        content.push(Line::from(""));
+    }
+
+    content.push(Line::from(""));
+
+    // Buttons - only show Initialize button when no conflicts
+    let cancel_focused = state.focus == InitModalField::CancelButton;
+
+    if has_conflicts {
+        // Only Cancel button when conflicts exist
+        let cancel_style = if cancel_focused {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        content.push(Line::from(vec![
+            Span::raw("                      "),
+            Span::styled(" Cancel ", cancel_style),
+        ]));
+    } else {
+        // Both buttons when no conflicts
+        let init_focused = state.focus == InitModalField::InitializeButton;
+
+        let init_style = if init_focused {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
+        let cancel_style = if cancel_focused {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        content.push(Line::from(vec![
+            Span::raw("              "),
+            Span::styled(" Initialize ", init_style),
+            Span::raw("    "),
+            Span::styled(" Cancel ", cancel_style),
+        ]));
+    }
+
+    let modal = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Initialize Project ")
             .title_alignment(ratatui::layout::Alignment::Center)
             .style(Style::default().fg(Color::White)),
     );

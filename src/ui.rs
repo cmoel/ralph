@@ -11,7 +11,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, AppStatus, SelectedPanel};
-use crate::modal_ui::{draw_config_modal, draw_specs_panel};
+use crate::modal_ui::{draw_config_modal, draw_init_modal, draw_specs_panel};
 
 /// Maximum length for truncated tool input display.
 pub const TOOL_INPUT_MAX_LEN: usize = 60;
@@ -583,8 +583,8 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
     // === Command Panel ===
     let shortcuts = match app.status {
-        AppStatus::Error => "[l] Specs  [q] Quit",
-        AppStatus::Stopped => "[s] Start  [c] Config  [l] Specs  [q] Quit",
+        AppStatus::Error => "[i] Init  [l] Specs  [q] Quit",
+        AppStatus::Stopped => "[s] Start  [c] Config  [i] Init  [l] Specs  [q] Quit",
         AppStatus::Running => "[s] Stop  [l] Specs  [q] Quit",
     };
 
@@ -652,6 +652,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Specs panel modal
     if app.show_specs_panel {
         draw_specs_panel(f, app);
+    }
+
+    // Init modal
+    if app.show_init_modal {
+        draw_init_modal(f, app);
     }
 }
 

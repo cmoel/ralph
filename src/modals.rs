@@ -11,9 +11,176 @@ use crate::app::App;
 use crate::config::{Config, save_config};
 use crate::get_file_mtime;
 use crate::specs::{SpecStatus, parse_specs_readme};
+use crate::templates;
 use crate::validators::{
     validate_directory_exists, validate_executable_path, validate_file_exists,
 };
+
+/// Status of a file for the init modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitFileStatus {
+    /// File will be created (doesn't exist).
+    WillCreate,
+    /// File already exists (conflict).
+    Conflict,
+}
+
+/// A file entry for the init modal.
+#[derive(Debug, Clone)]
+pub struct InitFileEntry {
+    /// Display path (relative for readability).
+    pub display_path: String,
+    /// Full path for file operations (used in Slice 2: File Creation).
+    #[allow(dead_code)]
+    pub full_path: PathBuf,
+    /// Current status.
+    pub status: InitFileStatus,
+}
+
+/// Which field is focused in the init modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitModalField {
+    InitializeButton,
+    CancelButton,
+}
+
+impl InitModalField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::InitializeButton => Self::CancelButton,
+            Self::CancelButton => Self::InitializeButton,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        self.next() // Only two options, so prev == next
+    }
+}
+
+/// State for the init modal.
+#[derive(Debug, Clone)]
+pub struct InitModalState {
+    /// Files to be initialized with their status.
+    pub files: Vec<InitFileEntry>,
+    /// Current focused field.
+    pub focus: InitModalField,
+    /// Error message to display.
+    pub error: Option<String>,
+    /// Success message to display (briefly before closing).
+    pub success: Option<String>,
+}
+
+impl InitModalState {
+    /// Create a new init modal state by checking file existence.
+    pub fn new(config: &Config) -> Self {
+        let prompt_path = config.prompt_path();
+        let specs_path = config.specs_path();
+
+        // Build list of files to check
+        let files_to_check = vec![
+            (config.paths.prompt.clone(), prompt_path.clone()),
+            (
+                format!("{}/README.md", config.paths.specs),
+                specs_path.join("README.md"),
+            ),
+            (
+                format!("{}/TEMPLATE.md", config.paths.specs),
+                specs_path.join("TEMPLATE.md"),
+            ),
+            (
+                ".claude/commands/ralph-spec.md".to_string(),
+                PathBuf::from(".claude/commands/ralph-spec.md"),
+            ),
+        ];
+
+        let files = files_to_check
+            .into_iter()
+            .map(|(display, full)| {
+                let status = if full.exists() {
+                    InitFileStatus::Conflict
+                } else {
+                    InitFileStatus::WillCreate
+                };
+                InitFileEntry {
+                    display_path: display,
+                    full_path: full,
+                    status,
+                }
+            })
+            .collect();
+
+        Self {
+            files,
+            focus: InitModalField::InitializeButton,
+            error: None,
+            success: None,
+        }
+    }
+
+    /// Check if there are any conflicts.
+    pub fn has_conflicts(&self) -> bool {
+        self.files
+            .iter()
+            .any(|f| f.status == InitFileStatus::Conflict)
+    }
+
+    /// Get list of conflicting files.
+    pub fn conflicting_files(&self) -> Vec<&InitFileEntry> {
+        self.files
+            .iter()
+            .filter(|f| f.status == InitFileStatus::Conflict)
+            .collect()
+    }
+
+    /// Move focus to next field.
+    pub fn focus_next(&mut self) {
+        self.focus = self.focus.next();
+    }
+
+    /// Move focus to previous field.
+    pub fn focus_prev(&mut self) {
+        self.focus = self.focus.prev();
+    }
+
+    /// Create all files. Returns Ok(()) on success, Err(message) on failure.
+    pub fn create_files(&self) -> Result<(), String> {
+        for file in &self.files {
+            // Skip files that already exist (conflicts)
+            if file.status == InitFileStatus::Conflict {
+                continue;
+            }
+
+            // Determine template content based on file path
+            let content =
+                if file.display_path.ends_with("PROMPT.md") || file.display_path == "./PROMPT.md" {
+                    templates::PROMPT_MD
+                } else if file.display_path.ends_with("README.md") {
+                    templates::SPECS_README_MD
+                } else if file.display_path.ends_with("TEMPLATE.md") {
+                    templates::SPECS_TEMPLATE_MD
+                } else if file.display_path.ends_with("ralph-spec.md") {
+                    templates::RALPH_SPEC_MD
+                } else {
+                    return Err(format!("Unknown template for: {}", file.display_path));
+                };
+
+            // Create parent directories if needed
+            if let Some(parent) = file.full_path.parent()
+                && !parent.exists()
+            {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    format!("Failed to create directory {}: {}", parent.display(), e)
+                })?;
+            }
+
+            // Write the file
+            std::fs::write(&file.full_path, content)
+                .map_err(|e| format!("Failed to write {}: {}", file.display_path, e))?;
+        }
+
+        Ok(())
+    }
+}
 
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
@@ -635,6 +802,61 @@ pub fn handle_specs_panel_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Down | KeyCode::Char('j') => {
             state.select_next();
         }
+        _ => {}
+    }
+}
+
+/// Handle keyboard input for the init modal.
+pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
+    let Some(state) = &mut app.init_modal_state else {
+        return;
+    };
+
+    // Clear any previous error when user takes action
+    if state.error.is_some() && key_code != KeyCode::Esc {
+        state.error = None;
+    }
+
+    match key_code {
+        // Navigation between buttons
+        KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+            state.focus_next();
+        }
+        KeyCode::BackTab => {
+            state.focus_prev();
+        }
+
+        // Cancel / close
+        KeyCode::Esc => {
+            app.show_init_modal = false;
+            app.init_modal_state = None;
+        }
+
+        // Enter - context-dependent
+        KeyCode::Enter => match state.focus {
+            InitModalField::InitializeButton => {
+                // Only allow initialize when no conflicts
+                if !state.has_conflicts() {
+                    match state.create_files() {
+                        Ok(()) => {
+                            // Show success message and close modal
+                            debug!("Project initialized successfully");
+                            app.show_init_modal = false;
+                            app.init_modal_state = None;
+                        }
+                        Err(e) => {
+                            // Show error in modal
+                            state.error = Some(e);
+                        }
+                    }
+                }
+            }
+            InitModalField::CancelButton => {
+                app.show_init_modal = false;
+                app.init_modal_state = None;
+            }
+        },
+
         _ => {}
     }
 }
