@@ -37,7 +37,7 @@ Single source of truth for specification status.
 | [keep-awake](keep-awake.md) | Done | Prevent system sleep while claude is running | configuration |
 | [formatted-streaming-output](formatted-streaming-output.md) | Done | Formatted output with tool call/result correlation | formatted-output-display |
 | [project-init](project-init.md) | Done | Initialize project with Ralph scaffolding via `i` key | configuration |
-| [simplified-command-panel](simplified-command-panel.md) | Ready | Minimal command panel with color styling and Help modal | ui-overhaul |
+| [simplified-command-panel](simplified-command-panel.md) | In Progress | Minimal command panel with color styling and Help modal | ui-overhaul |
 
 ## Notes
 
