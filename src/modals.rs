@@ -21,8 +21,8 @@ use crate::validators::{
 pub enum InitFileStatus {
     /// File will be created (doesn't exist).
     WillCreate,
-    /// File already exists (conflict).
-    Conflict,
+    /// File already exists (will be skipped).
+    Exists,
 }
 
 /// A file entry for the init modal.
@@ -97,7 +97,7 @@ impl InitModalState {
             .into_iter()
             .map(|(display, full)| {
                 let status = if full.exists() {
-                    InitFileStatus::Conflict
+                    InitFileStatus::Exists
                 } else {
                     InitFileStatus::WillCreate
                 };
@@ -117,19 +117,27 @@ impl InitModalState {
         }
     }
 
-    /// Check if there are any conflicts.
-    pub fn has_conflicts(&self) -> bool {
+    /// Check if all files already exist (nothing to create).
+    pub fn all_exist(&self) -> bool {
         self.files
             .iter()
-            .any(|f| f.status == InitFileStatus::Conflict)
+            .all(|f| f.status == InitFileStatus::Exists)
     }
 
-    /// Get list of conflicting files.
-    pub fn conflicting_files(&self) -> Vec<&InitFileEntry> {
+    /// Count files that will be created.
+    pub fn create_count(&self) -> usize {
         self.files
             .iter()
-            .filter(|f| f.status == InitFileStatus::Conflict)
-            .collect()
+            .filter(|f| f.status == InitFileStatus::WillCreate)
+            .count()
+    }
+
+    /// Count files that already exist (will be skipped).
+    pub fn skip_count(&self) -> usize {
+        self.files
+            .iter()
+            .filter(|f| f.status == InitFileStatus::Exists)
+            .count()
     }
 
     /// Move focus to next field.
@@ -145,8 +153,8 @@ impl InitModalState {
     /// Create all files. Returns Ok(()) on success, Err(message) on failure.
     pub fn create_files(&self) -> Result<(), String> {
         for file in &self.files {
-            // Skip files that already exist (conflicts)
-            if file.status == InitFileStatus::Conflict {
+            // Skip files that already exist
+            if file.status == InitFileStatus::Exists {
                 continue;
             }
 
@@ -1126,17 +1134,21 @@ pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
         // Enter - context-dependent
         KeyCode::Enter => match state.focus {
             InitModalField::InitializeButton => {
-                // Only allow initialize when no conflicts
-                if !state.has_conflicts() {
+                // Disabled when all files already exist
+                if !state.all_exist() {
+                    let created = state.create_count();
+                    let skipped = state.skip_count();
                     match state.create_files() {
                         Ok(()) => {
-                            // Show success message and close modal
-                            debug!("Project initialized successfully");
+                            debug!("Project initialized: created {created}, skipped {skipped}");
+                            state.success = Some(format!(
+                                "Created {created} files, skipped {skipped} existing"
+                            ));
+                            // Close modal after showing success
                             app.show_init_modal = false;
                             app.init_modal_state = None;
                         }
                         Err(e) => {
-                            // Show error in modal
                             state.error = Some(e);
                         }
                     }

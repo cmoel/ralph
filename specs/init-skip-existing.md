@@ -12,12 +12,12 @@ If all files already exist, the Initialize button is disabled with a message lik
 
 ### Acceptance Criteria
 
-- [ ] Initialize button is shown regardless of whether some files already exist
-- [ ] Existing files display as skipped (not as errors/conflicts)
-- [ ] Pressing Initialize creates only the missing files (existing files are untouched)
-- [ ] After initialization, a summary is shown: e.g., "Created 2 files, skipped 3 existing"
-- [ ] If all files already exist, the Initialize button is disabled with "Nothing to create" messaging
-- [ ] Conflict warning panel is removed
+- [x] Initialize button is shown regardless of whether some files already exist
+- [x] Existing files display as skipped (not as errors/conflicts)
+- [x] Pressing Initialize creates only the missing files (existing files are untouched)
+- [x] After initialization, a summary is shown: e.g., "Created 2 files, skipped 3 existing"
+- [x] If all files already exist, the Initialize button is disabled with "Nothing to create" messaging
+- [x] Conflict warning panel is removed
 
 ### Technical Constraints
 

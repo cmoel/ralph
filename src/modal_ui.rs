@@ -670,8 +670,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
     };
 
     let label_style = Style::default().fg(Color::DarkGray);
-    let warning_style = Style::default().fg(Color::Yellow);
-    let has_conflicts = state.has_conflicts();
+    let all_exist = state.all_exist();
 
     let mut content: Vec<Line> = Vec::new();
 
@@ -685,38 +684,35 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
 
     // File list with status indicators
     for file in &state.files {
-        let (icon, icon_style) = match file.status {
-            InitFileStatus::WillCreate => ("✓", Style::default().fg(Color::Green)),
-            InitFileStatus::Conflict => ("✗", Style::default().fg(Color::Red)),
+        let (icon, icon_style, label) = match file.status {
+            InitFileStatus::WillCreate => ("✓", Style::default().fg(Color::Green), None),
+            InitFileStatus::Exists => (
+                "—",
+                Style::default().fg(Color::DarkGray),
+                Some(" (exists, skipped)"),
+            ),
         };
 
-        content.push(Line::from(vec![
+        let mut spans = vec![
             Span::raw("    "),
             Span::styled(icon, icon_style),
             Span::raw(" "),
             Span::styled(&file.display_path, Style::default().fg(Color::White)),
-        ]));
+        ];
+        if let Some(label) = label {
+            spans.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
+        }
+
+        content.push(Line::from(spans));
     }
 
     content.push(Line::from(""));
 
-    // Show conflict warning or error/success messages
-    if has_conflicts {
-        // Warning panel for conflicts
+    // Show status messages
+    if all_exist {
         content.push(Line::from(Span::styled(
-            "  ⚠ Cannot initialize — files already exist:",
-            warning_style,
-        )));
-        for file in state.conflicting_files() {
-            content.push(Line::from(Span::styled(
-                format!("    ✗ {}", file.display_path),
-                warning_style,
-            )));
-        }
-        content.push(Line::from(""));
-        content.push(Line::from(Span::styled(
-            "  Rename them or update config (press `c`).",
-            warning_style,
+            "  Nothing to create — all files already exist.",
+            label_style,
         )));
     } else if let Some(error) = &state.error {
         content.push(Line::from(Span::styled(
@@ -734,44 +730,30 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
 
     content.push(Line::from(""));
 
-    // Buttons - only show Initialize button when no conflicts
+    // Buttons - Initialize is disabled when all files exist
+    let init_focused = state.focus == InitModalField::InitializeButton;
     let cancel_focused = state.focus == InitModalField::CancelButton;
 
-    if has_conflicts {
-        // Only Cancel button when conflicts exist
-        let cancel_style = if cancel_focused {
-            Style::default().fg(Color::Black).bg(Color::White)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        content.push(Line::from(vec![
-            Span::raw("                      "),
-            Span::styled(" Cancel ", cancel_style),
-        ]));
+    let init_style = if all_exist {
+        Style::default().fg(Color::DarkGray)
+    } else if init_focused {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
     } else {
-        // Both buttons when no conflicts
-        let init_focused = state.focus == InitModalField::InitializeButton;
+        Style::default().fg(Color::Cyan)
+    };
 
-        let init_style = if init_focused {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::Cyan)
-        };
+    let cancel_style = if cancel_focused {
+        Style::default().fg(Color::Black).bg(Color::White)
+    } else {
+        Style::default().fg(Color::White)
+    };
 
-        let cancel_style = if cancel_focused {
-            Style::default().fg(Color::Black).bg(Color::White)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        content.push(Line::from(vec![
-            Span::raw("              "),
-            Span::styled(" Initialize ", init_style),
-            Span::raw("    "),
-            Span::styled(" Cancel ", cancel_style),
-        ]));
-    }
+    content.push(Line::from(vec![
+        Span::raw("              "),
+        Span::styled(" Initialize ", init_style),
+        Span::raw("    "),
+        Span::styled(" Cancel ", cancel_style),
+    ]));
 
     let modal = Paragraph::new(content).block(
         Block::default()
