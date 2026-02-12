@@ -72,12 +72,34 @@ Keep asking until you can articulate the value in one sentence.
 
 This is critical. Break work into **vertical slices**—each slice delivers observable value.
 
+### Specs vs Slices
+
+One conversation might produce **multiple specs**.
+
+- **Spec** = A cohesive feature. "User can do X." Has its own value statement.
+- **Slice** = The smallest unit within a spec that still delivers user value.
+
+**Red flag:** If your "slices" deliver unrelated user value, you probably have multiple specs. Each spec should have a clear "User can do X" statement. Slices within that spec break it into smaller deliverables.
+
 ### What Makes a Good Slice
 
 A vertical slice:
 - Cuts through all layers (not "build API, then UI"—build one thin feature end-to-end)
 - Delivers something the user can see, verify, or benefit from
 - Works independently, even if limited
+- **Is smaller than you think.** One discrete change, not multiple changes bundled together.
+
+### Slice Sizing: Smaller Is Better
+
+**If a slice has "and" in it, it's probably too big.** Break it down.
+
+Bad: "Remove SwiftData and add GRDB"
+Good: Two slices — "Remove SwiftData" then "Add GRDB"
+
+Bad: "Set up database connection and migrations"
+Good: Two slices — "Set up database connection" then "Add migrations infrastructure"
+
+**Each slice = one focused change.** When in doubt, slice thinner.
 
 ### Shape Up Criteria
 
@@ -87,9 +109,9 @@ Use these to prioritize slices:
 - "Without this, the other work wouldn't mean anything"
 - Do core slices first
 
-**Small:** Can this be completed in one agent session?
+**Small:** Can this be completed in one short agent session?
 - If not, slice thinner
-- A few days of work, not weeks
+- Hours of work, not days
 
 **Novel:** Does this reduce uncertainty?
 - Unproven approaches should be validated early
@@ -171,17 +193,17 @@ Only if scope is ambiguous:
 
 ---
 
-## Phase 9: Write the Spec
+## Phase 9: Write the Spec(s)
 
 When the conversation converges:
 
 1. **Summarize** what you're about to write and confirm with the user
-2. **Create** `specs/[name].md` following `specs/TEMPLATE.md`
+2. **Create** `specs/[name].md` for each spec, following `specs/TEMPLATE.md`
 3. **Update** `specs/README.md`:
-   - Add to the table
+   - Add each spec to the table
    - Set status to **Ready**
    - Write one-line summary
-   - List dependencies
+   - List dependencies (specs can depend on other specs)
 
 ## Phase 10: Commit
 
