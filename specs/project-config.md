@@ -63,10 +63,10 @@ When the user presses `i` to initialize a project, ralph creates a `.ralph` file
 
 ### Acceptance Criteria
 
-- [ ] Init file list includes `.ralph` as a new entry
-- [ ] Created `.ralph` contains only a comment header: `# Project-specific Ralph config — edit with config modal (c)\n`
-- [ ] Conflict detection works for `.ralph` (shows existing file with ✗ if it already exists)
-- [ ] After init, ralph detects the new `.ralph` on the next reload poll
+- [x] Init file list includes `.ralph` as a new entry
+- [x] Created `.ralph` contains only a comment header: `# Project-specific Ralph config — edit with config modal (c)\n`
+- [x] Conflict detection works for `.ralph` (shows existing file with ✗ if it already exists)
+- [x] After init, ralph detects the new `.ralph` on the next reload poll
 
 ### Technical Constraints
 

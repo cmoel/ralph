@@ -30,8 +30,7 @@ pub enum InitFileStatus {
 pub struct InitFileEntry {
     /// Display path (relative for readability).
     pub display_path: String,
-    /// Full path for file operations (used in Slice 2: File Creation).
-    #[allow(dead_code)]
+    /// Full path for file operations.
     pub full_path: PathBuf,
     /// Current status.
     pub status: InitFileStatus,
@@ -91,6 +90,7 @@ impl InitModalState {
                 ".claude/commands/ralph-spec.md".to_string(),
                 PathBuf::from(".claude/commands/ralph-spec.md"),
             ),
+            (".ralph".to_string(), PathBuf::from(".ralph")),
         ];
 
         let files = files_to_check
@@ -160,6 +160,8 @@ impl InitModalState {
                     templates::SPECS_TEMPLATE_MD
                 } else if file.display_path.ends_with("ralph-spec.md") {
                     templates::RALPH_SPEC_MD
+                } else if file.display_path == ".ralph" {
+                    templates::RALPH_CONFIG
                 } else {
                     return Err(format!("Unknown template for: {}", file.display_path));
                 };

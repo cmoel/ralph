@@ -151,6 +151,10 @@ How to build it.
 Specs evolve. Agents may update specs as they learn—adding discovered requirements, refining criteria, or documenting blockers.
 "#;
 
+/// Project-specific config file template.
+pub const RALPH_CONFIG: &str =
+    "# Project-specific Ralph config \u{2014} edit with config modal (c)\n";
+
 /// Spec shaping interview command.
 pub const RALPH_SPEC_MD: &str = r#"# Spec Shaping Interview
 
