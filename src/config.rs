@@ -168,45 +168,72 @@ impl Config {
 }
 
 /// Partial Claude CLI configuration for project overrides.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PartialClaudeConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
 
 /// Partial path configuration for project overrides.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PartialPathsConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub specs: Option<String>,
 }
 
 /// Partial logging configuration for project overrides.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PartialLoggingConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
 }
 
 /// Partial behavior configuration for project overrides.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PartialBehaviorConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub iterations: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_expand_tasks_panel: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_awake: Option<bool>,
 }
 
 /// Project-specific configuration where every field is optional.
 /// Parsed from `.ralph` files. Fields that are `None` inherit from the global config.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PartialConfig {
+    #[serde(skip_serializing_if = "is_partial_claude_empty")]
     pub claude: PartialClaudeConfig,
+    #[serde(skip_serializing_if = "is_partial_paths_empty")]
     pub paths: PartialPathsConfig,
+    #[serde(skip_serializing_if = "is_partial_logging_empty")]
     pub logging: PartialLoggingConfig,
+    #[serde(skip_serializing_if = "is_partial_behavior_empty")]
     pub behavior: PartialBehaviorConfig,
+}
+
+fn is_partial_claude_empty(c: &PartialClaudeConfig) -> bool {
+    c.path.is_none()
+}
+
+fn is_partial_paths_empty(p: &PartialPathsConfig) -> bool {
+    p.prompt.is_none() && p.specs.is_none()
+}
+
+fn is_partial_logging_empty(l: &PartialLoggingConfig) -> bool {
+    l.level.is_none()
+}
+
+fn is_partial_behavior_empty(b: &PartialBehaviorConfig) -> bool {
+    b.iterations.is_none() && b.auto_expand_tasks_panel.is_none() && b.keep_awake.is_none()
 }
 
 /// Merge a global config with a project-level partial config.
@@ -285,7 +312,7 @@ pub fn get_project_config_path() -> Option<PathBuf> {
 
 /// Load a project config (.ralph) from the given path.
 /// Returns Ok(PartialConfig) on success, Err(String) on parse/read failure.
-fn load_project_config(path: &PathBuf) -> Result<PartialConfig, String> {
+pub fn load_project_config(path: &PathBuf) -> Result<PartialConfig, String> {
     let contents = fs::read_to_string(path).map_err(|e| {
         warn!(path = ?path, error = %e, "project_config_read_failed");
         format!("Failed to read .ralph: {}", e)
@@ -295,6 +322,21 @@ fn load_project_config(path: &PathBuf) -> Result<PartialConfig, String> {
         warn!(path = ?path, error = %e, "project_config_parse_failed");
         format!("Invalid .ralph: {}", e)
     })
+}
+
+/// Load the global config from file (without project merge or env overrides).
+/// Used to populate the Global tab of the config modal.
+pub fn load_global_config(config_path: &PathBuf) -> Config {
+    match fs::read_to_string(config_path) {
+        Ok(contents) => match toml::from_str::<Config>(&contents) {
+            Ok(mut c) => {
+                c.normalize();
+                c
+            }
+            Err(_) => Config::default(),
+        },
+        Err(_) => Config::default(),
+    }
 }
 
 /// Load configuration from file, environment, and defaults
@@ -420,6 +462,33 @@ pub fn save_config(config: &Config, config_path: &PathBuf) -> Result<(), String>
     })?;
 
     info!(path = ?config_path, "config_saved");
+    Ok(())
+}
+
+/// Save a partial config to the given file path (for .ralph project configs).
+/// Prepends a comment header. Only writes fields that are Some.
+pub fn save_partial_config(partial: &PartialConfig, config_path: &PathBuf) -> Result<(), String> {
+    let toml_content = toml::to_string_pretty(partial).map_err(|e| {
+        warn!(error = %e, "partial_config_save_serialize_failed");
+        format!("Failed to serialize config: {}", e)
+    })?;
+
+    // Prepend comment header, then TOML content (skip if all fields are None)
+    let content = if toml_content.trim().is_empty() {
+        "# Project-specific Ralph config — edit with config modal (c)\n".to_string()
+    } else {
+        format!(
+            "# Project-specific Ralph config — edit with config modal (c)\n\n{}",
+            toml_content
+        )
+    };
+
+    fs::write(config_path, &content).map_err(|e| {
+        warn!(path = ?config_path, error = %e, "partial_config_save_write_failed");
+        format!("Failed to write config: {}", e)
+    })?;
+
+    info!(path = ?config_path, "partial_config_saved");
     Ok(())
 }
 
@@ -868,5 +937,65 @@ iterations = 3
             global.behavior.auto_expand_tasks_panel
         );
         assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
+    }
+
+    #[test]
+    fn test_partial_config_serialize_empty() {
+        let partial = PartialConfig::default();
+        let toml_str = toml::to_string_pretty(&partial).unwrap();
+        // Empty partial config should serialize to empty string (all sections skipped)
+        assert_eq!(toml_str.trim(), "");
+    }
+
+    #[test]
+    fn test_partial_config_serialize_some_fields() {
+        let partial = PartialConfig {
+            paths: PartialPathsConfig {
+                prompt: Some("./custom.md".to_string()),
+                ..Default::default()
+            },
+            behavior: PartialBehaviorConfig {
+                iterations: Some(3),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let toml_str = toml::to_string_pretty(&partial).unwrap();
+        // Should contain only the set fields
+        assert!(toml_str.contains("prompt = \"./custom.md\""));
+        assert!(toml_str.contains("iterations = 3"));
+        // Should not contain unset fields
+        assert!(!toml_str.contains("specs"));
+        assert!(!toml_str.contains("claude"));
+        assert!(!toml_str.contains("keep_awake"));
+    }
+
+    #[test]
+    fn test_partial_config_serialize_roundtrip() {
+        let partial = PartialConfig {
+            claude: PartialClaudeConfig {
+                path: Some("/custom/claude".to_string()),
+            },
+            paths: PartialPathsConfig {
+                prompt: Some("./p.md".to_string()),
+                specs: None,
+            },
+            logging: PartialLoggingConfig { level: None },
+            behavior: PartialBehaviorConfig {
+                iterations: Some(5),
+                auto_expand_tasks_panel: Some(false),
+                keep_awake: None,
+            },
+        };
+        let toml_str = toml::to_string_pretty(&partial).unwrap();
+        let deserialized: PartialConfig = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(deserialized.claude.path, Some("/custom/claude".to_string()));
+        assert_eq!(deserialized.paths.prompt, Some("./p.md".to_string()));
+        assert!(deserialized.paths.specs.is_none());
+        assert!(deserialized.logging.level.is_none());
+        assert_eq!(deserialized.behavior.iterations, Some(5));
+        assert_eq!(deserialized.behavior.auto_expand_tasks_panel, Some(false));
+        assert!(deserialized.behavior.keep_awake.is_none());
     }
 }

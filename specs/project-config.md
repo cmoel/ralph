@@ -94,18 +94,18 @@ In the Project tab, fields that are not set in `.ralph` (inherited from global) 
 
 ### Acceptance Criteria
 
-- [ ] Config modal has a tab bar at the top when `.ralph` exists
-- [ ] Tab bar shows "Project" and "Global" labels
-- [ ] Keyboard navigation: a key (e.g., `[` / `]` or left/right when tab bar is focused) switches tabs
-- [ ] Tab bar visually indicates which tab is active
-- [ ] "Project" tab is selected by default when `.ralph` exists
-- [ ] "Global" tab is the only option when `.ralph` does not exist (no tab bar shown)
-- [ ] Project tab: fields not set in `.ralph` display with a visual distinction (dimmed, placeholder, or similar)
-- [ ] Project tab: editing an inherited field converts it to an explicit project override
-- [ ] Save on Project tab writes only explicitly-set fields to `.ralph` (partial TOML)
-- [ ] Save on Global tab writes to the global config file (full TOML, same as today)
-- [ ] After save, config is re-merged and app state is updated
-- [ ] Tab switching preserves unsaved edits within each tab during the modal session
+- [x] Config modal has a tab bar at the top when `.ralph` exists
+- [x] Tab bar shows "Project" and "Global" labels
+- [x] Keyboard navigation: a key (e.g., `[` / `]` or left/right when tab bar is focused) switches tabs
+- [x] Tab bar visually indicates which tab is active
+- [x] "Project" tab is selected by default when `.ralph` exists
+- [x] "Global" tab is the only option when `.ralph` does not exist (no tab bar shown)
+- [x] Project tab: fields not set in `.ralph` display with a visual distinction (dimmed, placeholder, or similar)
+- [x] Project tab: editing an inherited field converts it to an explicit project override
+- [x] Save on Project tab writes only explicitly-set fields to `.ralph` (partial TOML)
+- [x] Save on Global tab writes to the global config file (full TOML, same as today)
+- [x] After save, config is re-merged and app state is updated
+- [x] Tab switching preserves unsaved edits within each tab during the modal session
 
 ### Technical Constraints
 

@@ -13,7 +13,7 @@ mod validators;
 mod wake_lock;
 
 use crate::app::{App, AppStatus, ContentBlockState, PendingToolCall, SelectedPanel};
-use crate::config::LoadedConfig;
+use crate::config::{LoadedConfig, load_global_config, load_project_config};
 use crate::events::{
     ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
 };
@@ -257,9 +257,27 @@ fn run_app(
                         AppStatus::Error => {}
                     },
                     KeyCode::Char('c') => {
-                        // Open config modal
+                        // Open config modal with project tab if .ralph exists
                         app.show_config_modal = true;
-                        app.config_modal_state = Some(ConfigModalState::from_config(&app.config));
+                        app.config_modal_state = if let Some(ref project_path) =
+                            app.project_config_path
+                        {
+                            let global_config = load_global_config(&app.config_path);
+                            match load_project_config(project_path) {
+                                Ok(partial) => Some(ConfigModalState::from_config_with_project(
+                                    &global_config,
+                                    &partial,
+                                    &app.config,
+                                    project_path.clone(),
+                                )),
+                                Err(_) => {
+                                    // If .ralph can't be parsed, fall back to global-only
+                                    Some(ConfigModalState::from_config(&app.config))
+                                }
+                            }
+                        } else {
+                            Some(ConfigModalState::from_config(&app.config))
+                        };
                     }
                     KeyCode::Char('l') => {
                         // Open specs panel (available in all states)

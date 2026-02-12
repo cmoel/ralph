@@ -1,6 +1,6 @@
 //! Modal dialog state and input handling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use tracing::debug;
 
 use crate::app::App;
-use crate::config::{Config, save_config};
+use crate::config::{Config, PartialConfig, save_config, save_partial_config};
 use crate::get_file_mtime;
 use crate::specs::{SpecStatus, parse_specs_readme};
 use crate::templates;
@@ -187,6 +187,30 @@ impl InitModalState {
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
+/// Which tab is active in the config modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigTab {
+    Project,
+    Global,
+}
+
+/// Per-tab form state storing field values and validation state.
+#[derive(Debug, Clone)]
+pub struct TabFormState {
+    pub claude_path: String,
+    pub prompt_file: String,
+    pub specs_dir: String,
+    pub log_level_index: usize,
+    pub iterations: i32,
+    pub auto_expand_tasks: bool,
+    pub keep_awake: bool,
+    pub cursor_pos: usize,
+    pub error: Option<String>,
+    pub validation_errors: HashMap<ConfigModalField, String>,
+    /// Fields explicitly set in this tab (only meaningful for project tab).
+    pub explicit_fields: HashSet<ConfigModalField>,
+}
+
 /// Which field is focused in the config modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfigModalField {
@@ -236,38 +260,25 @@ impl ConfigModalField {
 pub struct ConfigModalState {
     /// Current focused field.
     pub focus: ConfigModalField,
-    /// Claude CLI path value.
-    pub claude_path: String,
-    /// Prompt file path value.
-    pub prompt_file: String,
-    /// Specs directory path value.
-    pub specs_dir: String,
-    /// Currently selected log level index in LOG_LEVELS.
-    pub log_level_index: usize,
-    /// Iterations value: -1 for infinite, 0 for stopped, positive for countdown.
-    pub iterations: i32,
-    /// Whether to auto-expand the tasks panel when tasks arrive.
-    pub auto_expand_tasks: bool,
-    /// Whether to acquire wake lock to prevent system idle sleep.
-    pub keep_awake: bool,
-    /// Cursor position within the focused text field.
-    pub cursor_pos: usize,
-    /// Error message to display (e.g., save failed).
-    pub error: Option<String>,
-    /// Validation errors per field.
-    pub validation_errors: HashMap<ConfigModalField, String>,
+    /// Active tab (Project or Global). None when no .ralph exists.
+    pub tab: Option<ConfigTab>,
+    /// Project tab form state (only present when .ralph exists).
+    pub project_form: Option<TabFormState>,
+    /// Global tab form state.
+    pub global_form: TabFormState,
+    /// Path to the project config file (.ralph), if it exists.
+    pub project_config_path: Option<PathBuf>,
 }
 
-impl ConfigModalState {
-    /// Create a new modal state initialized from the current config.
-    pub fn from_config(config: &Config) -> Self {
+impl TabFormState {
+    /// Create form state from a Config, with all fields marked as explicit.
+    fn from_config(config: &Config) -> Self {
         let log_level_index = LOG_LEVELS
             .iter()
             .position(|&l| l == config.logging.level)
-            .unwrap_or(2); // Default to "info" (index 2)
+            .unwrap_or(2);
 
         Self {
-            focus: ConfigModalField::ClaudePath,
             claude_path: config.claude.path.clone(),
             prompt_file: config.paths.prompt.clone(),
             specs_dir: config.paths.specs.clone(),
@@ -278,15 +289,225 @@ impl ConfigModalState {
             cursor_pos: config.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
+            explicit_fields: HashSet::new(),
+        }
+    }
+
+    /// Create form state for the project tab from a PartialConfig (values)
+    /// and the merged Config (for inherited values to display).
+    fn from_partial_config(partial: &PartialConfig, merged: &Config) -> Self {
+        let mut explicit_fields = HashSet::new();
+
+        if partial.claude.path.is_some() {
+            explicit_fields.insert(ConfigModalField::ClaudePath);
+        }
+        if partial.paths.prompt.is_some() {
+            explicit_fields.insert(ConfigModalField::PromptFile);
+        }
+        if partial.paths.specs.is_some() {
+            explicit_fields.insert(ConfigModalField::SpecsDirectory);
+        }
+        if partial.logging.level.is_some() {
+            explicit_fields.insert(ConfigModalField::LogLevel);
+        }
+        if partial.behavior.iterations.is_some() {
+            explicit_fields.insert(ConfigModalField::Iterations);
+        }
+        if partial.behavior.auto_expand_tasks_panel.is_some() {
+            explicit_fields.insert(ConfigModalField::AutoExpandTasks);
+        }
+        if partial.behavior.keep_awake.is_some() {
+            explicit_fields.insert(ConfigModalField::KeepAwake);
+        }
+
+        // Display merged values (so inherited fields show their effective value)
+        let log_level_index = LOG_LEVELS
+            .iter()
+            .position(|&l| l == merged.logging.level)
+            .unwrap_or(2);
+
+        Self {
+            claude_path: merged.claude.path.clone(),
+            prompt_file: merged.paths.prompt.clone(),
+            specs_dir: merged.paths.specs.clone(),
+            log_level_index,
+            iterations: merged.behavior.iterations,
+            auto_expand_tasks: merged.behavior.auto_expand_tasks_panel,
+            keep_awake: merged.behavior.keep_awake,
+            cursor_pos: merged.claude.path.len(),
+            error: None,
+            validation_errors: HashMap::new(),
+            explicit_fields,
+        }
+    }
+
+    /// Build a Config from the current form values.
+    fn to_config(&self) -> Config {
+        let mut config = Config {
+            claude: crate::config::ClaudeConfig {
+                path: self.claude_path.clone(),
+                args: None,
+            },
+            paths: crate::config::PathsConfig {
+                prompt: self.prompt_file.clone(),
+                specs: self.specs_dir.clone(),
+            },
+            logging: crate::config::LoggingConfig {
+                level: self.selected_log_level().to_string(),
+            },
+            behavior: crate::config::BehaviorConfig::default(),
+        };
+        config.behavior.iterations = self.iterations;
+        config.behavior.auto_expand_tasks_panel = self.auto_expand_tasks;
+        config.behavior.keep_awake = self.keep_awake;
+        config
+    }
+
+    /// Build a PartialConfig from the current form values, including only explicit fields.
+    fn to_partial_config(&self) -> PartialConfig {
+        PartialConfig {
+            claude: crate::config::PartialClaudeConfig {
+                path: if self.explicit_fields.contains(&ConfigModalField::ClaudePath) {
+                    Some(self.claude_path.clone())
+                } else {
+                    None
+                },
+            },
+            paths: crate::config::PartialPathsConfig {
+                prompt: if self.explicit_fields.contains(&ConfigModalField::PromptFile) {
+                    Some(self.prompt_file.clone())
+                } else {
+                    None
+                },
+                specs: if self
+                    .explicit_fields
+                    .contains(&ConfigModalField::SpecsDirectory)
+                {
+                    Some(self.specs_dir.clone())
+                } else {
+                    None
+                },
+            },
+            logging: crate::config::PartialLoggingConfig {
+                level: if self.explicit_fields.contains(&ConfigModalField::LogLevel) {
+                    Some(self.selected_log_level().to_string())
+                } else {
+                    None
+                },
+            },
+            behavior: crate::config::PartialBehaviorConfig {
+                iterations: if self.explicit_fields.contains(&ConfigModalField::Iterations) {
+                    Some(self.iterations)
+                } else {
+                    None
+                },
+                auto_expand_tasks_panel: if self
+                    .explicit_fields
+                    .contains(&ConfigModalField::AutoExpandTasks)
+                {
+                    Some(self.auto_expand_tasks)
+                } else {
+                    None
+                },
+                keep_awake: if self.explicit_fields.contains(&ConfigModalField::KeepAwake) {
+                    Some(self.keep_awake)
+                } else {
+                    None
+                },
+            },
+        }
+    }
+
+    pub fn selected_log_level(&self) -> &'static str {
+        LOG_LEVELS[self.log_level_index]
+    }
+
+    /// Check if there are any validation errors.
+    pub fn has_validation_errors(&self) -> bool {
+        !self.validation_errors.is_empty()
+    }
+}
+
+impl ConfigModalState {
+    /// Create a new modal state for global config only (no .ralph).
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            focus: ConfigModalField::ClaudePath,
+            tab: None,
+            project_form: None,
+            global_form: TabFormState::from_config(config),
+            project_config_path: None,
+        }
+    }
+
+    /// Create a new modal state with project and global tabs.
+    pub fn from_config_with_project(
+        global_config: &Config,
+        partial: &PartialConfig,
+        merged_config: &Config,
+        project_config_path: PathBuf,
+    ) -> Self {
+        Self {
+            focus: ConfigModalField::ClaudePath,
+            tab: Some(ConfigTab::Project),
+            project_form: Some(TabFormState::from_partial_config(partial, merged_config)),
+            global_form: TabFormState::from_config(global_config),
+            project_config_path: Some(project_config_path),
+        }
+    }
+
+    /// Get the active tab, defaulting to Global when no tabs.
+    pub fn active_tab(&self) -> ConfigTab {
+        self.tab.unwrap_or(ConfigTab::Global)
+    }
+
+    /// Whether tabs are shown (i.e., a .ralph exists).
+    pub fn has_tabs(&self) -> bool {
+        self.tab.is_some()
+    }
+
+    /// Switch to the other tab, preserving form state.
+    pub fn switch_tab(&mut self) {
+        if let Some(ref mut tab) = self.tab {
+            // Save cursor state for the current form
+            *tab = match tab {
+                ConfigTab::Project => ConfigTab::Global,
+                ConfigTab::Global => ConfigTab::Project,
+            };
+            self.focus = ConfigModalField::ClaudePath;
+            self.update_cursor_for_new_focus();
+        }
+    }
+
+    /// Get a reference to the active form state.
+    pub fn active_form(&self) -> &TabFormState {
+        match self.active_tab() {
+            ConfigTab::Project => self.project_form.as_ref().unwrap_or(&self.global_form),
+            ConfigTab::Global => &self.global_form,
+        }
+    }
+
+    /// Get a mutable reference to the active form state.
+    fn active_form_mut(&mut self) -> &mut TabFormState {
+        match self.active_tab() {
+            ConfigTab::Project => {
+                if self.project_form.is_some() {
+                    self.project_form.as_mut().unwrap()
+                } else {
+                    &mut self.global_form
+                }
+            }
+            ConfigTab::Global => &mut self.global_form,
         }
     }
 
     /// Get a reference to the currently focused text field's value.
     pub fn current_field_value(&self) -> Option<&String> {
+        let form = self.active_form();
         match self.focus {
-            ConfigModalField::ClaudePath => Some(&self.claude_path),
-            ConfigModalField::PromptFile => Some(&self.prompt_file),
-            ConfigModalField::SpecsDirectory => Some(&self.specs_dir),
+            ConfigModalField::ClaudePath => Some(&form.claude_path),
+            ConfigModalField::PromptFile => Some(&form.prompt_file),
+            ConfigModalField::SpecsDirectory => Some(&form.specs_dir),
             _ => None,
         }
     }
@@ -312,226 +533,270 @@ impl ConfigModalState {
     /// Update cursor position when focus changes to a new field.
     fn update_cursor_for_new_focus(&mut self) {
         if let Some(value) = self.current_field_value() {
-            self.cursor_pos = value.len();
+            // Need to clone to avoid borrow issues
+            let len = value.len();
+            self.active_form_mut().cursor_pos = len;
         } else {
-            self.cursor_pos = 0;
+            self.active_form_mut().cursor_pos = 0;
+        }
+    }
+
+    /// Mark a field as explicitly set in the project tab.
+    fn mark_explicit(&mut self) {
+        if self.active_tab() == ConfigTab::Project
+            && let Some(ref mut form) = self.project_form
+        {
+            form.explicit_fields.insert(self.focus);
         }
     }
 
     /// Insert a character at the current cursor position.
     pub fn insert_char(&mut self, c: char) {
-        let cursor = self.cursor_pos;
+        let cursor = self.active_form().cursor_pos;
         let field_changed = match self.focus {
             ConfigModalField::ClaudePath => {
-                if cursor >= self.claude_path.len() {
-                    self.claude_path.push(c);
+                let form = self.active_form_mut();
+                if cursor >= form.claude_path.len() {
+                    form.claude_path.push(c);
                 } else {
-                    self.claude_path.insert(cursor, c);
+                    form.claude_path.insert(cursor, c);
                 }
-                self.cursor_pos += 1;
+                form.cursor_pos += 1;
                 true
             }
             ConfigModalField::PromptFile => {
-                if cursor >= self.prompt_file.len() {
-                    self.prompt_file.push(c);
+                let form = self.active_form_mut();
+                if cursor >= form.prompt_file.len() {
+                    form.prompt_file.push(c);
                 } else {
-                    self.prompt_file.insert(cursor, c);
+                    form.prompt_file.insert(cursor, c);
                 }
-                self.cursor_pos += 1;
+                form.cursor_pos += 1;
                 true
             }
             ConfigModalField::SpecsDirectory => {
-                if cursor >= self.specs_dir.len() {
-                    self.specs_dir.push(c);
+                let form = self.active_form_mut();
+                if cursor >= form.specs_dir.len() {
+                    form.specs_dir.push(c);
                 } else {
-                    self.specs_dir.insert(cursor, c);
+                    form.specs_dir.insert(cursor, c);
                 }
-                self.cursor_pos += 1;
+                form.cursor_pos += 1;
                 true
             }
             _ => false,
         };
         if field_changed {
+            self.mark_explicit();
             self.clear_current_field_error();
         }
     }
 
     /// Delete the character before the cursor (backspace).
     pub fn delete_char_before(&mut self) {
-        if self.cursor_pos == 0 {
+        if self.active_form().cursor_pos == 0 {
             return;
         }
-        let cursor = self.cursor_pos;
+        let cursor = self.active_form().cursor_pos;
         let field_changed = match self.focus {
             ConfigModalField::ClaudePath => {
-                self.claude_path.remove(cursor - 1);
-                self.cursor_pos -= 1;
+                let form = self.active_form_mut();
+                form.claude_path.remove(cursor - 1);
+                form.cursor_pos -= 1;
                 true
             }
             ConfigModalField::PromptFile => {
-                self.prompt_file.remove(cursor - 1);
-                self.cursor_pos -= 1;
+                let form = self.active_form_mut();
+                form.prompt_file.remove(cursor - 1);
+                form.cursor_pos -= 1;
                 true
             }
             ConfigModalField::SpecsDirectory => {
-                self.specs_dir.remove(cursor - 1);
-                self.cursor_pos -= 1;
+                let form = self.active_form_mut();
+                form.specs_dir.remove(cursor - 1);
+                form.cursor_pos -= 1;
                 true
             }
             _ => false,
         };
         if field_changed {
+            self.mark_explicit();
             self.clear_current_field_error();
         }
     }
 
     /// Delete the character at the cursor position (delete key).
     pub fn delete_char_at(&mut self) {
-        let cursor = self.cursor_pos;
+        let cursor = self.active_form().cursor_pos;
         let field_changed = match self.focus {
-            ConfigModalField::ClaudePath if cursor < self.claude_path.len() => {
-                self.claude_path.remove(cursor);
-                true
+            ConfigModalField::ClaudePath => {
+                let form = self.active_form_mut();
+                if cursor < form.claude_path.len() {
+                    form.claude_path.remove(cursor);
+                    true
+                } else {
+                    false
+                }
             }
-            ConfigModalField::PromptFile if cursor < self.prompt_file.len() => {
-                self.prompt_file.remove(cursor);
-                true
+            ConfigModalField::PromptFile => {
+                let form = self.active_form_mut();
+                if cursor < form.prompt_file.len() {
+                    form.prompt_file.remove(cursor);
+                    true
+                } else {
+                    false
+                }
             }
-            ConfigModalField::SpecsDirectory if cursor < self.specs_dir.len() => {
-                self.specs_dir.remove(cursor);
-                true
+            ConfigModalField::SpecsDirectory => {
+                let form = self.active_form_mut();
+                if cursor < form.specs_dir.len() {
+                    form.specs_dir.remove(cursor);
+                    true
+                } else {
+                    false
+                }
             }
             _ => false,
         };
         if field_changed {
+            self.mark_explicit();
             self.clear_current_field_error();
         }
     }
 
     /// Move cursor left within the current field.
     pub fn cursor_left(&mut self) {
-        if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
+        let form = self.active_form_mut();
+        if form.cursor_pos > 0 {
+            form.cursor_pos -= 1;
         }
     }
 
     /// Move cursor right within the current field.
     pub fn cursor_right(&mut self) {
-        if let Some(value) = self.current_field_value()
-            && self.cursor_pos < value.len()
-        {
-            self.cursor_pos += 1;
+        if let Some(value) = self.current_field_value() {
+            let len = value.len();
+            let form = self.active_form_mut();
+            if form.cursor_pos < len {
+                form.cursor_pos += 1;
+            }
         }
     }
 
     /// Move to beginning of current field.
     pub fn cursor_home(&mut self) {
-        self.cursor_pos = 0;
+        self.active_form_mut().cursor_pos = 0;
     }
 
     /// Move to end of current field.
     pub fn cursor_end(&mut self) {
         if let Some(value) = self.current_field_value() {
-            self.cursor_pos = value.len();
+            let len = value.len();
+            self.active_form_mut().cursor_pos = len;
         }
     }
 
     /// Cycle log level selection up.
     pub fn log_level_prev(&mut self) {
-        if self.log_level_index > 0 {
-            self.log_level_index -= 1;
+        let form = self.active_form_mut();
+        if form.log_level_index > 0 {
+            form.log_level_index -= 1;
         } else {
-            self.log_level_index = LOG_LEVELS.len() - 1;
+            form.log_level_index = LOG_LEVELS.len() - 1;
         }
+        self.mark_explicit();
     }
 
     /// Cycle log level selection down.
     pub fn log_level_next(&mut self) {
-        if self.log_level_index < LOG_LEVELS.len() - 1 {
-            self.log_level_index += 1;
+        let form = self.active_form_mut();
+        if form.log_level_index < LOG_LEVELS.len() - 1 {
+            form.log_level_index += 1;
         } else {
-            self.log_level_index = 0;
+            form.log_level_index = 0;
         }
-    }
-
-    /// Get the currently selected log level.
-    pub fn selected_log_level(&self) -> &'static str {
-        LOG_LEVELS[self.log_level_index]
+        self.mark_explicit();
     }
 
     /// Increment iterations value (towards positive/larger countdown).
     pub fn iterations_increment(&mut self) {
-        // Don't allow going past a reasonable max (e.g., 999)
-        if self.iterations < 999 {
-            self.iterations += 1;
+        let form = self.active_form_mut();
+        if form.iterations < 999 {
+            form.iterations += 1;
         }
+        self.mark_explicit();
     }
 
     /// Decrement iterations value (towards -1/infinite).
     pub fn iterations_decrement(&mut self) {
-        // Minimum is -1 (infinite mode)
-        if self.iterations > -1 {
-            self.iterations -= 1;
+        let form = self.active_form_mut();
+        if form.iterations > -1 {
+            form.iterations -= 1;
         }
+        self.mark_explicit();
     }
 
     /// Check if there are any validation errors.
     pub fn has_validation_errors(&self) -> bool {
-        !self.validation_errors.is_empty()
+        self.active_form().has_validation_errors()
     }
 
     /// Validate a specific field and update validation_errors.
     pub fn validate_field(&mut self, field: ConfigModalField) {
+        let form = self.active_form();
         let error = match field {
-            ConfigModalField::ClaudePath => validate_executable_path(&self.claude_path),
-            ConfigModalField::PromptFile => validate_file_exists(&self.prompt_file),
-            ConfigModalField::SpecsDirectory => validate_directory_exists(&self.specs_dir),
-            // LogLevel/buttons don't need validation
+            ConfigModalField::ClaudePath => validate_executable_path(&form.claude_path),
+            ConfigModalField::PromptFile => validate_file_exists(&form.prompt_file),
+            ConfigModalField::SpecsDirectory => validate_directory_exists(&form.specs_dir),
             _ => None,
         };
 
+        let form = self.active_form_mut();
         if let Some(msg) = error {
-            self.validation_errors.insert(field, msg);
+            form.validation_errors.insert(field, msg);
         } else {
-            self.validation_errors.remove(&field);
+            form.validation_errors.remove(&field);
         }
     }
 
     /// Clear validation error for the current field (called when value changes).
     fn clear_current_field_error(&mut self) {
-        self.validation_errors.remove(&self.focus);
+        let focus = self.focus;
+        self.active_form_mut().validation_errors.remove(&focus);
     }
 
     /// Build a Config from the current form values.
     pub fn to_config(&self) -> Config {
-        let mut config = Config {
-            claude: crate::config::ClaudeConfig {
-                path: self.claude_path.clone(),
-                args: None,
-            },
-            paths: crate::config::PathsConfig {
-                prompt: self.prompt_file.clone(),
-                specs: self.specs_dir.clone(),
-            },
-            logging: crate::config::LoggingConfig {
-                level: self.selected_log_level().to_string(),
-            },
-            behavior: crate::config::BehaviorConfig::default(),
-        };
-        config.behavior.iterations = self.iterations;
-        config.behavior.auto_expand_tasks_panel = self.auto_expand_tasks;
-        config.behavior.keep_awake = self.keep_awake;
-        config
+        self.active_form().to_config()
+    }
+
+    /// Build a PartialConfig from the project tab form values.
+    pub fn to_partial_config(&self) -> PartialConfig {
+        self.active_form().to_partial_config()
+    }
+
+    /// Get the error from the active form.
+    pub fn error(&self) -> Option<&String> {
+        self.active_form().error.as_ref()
+    }
+
+    /// Set error on the active form.
+    pub fn set_error(&mut self, error: Option<String>) {
+        self.active_form_mut().error = error;
     }
 
     /// Toggle the auto-expand tasks setting.
     pub fn toggle_auto_expand_tasks(&mut self) {
-        self.auto_expand_tasks = !self.auto_expand_tasks;
+        let form = self.active_form_mut();
+        form.auto_expand_tasks = !form.auto_expand_tasks;
+        self.mark_explicit();
     }
 
     /// Toggle the keep-awake setting.
     pub fn toggle_keep_awake(&mut self) {
-        self.keep_awake = !self.keep_awake;
+        let form = self.active_form_mut();
+        form.keep_awake = !form.keep_awake;
+        self.mark_explicit();
     }
 }
 
@@ -661,11 +926,19 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
     };
 
     // Clear any previous error when user takes action
-    if state.error.is_some() && key_code != KeyCode::Esc {
-        state.error = None;
+    if state.error().is_some() && key_code != KeyCode::Esc {
+        state.set_error(None);
     }
 
     match key_code {
+        // Tab switching with [ and ]
+        KeyCode::Char('[') if state.has_tabs() => {
+            state.switch_tab();
+        }
+        KeyCode::Char(']') if state.has_tabs() => {
+            state.switch_tab();
+        }
+
         // Navigation between fields
         KeyCode::Tab => {
             if modifiers.contains(KeyModifiers::SHIFT) {
@@ -691,21 +964,37 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
                 if state.has_validation_errors() {
                     return;
                 }
-                // Save config to file
-                let new_config = state.to_config();
-                match save_config(&new_config, &app.config_path) {
+                // Save based on active tab
+                let save_result = match state.active_tab() {
+                    ConfigTab::Project => {
+                        let partial = state.to_partial_config();
+                        if let Some(ref path) = state.project_config_path {
+                            save_partial_config(&partial, path)
+                        } else {
+                            Err("No project config path".to_string())
+                        }
+                    }
+                    ConfigTab::Global => {
+                        let new_config = state.to_config();
+                        save_config(&new_config, &app.config_path)
+                    }
+                };
+                match save_result {
                     Ok(()) => {
-                        // Update app config and close modal
-                        app.config = new_config;
-                        // Update mtime so we don't trigger a reload
+                        // Re-merge and update app config
+                        let new_merged = state.to_config();
+                        app.config = new_merged;
+                        // Update mtimes so we don't trigger a reload
                         app.config_mtime = get_file_mtime(&app.config_path);
+                        if let Some(ref path) = state.project_config_path {
+                            app.project_config_mtime = get_file_mtime(path);
+                        }
                         app.show_config_modal = false;
                         app.config_modal_state = None;
                         debug!("Config saved successfully via modal");
                     }
                     Err(e) => {
-                        // Show error in modal, don't close
-                        state.error = Some(e);
+                        state.set_error(Some(e));
                     }
                 }
             }

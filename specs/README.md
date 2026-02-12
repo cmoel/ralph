@@ -39,7 +39,7 @@ Single source of truth for specification status.
 | [project-init](project-init.md) | Done | Initialize project with Ralph scaffolding via `i` key | configuration |
 | [simplified-command-panel](simplified-command-panel.md) | Done | Minimal command panel with color styling and Help modal | ui-overhaul |
 | [task-tool-display](task-tool-display.md) | Done | Task tool results display extracted text instead of raw JSON | formatted-streaming-output |
-| [project-config](project-config.md) | In Progress | Project-specific config via `.ralph` file with merge precedence | configuration, config-modal, project-init |
+| [project-config](project-config.md) | Done | Project-specific config via `.ralph` file with merge precedence | configuration, config-modal, project-init |
 
 ## Notes
 

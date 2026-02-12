@@ -7,14 +7,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::App;
-use crate::modals::{ConfigModalField, InitFileStatus, InitModalField};
+use crate::modals::{ConfigModalField, ConfigTab, InitFileStatus, InitModalField};
 use crate::ui::centered_rect;
 
 /// Draw the configuration modal.
 pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let modal_width = 70;
-    // Increased height to accommodate validation error lines and toggle fields
-    let modal_height = 26;
+    let modal_height = 28;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -24,7 +23,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let state = app.config_modal_state.as_ref();
 
     // Build the modal content
-    let config_path_display = app.config_path.display().to_string();
     let log_dir_display = app
         .log_directory
         .as_ref()
@@ -34,71 +32,91 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let separator = "─".repeat(modal_width.saturating_sub(4) as usize);
     let field_width = 40;
 
-    // Helper to render a text input field - returns owned Spans
-    let render_field = |value: &str, focused: bool, cursor_pos: usize| -> Vec<Span<'static>> {
-        let display_value: String = if value.len() > field_width {
-            // Show the portion around the cursor
-            let start = cursor_pos.saturating_sub(field_width / 2);
-            let end = (start + field_width).min(value.len());
-            let start = end.saturating_sub(field_width);
-            value[start..end].to_string()
-        } else {
-            value.to_string()
-        };
+    // Determine if we're on the project tab and which fields are inherited
+    let on_project_tab = state
+        .map(|s| s.active_tab() == ConfigTab::Project)
+        .unwrap_or(false);
+    let explicit_fields = if on_project_tab {
+        state.and_then(|s| s.project_form.as_ref().map(|f| &f.explicit_fields))
+    } else {
+        None
+    };
 
-        // Calculate cursor position within displayed text
-        let visible_cursor = if value.len() > field_width {
-            let start = cursor_pos.saturating_sub(field_width / 2);
-            let end = (start + field_width).min(value.len());
-            let start = end.saturating_sub(field_width);
-            cursor_pos - start
+    // Check if a field is inherited (not explicitly set in project config)
+    let is_inherited = |field: ConfigModalField| -> bool {
+        if let Some(fields) = explicit_fields {
+            !fields.contains(&field)
         } else {
-            cursor_pos
-        };
-
-        if focused {
-            // Split at cursor for visual indication
-            let char_indices: Vec<_> = display_value.char_indices().collect();
-            let (before, cursor_char, rest) = if visible_cursor < char_indices.len() {
-                let (idx, _) = char_indices[visible_cursor];
-                let before = display_value[..idx].to_string();
-                let cursor_char = display_value[idx..]
-                    .chars()
-                    .next()
-                    .unwrap_or(' ')
-                    .to_string();
-                let rest_start = idx + cursor_char.len();
-                let rest = if rest_start < display_value.len() {
-                    display_value[rest_start..].to_string()
-                } else {
-                    String::new()
-                };
-                (before, cursor_char, rest)
-            } else {
-                (display_value.clone(), " ".to_string(), String::new())
-            };
-
-            vec![
-                Span::styled(before, Style::default().fg(Color::White)),
-                Span::styled(
-                    cursor_char,
-                    Style::default().fg(Color::Black).bg(Color::White),
-                ),
-                Span::styled(rest, Style::default().fg(Color::White)),
-            ]
-        } else {
-            vec![Span::styled(
-                display_value,
-                Style::default().fg(Color::White),
-            )]
+            false
         }
     };
+
+    // Helper to render a text input field - returns owned Spans
+    let render_field =
+        |value: &str, focused: bool, cursor_pos: usize, inherited: bool| -> Vec<Span<'static>> {
+            let display_value: String = if value.len() > field_width {
+                let start = cursor_pos.saturating_sub(field_width / 2);
+                let end = (start + field_width).min(value.len());
+                let start = end.saturating_sub(field_width);
+                value[start..end].to_string()
+            } else {
+                value.to_string()
+            };
+
+            let visible_cursor = if value.len() > field_width {
+                let start = cursor_pos.saturating_sub(field_width / 2);
+                let end = (start + field_width).min(value.len());
+                let start = end.saturating_sub(field_width);
+                cursor_pos - start
+            } else {
+                cursor_pos
+            };
+
+            if focused {
+                let char_indices: Vec<_> = display_value.char_indices().collect();
+                let (before, cursor_char, rest) = if visible_cursor < char_indices.len() {
+                    let (idx, _) = char_indices[visible_cursor];
+                    let before = display_value[..idx].to_string();
+                    let cursor_char = display_value[idx..]
+                        .chars()
+                        .next()
+                        .unwrap_or(' ')
+                        .to_string();
+                    let rest_start = idx + cursor_char.len();
+                    let rest = if rest_start < display_value.len() {
+                        display_value[rest_start..].to_string()
+                    } else {
+                        String::new()
+                    };
+                    (before, cursor_char, rest)
+                } else {
+                    (display_value.clone(), " ".to_string(), String::new())
+                };
+
+                vec![
+                    Span::styled(before, Style::default().fg(Color::White)),
+                    Span::styled(
+                        cursor_char,
+                        Style::default().fg(Color::Black).bg(Color::White),
+                    ),
+                    Span::styled(rest, Style::default().fg(Color::White)),
+                ]
+            } else {
+                let fg = if inherited {
+                    Color::DarkGray
+                } else {
+                    Color::White
+                };
+                vec![Span::styled(display_value, Style::default().fg(fg))]
+            }
+        };
 
     // Helper for label styling
     let label_style = Style::default().fg(Color::DarkGray);
     let focused_label_style = Style::default().fg(Color::Cyan);
 
-    // Get values from state or config
+    // Get active form values
+    let form = state.map(|s| s.active_form());
     let (
         claude_path,
         prompt_file,
@@ -110,16 +128,28 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         cursor_pos,
         focus,
         has_errors,
+    ): (
+        &str,
+        &str,
+        &str,
+        &str,
+        i32,
+        bool,
+        bool,
+        usize,
+        Option<ConfigModalField>,
+        bool,
     ) = if let Some(s) = state {
+        let f = s.active_form();
         (
-            s.claude_path.as_str(),
-            s.prompt_file.as_str(),
-            s.specs_dir.as_str(),
-            s.selected_log_level(),
-            s.iterations,
-            s.auto_expand_tasks,
-            s.keep_awake,
-            s.cursor_pos,
+            f.claude_path.as_str(),
+            f.prompt_file.as_str(),
+            f.specs_dir.as_str(),
+            f.selected_log_level(),
+            f.iterations,
+            f.auto_expand_tasks,
+            f.keep_awake,
+            f.cursor_pos,
             Some(s.focus),
             s.has_validation_errors(),
         )
@@ -140,36 +170,79 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Helper to get validation error for a field
     let get_field_error = |field: ConfigModalField| -> Option<&str> {
-        state.and_then(|s| s.validation_errors.get(&field).map(|e| e.as_str()))
+        form.and_then(|f| f.validation_errors.get(&field).map(|e| e.as_str()))
     };
 
     // Style for validation error messages
     let error_style = Style::default().fg(Color::Yellow);
 
     // Build content lines
-    let mut content = vec![
-        Line::from(vec![
-            Span::styled("  Config file: ", label_style),
-            Span::raw(&config_path_display),
-        ]),
-        Line::from(vec![
-            Span::styled("  Log directory: ", label_style),
-            Span::raw(&log_dir_display),
-        ]),
-        Line::from(format!("  {separator}")),
-    ];
+    let mut content: Vec<Line> = Vec::new();
+
+    // Tab bar (only when .ralph exists)
+    if let Some(s) = state
+        && s.has_tabs()
+    {
+        let active = s.active_tab();
+        let project_style = if active == ConfigTab::Project {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let global_style = if active == ConfigTab::Global {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        content.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(" Project ", project_style),
+            Span::raw(" "),
+            Span::styled(" Global ", global_style),
+            Span::styled("                  [ / ] switch tabs", label_style),
+        ]));
+        content.push(Line::from(format!("  {separator}")));
+    }
+
+    // Config file path display
+    let config_path_display = if on_project_tab {
+        state
+            .and_then(|s| s.project_config_path.as_ref())
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| ".ralph".to_string())
+    } else {
+        app.config_path.display().to_string()
+    };
+    content.push(Line::from(vec![
+        Span::styled("  Config file: ", label_style),
+        Span::raw(config_path_display),
+    ]));
+    content.push(Line::from(vec![
+        Span::styled("  Log directory: ", label_style),
+        Span::raw(&log_dir_display),
+    ]));
+    content.push(Line::from(format!("  {separator}")));
 
     // Claude CLI path field
     let path_focused = focus == Some(ConfigModalField::ClaudePath);
+    let path_inherited = is_inherited(ConfigModalField::ClaudePath);
     let path_label_style = if path_focused {
         focused_label_style
     } else {
         label_style
     };
     let mut path_line = vec![Span::styled("  Claude CLI path: ", path_label_style)];
-    path_line.extend(render_field(claude_path, path_focused, cursor_pos));
+    path_line.extend(render_field(
+        claude_path,
+        path_focused,
+        cursor_pos,
+        path_inherited,
+    ));
+    if path_inherited && !path_focused {
+        path_line.push(Span::styled(" (inherited)", label_style));
+    }
     content.push(Line::from(path_line));
-    // Validation error for Claude CLI path
     if let Some(error) = get_field_error(ConfigModalField::ClaudePath) {
         content.push(Line::from(Span::styled(
             format!("                     \u{26a0} {}", error),
@@ -179,15 +252,23 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Prompt file field
     let prompt_focused = focus == Some(ConfigModalField::PromptFile);
+    let prompt_inherited = is_inherited(ConfigModalField::PromptFile);
     let prompt_label_style = if prompt_focused {
         focused_label_style
     } else {
         label_style
     };
     let mut prompt_line = vec![Span::styled("  Prompt file:     ", prompt_label_style)];
-    prompt_line.extend(render_field(prompt_file, prompt_focused, cursor_pos));
+    prompt_line.extend(render_field(
+        prompt_file,
+        prompt_focused,
+        cursor_pos,
+        prompt_inherited,
+    ));
+    if prompt_inherited && !prompt_focused {
+        prompt_line.push(Span::styled(" (inherited)", label_style));
+    }
     content.push(Line::from(prompt_line));
-    // Validation error for Prompt file
     if let Some(error) = get_field_error(ConfigModalField::PromptFile) {
         content.push(Line::from(Span::styled(
             format!("                     \u{26a0} {}", error),
@@ -197,15 +278,23 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Specs directory field
     let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
+    let specs_inherited = is_inherited(ConfigModalField::SpecsDirectory);
     let specs_label_style = if specs_focused {
         focused_label_style
     } else {
         label_style
     };
     let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
-    specs_line.extend(render_field(specs_dir, specs_focused, cursor_pos));
+    specs_line.extend(render_field(
+        specs_dir,
+        specs_focused,
+        cursor_pos,
+        specs_inherited,
+    ));
+    if specs_inherited && !specs_focused {
+        specs_line.push(Span::styled(" (inherited)", label_style));
+    }
     content.push(Line::from(specs_line));
-    // Validation error for Specs directory
     if let Some(error) = get_field_error(ConfigModalField::SpecsDirectory) {
         content.push(Line::from(Span::styled(
             format!("                     \u{26a0} {}", error),
@@ -215,6 +304,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Log level dropdown
     let level_focused = focus == Some(ConfigModalField::LogLevel);
+    let level_inherited = is_inherited(ConfigModalField::LogLevel);
     let level_label_style = if level_focused {
         focused_label_style
     } else {
@@ -227,24 +317,30 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     };
     let level_value_style = if level_focused {
         Style::default().fg(Color::Cyan)
+    } else if level_inherited {
+        Style::default().fg(Color::DarkGray)
     } else {
         Style::default().fg(Color::White)
     };
-    content.push(Line::from(vec![
+    let mut level_line = vec![
         Span::styled("  Log level:       ", level_label_style),
         Span::styled(level_display, level_value_style),
-    ]));
+    ];
+    if level_inherited && !level_focused {
+        level_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(level_line));
 
     // Iterations field
     let iter_focused = focus == Some(ConfigModalField::Iterations);
+    let iter_inherited = is_inherited(ConfigModalField::Iterations);
     let iter_label_style = if iter_focused {
         focused_label_style
     } else {
         label_style
     };
-    // Display -1 as infinity symbol
     let iter_value = if iterations < 0 {
-        "∞".to_string()
+        "\u{221e}".to_string()
     } else {
         iterations.to_string()
     };
@@ -255,16 +351,23 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     };
     let iter_value_style = if iter_focused {
         Style::default().fg(Color::Cyan)
+    } else if iter_inherited {
+        Style::default().fg(Color::DarkGray)
     } else {
         Style::default().fg(Color::White)
     };
-    content.push(Line::from(vec![
+    let mut iter_line = vec![
         Span::styled("  Iterations:      ", iter_label_style),
         Span::styled(iter_display, iter_value_style),
-    ]));
+    ];
+    if iter_inherited && !iter_focused {
+        iter_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(iter_line));
 
     // Auto-expand tasks toggle
     let auto_expand_focused = focus == Some(ConfigModalField::AutoExpandTasks);
+    let auto_expand_inherited = is_inherited(ConfigModalField::AutoExpandTasks);
     let auto_expand_label_style = if auto_expand_focused {
         focused_label_style
     } else {
@@ -278,16 +381,23 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     };
     let auto_expand_value_style = if auto_expand_focused {
         Style::default().fg(Color::Cyan)
+    } else if auto_expand_inherited {
+        Style::default().fg(Color::DarkGray)
     } else {
         Style::default().fg(Color::White)
     };
-    content.push(Line::from(vec![
+    let mut auto_expand_line = vec![
         Span::styled("  Auto-expand tasks: ", auto_expand_label_style),
         Span::styled(auto_expand_display, auto_expand_value_style),
-    ]));
+    ];
+    if auto_expand_inherited && !auto_expand_focused {
+        auto_expand_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(auto_expand_line));
 
     // Keep awake toggle
     let keep_awake_focused = focus == Some(ConfigModalField::KeepAwake);
+    let keep_awake_inherited = is_inherited(ConfigModalField::KeepAwake);
     let keep_awake_label_style = if keep_awake_focused {
         focused_label_style
     } else {
@@ -301,19 +411,25 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     };
     let keep_awake_value_style = if keep_awake_focused {
         Style::default().fg(Color::Cyan)
+    } else if keep_awake_inherited {
+        Style::default().fg(Color::DarkGray)
     } else {
         Style::default().fg(Color::White)
     };
-    content.push(Line::from(vec![
+    let mut keep_awake_line = vec![
         Span::styled("  Keep awake:        ", keep_awake_label_style),
         Span::styled(keep_awake_display, keep_awake_value_style),
-    ]));
+    ];
+    if keep_awake_inherited && !keep_awake_focused {
+        keep_awake_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(keep_awake_line));
 
     content.push(Line::from(""));
 
     // Error message if any
     if let Some(s) = state {
-        if let Some(error) = &s.error {
+        if let Some(error) = s.error() {
             content.push(Line::from(Span::styled(
                 format!("  Error: {}", error),
                 Style::default().fg(Color::Red),
@@ -329,7 +445,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let save_focused = focus == Some(ConfigModalField::SaveButton);
     let cancel_focused = focus == Some(ConfigModalField::CancelButton);
 
-    // Save button is dimmed when there are validation errors
     let save_style = if has_errors {
         Style::default().fg(Color::DarkGray)
     } else if save_focused {
@@ -352,10 +467,19 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     content.push(Line::from(""));
 
+    // Title shows which config we're editing
+    let title = if on_project_tab {
+        " Configuration (Project) "
+    } else if state.map(|s| s.has_tabs()).unwrap_or(false) {
+        " Configuration (Global) "
+    } else {
+        " Configuration "
+    };
+
     let modal = Paragraph::new(content).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Configuration ")
+            .title(title)
             .title_alignment(ratatui::layout::Alignment::Center)
             .style(Style::default().fg(Color::White)),
     );
