@@ -40,7 +40,7 @@ Single source of truth for specification status.
 | [simplified-command-panel](simplified-command-panel.md) | Done | Minimal command panel with color styling and Help modal | ui-overhaul |
 | [task-tool-display](task-tool-display.md) | Done | Task tool results display extracted text instead of raw JSON | formatted-streaming-output |
 | [project-config](project-config.md) | Done | Project-specific config via `.ralph` file with merge precedence | configuration, config-modal, project-init |
-| [init-skip-existing](init-skip-existing.md) | Ready | Init creates missing files and skips existing ones | project-init |
+| [init-skip-existing](init-skip-existing.md) | In Progress | Init creates missing files and skips existing ones | project-init |
 
 ## Notes
 
