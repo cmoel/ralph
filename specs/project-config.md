@@ -24,16 +24,16 @@ Only the specified fields are overridden — everything else uses the global con
 
 ### Acceptance Criteria
 
-- [ ] A `PartialConfig` struct exists where every field is `Option<T>`
-- [ ] On startup, ralph checks for `.ralph` in the current working directory
-- [ ] If `.ralph` exists, it is parsed as `PartialConfig` and merged with the global config
-- [ ] Merge applies field-by-field: project value if `Some`, otherwise global value
-- [ ] Environment variable overrides are applied after the merge (on top of everything)
-- [ ] If `.ralph` does not exist, behavior is identical to today (global config only)
-- [ ] Hot-reload watches both files — changes to either `.ralph` or global config trigger a re-merge
-- [ ] The project config path (`.ralph`) is stored in app state for use by other slices
-- [ ] Config errors (parse failures for `.ralph`) are surfaced in the command panel as a yellow warning message, not just logged
-- [ ] Global config parse errors also display in the command panel (fixes existing gap where `config_reload_error` is stored but never rendered)
+- [x] A `PartialConfig` struct exists where every field is `Option<T>`
+- [x] On startup, ralph checks for `.ralph` in the current working directory
+- [x] If `.ralph` exists, it is parsed as `PartialConfig` and merged with the global config
+- [x] Merge applies field-by-field: project value if `Some`, otherwise global value
+- [x] Environment variable overrides are applied after the merge (on top of everything)
+- [x] If `.ralph` does not exist, behavior is identical to today (global config only)
+- [x] Hot-reload watches both files — changes to either `.ralph` or global config trigger a re-merge
+- [x] The project config path (`.ralph`) is stored in app state for use by other slices
+- [x] Config errors (parse failures for `.ralph`) are surfaced in the command panel as a yellow warning message, not just logged
+- [x] Global config parse errors also display in the command panel (fixes existing gap where `config_reload_error` is stored but never rendered)
 
 ### Technical Constraints
 

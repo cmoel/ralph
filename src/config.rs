@@ -167,11 +167,103 @@ impl Config {
     }
 }
 
+/// Partial Claude CLI configuration for project overrides.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct PartialClaudeConfig {
+    pub path: Option<String>,
+}
+
+/// Partial path configuration for project overrides.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct PartialPathsConfig {
+    pub prompt: Option<String>,
+    pub specs: Option<String>,
+}
+
+/// Partial logging configuration for project overrides.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct PartialLoggingConfig {
+    pub level: Option<String>,
+}
+
+/// Partial behavior configuration for project overrides.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct PartialBehaviorConfig {
+    pub iterations: Option<i32>,
+    pub auto_expand_tasks_panel: Option<bool>,
+    pub keep_awake: Option<bool>,
+}
+
+/// Project-specific configuration where every field is optional.
+/// Parsed from `.ralph` files. Fields that are `None` inherit from the global config.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct PartialConfig {
+    pub claude: PartialClaudeConfig,
+    pub paths: PartialPathsConfig,
+    pub logging: PartialLoggingConfig,
+    pub behavior: PartialBehaviorConfig,
+}
+
+/// Merge a global config with a project-level partial config.
+/// Project values override global values where present.
+pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
+    Config {
+        claude: ClaudeConfig {
+            path: project
+                .claude
+                .path
+                .clone()
+                .unwrap_or_else(|| global.claude.path.clone()),
+            args: None,
+        },
+        paths: PathsConfig {
+            prompt: project
+                .paths
+                .prompt
+                .clone()
+                .unwrap_or_else(|| global.paths.prompt.clone()),
+            specs: project
+                .paths
+                .specs
+                .clone()
+                .unwrap_or_else(|| global.paths.specs.clone()),
+        },
+        logging: LoggingConfig {
+            level: project
+                .logging
+                .level
+                .clone()
+                .unwrap_or_else(|| global.logging.level.clone()),
+        },
+        behavior: BehaviorConfig {
+            iterations: project
+                .behavior
+                .iterations
+                .unwrap_or(global.behavior.iterations),
+            auto_expand_tasks_panel: project
+                .behavior
+                .auto_expand_tasks_panel
+                .unwrap_or(global.behavior.auto_expand_tasks_panel),
+            keep_awake: project
+                .behavior
+                .keep_awake
+                .unwrap_or(global.behavior.keep_awake),
+            auto_continue: None,
+        },
+    }
+}
+
 /// Loaded configuration with metadata
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
     pub config: Config,
     pub config_path: PathBuf,
+    pub project_config_path: Option<PathBuf>,
     pub status: ConfigLoadStatus,
 }
 
@@ -185,6 +277,26 @@ pub fn get_config_path() -> Option<PathBuf> {
     get_config_dir().map(|dir| dir.join("config.toml"))
 }
 
+/// Get the project config path (.ralph in current working directory).
+pub fn get_project_config_path() -> Option<PathBuf> {
+    let path = std::env::current_dir().ok()?.join(".ralph");
+    if path.exists() { Some(path) } else { None }
+}
+
+/// Load a project config (.ralph) from the given path.
+/// Returns Ok(PartialConfig) on success, Err(String) on parse/read failure.
+fn load_project_config(path: &PathBuf) -> Result<PartialConfig, String> {
+    let contents = fs::read_to_string(path).map_err(|e| {
+        warn!(path = ?path, error = %e, "project_config_read_failed");
+        format!("Failed to read .ralph: {}", e)
+    })?;
+
+    toml::from_str::<PartialConfig>(&contents).map_err(|e| {
+        warn!(path = ?path, error = %e, "project_config_parse_failed");
+        format!("Invalid .ralph: {}", e)
+    })
+}
+
 /// Load configuration from file, environment, and defaults
 pub fn load_config() -> LoadedConfig {
     let config_path = match get_config_path() {
@@ -194,6 +306,7 @@ pub fn load_config() -> LoadedConfig {
             return LoadedConfig {
                 config: apply_env_overrides(Config::default()),
                 config_path: PathBuf::from("config.toml"),
+                project_config_path: None,
                 status: ConfigLoadStatus::Error("Could not determine config directory".to_string()),
             };
         }
@@ -201,34 +314,94 @@ pub fn load_config() -> LoadedConfig {
 
     debug!("Config path: {:?}", config_path);
 
-    let (config, status) = load_or_create_config(&config_path);
+    let (mut config, status) = load_or_create_config(&config_path);
+
+    // Check for project-level .ralph file
+    let project_config_path = get_project_config_path();
+    if let Some(ref project_path) = project_config_path {
+        match load_project_config(project_path) {
+            Ok(partial) => {
+                config = merge_config(&config, &partial);
+                info!(path = ?project_path, "project_config_loaded");
+            }
+            Err(e) => {
+                warn!(path = ?project_path, error = %e, "project_config_error");
+                // Keep using global config only
+            }
+        }
+    }
+
     let config = apply_env_overrides(config);
 
     LoadedConfig {
         config,
         config_path,
+        project_config_path,
         status,
     }
 }
 
-/// Reload configuration from the given path.
-/// Returns Ok(Config) if reload succeeded, or Err(String) with error message.
-/// On error, the caller should keep the previous config.
-pub fn reload_config(config_path: &PathBuf) -> Result<Config, String> {
-    let contents = fs::read_to_string(config_path).map_err(|e| {
-        warn!(path = ?config_path, error = %e, "config_reload_read_failed");
-        format!("Failed to read config: {}", e)
-    })?;
+/// Result of reloading configuration, including separate error tracking.
+pub struct ReloadedConfig {
+    pub config: Config,
+    pub global_error: Option<String>,
+    pub project_error: Option<String>,
+}
 
-    let mut config = toml::from_str::<Config>(&contents).map_err(|e| {
-        warn!(path = ?config_path, error = %e, "config_reload_parse_failed");
-        format!("Invalid config: {}", e)
-    })?;
+/// Reload configuration from global and optional project config paths.
+/// Returns a ReloadedConfig that always has a usable config (falls back to defaults).
+/// Errors for each source are tracked separately so the UI can display them.
+pub fn reload_config(
+    config_path: &PathBuf,
+    project_config_path: Option<&PathBuf>,
+) -> ReloadedConfig {
+    // Load global config
+    let (mut config, global_error) = match fs::read_to_string(config_path) {
+        Ok(contents) => match toml::from_str::<Config>(&contents) {
+            Ok(mut c) => {
+                c.normalize();
+                (c, None)
+            }
+            Err(e) => {
+                warn!(path = ?config_path, error = %e, "config_reload_parse_failed");
+                (Config::default(), Some(format!("Invalid config: {}", e)))
+            }
+        },
+        Err(e) => {
+            warn!(path = ?config_path, error = %e, "config_reload_read_failed");
+            (
+                Config::default(),
+                Some(format!("Failed to read config: {}", e)),
+            )
+        }
+    };
 
-    config.normalize();
+    // Merge with project config if present
+    let project_error = if let Some(project_path) = project_config_path {
+        if project_path.exists() {
+            match load_project_config(project_path) {
+                Ok(partial) => {
+                    config = merge_config(&config, &partial);
+                    None
+                }
+                Err(e) => Some(e),
+            }
+        } else {
+            // .ralph was deleted — just use global config, no error
+            None
+        }
+    } else {
+        None
+    };
+
     let config = apply_env_overrides(config);
     info!(path = ?config_path, "config_reloaded");
-    Ok(config)
+
+    ReloadedConfig {
+        config,
+        global_error,
+        project_error,
+    }
 }
 
 /// Save a config to the given file path.
@@ -562,5 +735,138 @@ keep_awake = false
 
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(!config.behavior.keep_awake);
+    }
+
+    #[test]
+    fn test_partial_config_empty() {
+        let toml_str = "";
+        let partial: PartialConfig = toml::from_str(toml_str).unwrap();
+        assert!(partial.claude.path.is_none());
+        assert!(partial.paths.prompt.is_none());
+        assert!(partial.paths.specs.is_none());
+        assert!(partial.logging.level.is_none());
+        assert!(partial.behavior.iterations.is_none());
+        assert!(partial.behavior.auto_expand_tasks_panel.is_none());
+        assert!(partial.behavior.keep_awake.is_none());
+    }
+
+    #[test]
+    fn test_partial_config_some_fields() {
+        let toml_str = r#"
+[paths]
+prompt = "./custom-prompt.md"
+
+[behavior]
+iterations = 3
+"#;
+
+        let partial: PartialConfig = toml::from_str(toml_str).unwrap();
+        assert!(partial.claude.path.is_none());
+        assert_eq!(partial.paths.prompt, Some("./custom-prompt.md".to_string()));
+        assert!(partial.paths.specs.is_none());
+        assert_eq!(partial.behavior.iterations, Some(3));
+        assert!(partial.behavior.keep_awake.is_none());
+    }
+
+    #[test]
+    fn test_partial_config_unknown_keys_ignored() {
+        let toml_str = r#"
+[paths]
+prompt = "./p.md"
+unknown = "ignored"
+
+[unknown_section]
+foo = "bar"
+"#;
+
+        let partial: PartialConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(partial.paths.prompt, Some("./p.md".to_string()));
+    }
+
+    #[test]
+    fn test_partial_config_comment_only() {
+        let toml_str = "# Project-specific Ralph config — edit with config modal (c)\n";
+        let partial: PartialConfig = toml::from_str(toml_str).unwrap();
+        assert!(partial.claude.path.is_none());
+        assert!(partial.paths.prompt.is_none());
+    }
+
+    #[test]
+    fn test_merge_config_no_overrides() {
+        let global = Config::default();
+        let partial = PartialConfig::default();
+        let merged = merge_config(&global, &partial);
+
+        assert_eq!(merged.claude.path, global.claude.path);
+        assert_eq!(merged.paths.prompt, global.paths.prompt);
+        assert_eq!(merged.paths.specs, global.paths.specs);
+        assert_eq!(merged.logging.level, global.logging.level);
+        assert_eq!(merged.behavior.iterations, global.behavior.iterations);
+        assert_eq!(
+            merged.behavior.auto_expand_tasks_panel,
+            global.behavior.auto_expand_tasks_panel
+        );
+        assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
+    }
+
+    #[test]
+    fn test_merge_config_all_overrides() {
+        let global = Config::default();
+        let partial = PartialConfig {
+            claude: PartialClaudeConfig {
+                path: Some("/custom/claude".to_string()),
+            },
+            paths: PartialPathsConfig {
+                prompt: Some("./proj-prompt.md".to_string()),
+                specs: Some("./proj-specs".to_string()),
+            },
+            logging: PartialLoggingConfig {
+                level: Some("debug".to_string()),
+            },
+            behavior: PartialBehaviorConfig {
+                iterations: Some(5),
+                auto_expand_tasks_panel: Some(false),
+                keep_awake: Some(false),
+            },
+        };
+        let merged = merge_config(&global, &partial);
+
+        assert_eq!(merged.claude.path, "/custom/claude");
+        assert_eq!(merged.paths.prompt, "./proj-prompt.md");
+        assert_eq!(merged.paths.specs, "./proj-specs");
+        assert_eq!(merged.logging.level, "debug");
+        assert_eq!(merged.behavior.iterations, 5);
+        assert!(!merged.behavior.auto_expand_tasks_panel);
+        assert!(!merged.behavior.keep_awake);
+    }
+
+    #[test]
+    fn test_merge_config_partial_overrides() {
+        let global = Config::default();
+        let partial: PartialConfig = toml::from_str(
+            r#"
+[paths]
+prompt = "./custom-prompt.md"
+
+[behavior]
+iterations = 3
+"#,
+        )
+        .unwrap();
+        let merged = merge_config(&global, &partial);
+
+        // Overridden fields
+        assert_eq!(merged.paths.prompt, "./custom-prompt.md");
+        assert_eq!(merged.behavior.iterations, 3);
+
+        // Inherited fields
+        assert_eq!(merged.claude.path, global.claude.path);
+        assert_eq!(merged.paths.specs, global.paths.specs);
+        assert_eq!(merged.logging.level, global.logging.level);
+        assert_eq!(
+            merged.behavior.auto_expand_tasks_panel,
+            global.behavior.auto_expand_tasks_panel
+        );
+        assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
     }
 }

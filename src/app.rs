@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use tracing::{debug, info, warn};
 
 use crate::config::reload_config;
-use crate::config::{Config, LoadedConfig};
+use crate::config::{Config, LoadedConfig, get_project_config_path};
 use crate::logging::ReloadHandle;
 use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState};
 use crate::specs::{SpecsRemaining, check_specs_remaining, detect_current_spec};
@@ -122,16 +122,22 @@ pub struct App {
     pub log_directory: Option<PathBuf>,
     /// Loaded configuration.
     pub config: Config,
-    /// Path to the configuration file.
+    /// Path to the global configuration file.
     pub config_path: PathBuf,
-    /// Last known mtime of the config file for change detection.
+    /// Path to the project configuration file (.ralph), if it existed at startup.
+    pub project_config_path: Option<PathBuf>,
+    /// Last known mtime of the global config file for change detection.
     pub config_mtime: Option<SystemTime>,
+    /// Last known mtime of the project config file for change detection.
+    pub project_config_mtime: Option<SystemTime>,
     /// Last time we polled for config changes.
     pub last_config_poll: Instant,
     /// When config was last successfully reloaded (for "Reloaded" indicator fade).
     pub config_reloaded_at: Option<Instant>,
-    /// Error message if config reload failed (invalid TOML, etc.).
+    /// Error message if global config reload failed.
     pub config_reload_error: Option<String>,
+    /// Error message if project config (.ralph) reload failed.
+    pub project_config_error: Option<String>,
     /// Name of the currently active spec (from specs/README.md).
     pub current_spec: Option<String>,
     /// Last time we polled for the current spec.
@@ -217,11 +223,17 @@ impl App {
             log_directory,
             config: loaded_config.config,
             config_path: loaded_config.config_path.clone(),
+            project_config_path: loaded_config.project_config_path.clone(),
             config_mtime: get_file_mtime(&loaded_config.config_path),
+            project_config_mtime: loaded_config
+                .project_config_path
+                .as_ref()
+                .and_then(|p| get_file_mtime(p)),
             // Initialize to "long ago" so we poll immediately on start
             last_config_poll: Instant::now() - Duration::from_secs(10),
             config_reloaded_at: None,
             config_reload_error: None,
+            project_config_error: None,
             current_spec: None,
             // Initialize to "long ago" so we poll immediately on start
             last_spec_poll: Instant::now() - Duration::from_secs(10),
@@ -385,59 +397,67 @@ impl App {
 
         self.last_config_poll = Instant::now();
 
-        // Get current mtime
-        let current_mtime = match get_file_mtime(&self.config_path) {
-            Some(mtime) => mtime,
-            None => {
-                debug!(path = ?self.config_path, "config_mtime_check_failed");
-                return;
-            }
+        // Check global config mtime
+        let global_mtime = get_file_mtime(&self.config_path);
+        let global_changed = match (global_mtime, self.config_mtime) {
+            (Some(current), Some(prev)) => current != prev,
+            (Some(_), None) => true,
+            _ => false,
         };
 
-        // Check if mtime changed
-        let mtime_changed = match self.config_mtime {
-            Some(prev_mtime) => current_mtime != prev_mtime,
-            None => true, // No previous mtime, treat as changed
+        // Check project config mtime (also detect new .ralph appearing)
+        let project_path = self
+            .project_config_path
+            .clone()
+            .or_else(get_project_config_path);
+        let project_mtime = project_path.as_ref().and_then(|p| get_file_mtime(p));
+        let project_changed = match (project_mtime, self.project_config_mtime) {
+            (Some(current), Some(prev)) => current != prev,
+            (Some(_), None) => true, // .ralph appeared
+            (None, Some(_)) => true, // .ralph disappeared
+            (None, None) => false,
         };
 
-        if !mtime_changed {
+        if !global_changed && !project_changed {
             return;
         }
 
-        // Mtime changed, attempt to reload config
-        self.config_mtime = Some(current_mtime);
+        // Update mtimes
+        if let Some(mtime) = global_mtime {
+            self.config_mtime = Some(mtime);
+        }
+        self.project_config_mtime = project_mtime;
+        // Update project path (may have appeared or disappeared)
+        self.project_config_path = project_path;
 
-        match reload_config(&self.config_path) {
-            Ok(new_config) => {
-                // Check if log level changed and update if we have a reload handle
-                let new_log_level = &new_config.logging.level;
-                if new_log_level != &self.current_log_level
-                    && let Some(ref handle) = self.log_level_handle
-                {
-                    match logging::update_log_level(handle, new_log_level) {
-                        Ok(()) => {
-                            debug!(
-                                old_level = %self.current_log_level,
-                                new_level = %new_log_level,
-                                "log_level_updated"
-                            );
-                            self.current_log_level = new_log_level.clone();
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "log_level_update_failed");
-                            // Continue with config reload, just don't update log level
-                        }
-                    }
+        let reloaded = reload_config(&self.config_path, self.project_config_path.as_ref());
+
+        // Check if log level changed and update if we have a reload handle
+        let new_log_level = &reloaded.config.logging.level;
+        if new_log_level != &self.current_log_level
+            && let Some(ref handle) = self.log_level_handle
+        {
+            match logging::update_log_level(handle, new_log_level) {
+                Ok(()) => {
+                    debug!(
+                        old_level = %self.current_log_level,
+                        new_level = %new_log_level,
+                        "log_level_updated"
+                    );
+                    self.current_log_level = new_log_level.clone();
                 }
+                Err(e) => {
+                    warn!(error = %e, "log_level_update_failed");
+                }
+            }
+        }
 
-                self.config = new_config;
-                self.config_reload_error = None;
-                self.config_reloaded_at = Some(Instant::now());
-            }
-            Err(error) => {
-                // Keep previous config, show error
-                self.config_reload_error = Some(error);
-            }
+        self.config = reloaded.config;
+        self.config_reload_error = reloaded.global_error;
+        self.project_config_error = reloaded.project_error;
+
+        if self.config_reload_error.is_none() && self.project_config_error.is_none() {
+            self.config_reloaded_at = Some(Instant::now());
         }
     }
 

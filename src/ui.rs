@@ -651,12 +651,30 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
     let command_line = Line::from(line_spans);
 
-    let command_panel = Paragraph::new(command_line).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(app.status.border_type())
-            .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count))),
-    );
+    // Build config error warning for bottom title
+    let config_error = app
+        .config_reload_error
+        .as_deref()
+        .or(app.project_config_error.as_deref());
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(app.status.border_type())
+        .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count)));
+
+    if let Some(error) = config_error {
+        let warning_style = Style::default().fg(Color::Yellow);
+        // Truncate error to fit in bottom border
+        let max_len = chunks[2].width.saturating_sub(4) as usize;
+        let truncated = if error.len() > max_len {
+            format!("{}…", &error[..max_len.saturating_sub(1)])
+        } else {
+            error.to_string()
+        };
+        block = block.title_bottom(Line::styled(truncated, warning_style));
+    }
+
+    let command_panel = Paragraph::new(command_line).block(block);
 
     f.render_widget(command_panel, chunks[2]);
 
