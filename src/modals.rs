@@ -422,6 +422,7 @@ impl TabFormState {
                     None
                 },
                 mode: None, // Mode is read-only in the config modal
+                bd_path: None,
             },
         }
     }
