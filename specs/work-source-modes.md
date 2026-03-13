@@ -59,17 +59,17 @@ The PROMPT.md for beads-mode projects tells Claude to use `bd` commands instead 
 
 ### Acceptance Criteria
 
-- [ ] `BeadsWorkSource` struct implements `WorkSource`:
+- [x] `BeadsWorkSource` struct implements `WorkSource`:
   - `check_remaining()`: runs `bd ready --json`, returns `Yes` if non-empty array, `No` if empty, `ReadError` if command fails
   - `detect_current()`: runs `bd list --json --status in_progress`, returns first item's `"{id} {title}"` or `None`
   - `list_items()`: runs `bd list --json`, maps each bead to `WorkItem` with status mapping: `"open"` → `Ready`, `"in_progress"` → `InProgress`, `"closed"` → `Done`, `"deferred"` → `Blocked`
-- [ ] `bd` JSON output schema (fields used): `{ "id": String, "title": String, "status": String, "priority": Number, "updated_at": String }`
-- [ ] `BeadsWorkSource` has a `bd_path: String` field (default `"bd"`) for the CLI binary, configurable via `BehaviorConfig`
-- [ ] Shell-out uses `std::process::Command` with `--json` flag, captures stdout, parses with `serde_json`
-- [ ] Command timeout: if `bd` hangs for >5 seconds, kill and return `ReadError("bd command timed out")`
-- [ ] Status bar shows bead ID + truncated title (e.g., `PackPack-8tg Create and host pr...`)
-- [ ] "ALL SPECS COMPLETE" message changes to "ALL WORK COMPLETE" (or mode-appropriate: "ALL BEADS COMPLETE" / "ALL SPECS COMPLETE")
-- [ ] Specs panel title updates: "Specs" in specs mode, "Beads" in beads mode
+- [x] `bd` JSON output schema (fields used): `{ "id": String, "title": String, "status": String, "priority": Number, "updated_at": String }`
+- [x] `BeadsWorkSource` has a `bd_path: String` field (default `"bd"`) for the CLI binary, configurable via `BehaviorConfig`
+- [x] Shell-out uses `std::process::Command` with `--json` flag, captures stdout, parses with `serde_json`
+- [x] Command timeout: if `bd` hangs for >5 seconds, kill and return `ReadError("bd command timed out")`
+- [x] Status bar shows bead ID + truncated title (e.g., `PackPack-8tg Create and host pr...`)
+- [x] "ALL SPECS COMPLETE" message changes to "ALL WORK COMPLETE" (or mode-appropriate: "ALL BEADS COMPLETE" / "ALL SPECS COMPLETE")
+- [x] Specs panel title updates: "Specs" in specs mode, "Beads" in beads mode
 
 ### Technical Constraints
 

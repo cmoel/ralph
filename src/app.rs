@@ -210,6 +210,7 @@ impl App {
         let work_source = create_work_source(
             &loaded_config.config.behavior.mode,
             loaded_config.config.specs_path(),
+            &loaded_config.config.behavior.bd_path,
         );
         Self {
             status: AppStatus::Stopped,
@@ -462,8 +463,12 @@ impl App {
         // Reconstruct work source if mode or specs path changed
         let new_mode = &reloaded.config.behavior.mode;
         let new_specs_path = reloaded.config.specs_path();
-        if new_mode != &self.config.behavior.mode || new_specs_path != self.config.specs_path() {
-            self.work_source = create_work_source(new_mode, new_specs_path);
+        let new_bd_path = &reloaded.config.behavior.bd_path;
+        if new_mode != &self.config.behavior.mode
+            || new_specs_path != self.config.specs_path()
+            || new_bd_path != &self.config.behavior.bd_path
+        {
+            self.work_source = create_work_source(new_mode, new_specs_path, new_bd_path);
         }
 
         self.config = reloaded.config;
