@@ -16,9 +16,9 @@ use crate::config::reload_config;
 use crate::config::{Config, LoadedConfig, get_project_config_path};
 use crate::logging::ReloadHandle;
 use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState};
-use crate::specs::{SpecsRemaining, check_specs_remaining, detect_current_spec};
 use crate::ui::{TodoItem, TodoStatus};
 use crate::wake_lock::WakeLock;
+use crate::work_source::{WorkRemaining, WorkSource, create_work_source};
 use crate::{OutputMessage, get_file_mtime, logging};
 
 /// Application status states.
@@ -195,6 +195,8 @@ pub struct App {
     pub pending_tool_calls: HashMap<String, PendingToolCall>,
     /// Whether we're currently in an indented text block (for flush).
     pub in_indented_text: bool,
+    /// Pluggable work source (specs, beads, etc.).
+    pub work_source: Box<dyn WorkSource>,
 }
 
 impl App {
@@ -205,6 +207,10 @@ impl App {
         log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     ) -> Self {
         let current_log_level = loaded_config.config.logging.level.clone();
+        let work_source = create_work_source(
+            &loaded_config.config.behavior.mode,
+            loaded_config.config.specs_path(),
+        );
         Self {
             status: AppStatus::Stopped,
             output_lines: Vec::new(),
@@ -262,6 +268,7 @@ impl App {
             tool_id_to_name: HashMap::new(),
             pending_tool_calls: HashMap::new(),
             in_indented_text: false,
+            work_source,
         }
     }
 
@@ -386,7 +393,7 @@ impl App {
         }
 
         self.last_spec_poll = Instant::now();
-        self.current_spec = detect_current_spec(&self.config.specs_path());
+        self.current_spec = self.work_source.detect_current();
     }
 
     pub fn poll_config(&mut self) {
@@ -452,6 +459,13 @@ impl App {
             }
         }
 
+        // Reconstruct work source if mode or specs path changed
+        let new_mode = &reloaded.config.behavior.mode;
+        let new_specs_path = reloaded.config.specs_path();
+        if new_mode != &self.config.behavior.mode || new_specs_path != self.config.specs_path() {
+            self.work_source = create_work_source(new_mode, new_specs_path);
+        }
+
         self.config = reloaded.config;
         self.config_reload_error = reloaded.global_error;
         self.project_config_error = reloaded.project_error;
@@ -472,9 +486,10 @@ impl App {
         // Determine next state based on exit code and iteration control
         match exit_code {
             Some(0) if self.should_auto_continue() => {
-                // Check if there are specs remaining
-                match check_specs_remaining(&self.config.specs_path()) {
-                    SpecsRemaining::Yes => {
+                // Check if there's remaining work
+                let complete_msg = self.work_source.complete_message();
+                match self.work_source.check_remaining() {
+                    WorkRemaining::Yes => {
                         info!(
                             current = self.current_iteration,
                             total = self.total_iterations,
@@ -487,25 +502,26 @@ impl App {
                         self.status = AppStatus::Stopped;
                         // Don't clear tasks during auto-continue
                     }
-                    SpecsRemaining::No => {
-                        info!("all_specs_complete");
-                        self.add_text_line(
-                            "══════════════════ ALL SPECS COMPLETE ══════════════════".to_string(),
-                        );
+                    WorkRemaining::No => {
+                        info!("all_work_complete");
+                        self.add_text_line(format!(
+                            "══════════════════ {} ══════════════════",
+                            complete_msg
+                        ));
                         self.reset_iteration_state();
                         self.status = AppStatus::Stopped;
                         self.clear_tasks();
                     }
-                    SpecsRemaining::Missing => {
-                        warn!("specs_readme_missing");
-                        self.add_text_line("[Error: specs/README.md not found]".to_string());
+                    WorkRemaining::Missing => {
+                        warn!("work_source_missing");
+                        self.add_text_line("[Error: work source not found]".to_string());
                         self.reset_iteration_state();
                         self.status = AppStatus::Error;
                         self.clear_tasks();
                     }
-                    SpecsRemaining::ReadError(e) => {
-                        warn!(error = %e, "specs_readme_read_error");
-                        self.add_text_line(format!("[Error reading specs/README.md: {}]", e));
+                    WorkRemaining::ReadError(e) => {
+                        warn!(error = %e, "work_source_read_error");
+                        self.add_text_line(format!("[Error reading work source: {}]", e));
                         self.reset_iteration_state();
                         self.status = AppStatus::Error;
                         self.clear_tasks();

@@ -425,6 +425,17 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     }
     content.push(Line::from(keep_awake_line));
 
+    // Mode (read-only)
+    let mode_line = vec![
+        Span::styled("  Mode:              ", label_style),
+        Span::styled(
+            &app.config.behavior.mode,
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(" (set via .ralph or RALPH_MODE)", label_style),
+    ];
+    content.push(Line::from(mode_line));
+
     content.push(Line::from(""));
 
     // Error message if any
@@ -645,10 +656,11 @@ pub fn draw_specs_panel(f: &mut Frame, app: &mut App) {
         }
     }
 
+    let panel_title = format!(" {} ", state.panel_label);
     let modal = Paragraph::new(content).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Specs ")
+            .title(panel_title)
             .title_alignment(ratatui::layout::Alignment::Center)
             .style(Style::default().fg(Color::White)),
     );

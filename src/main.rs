@@ -11,6 +11,7 @@ mod templates;
 mod ui;
 mod validators;
 mod wake_lock;
+mod work_source;
 
 use crate::app::{App, AppStatus, ContentBlockState, PendingToolCall, SelectedPanel};
 use crate::config::{LoadedConfig, load_global_config, load_project_config};
@@ -280,10 +281,12 @@ fn run_app(
                         };
                     }
                     KeyCode::Char('l') => {
-                        // Open specs panel (available in all states)
+                        // Open work panel (available in all states)
                         app.show_specs_panel = true;
-                        app.specs_panel_state =
-                            Some(SpecsPanelState::new(&app.config.specs_path()));
+                        app.specs_panel_state = Some(SpecsPanelState::new(
+                            app.work_source.as_ref(),
+                            &app.config.specs_path(),
+                        ));
                     }
                     KeyCode::Char('i') => {
                         // Open init modal

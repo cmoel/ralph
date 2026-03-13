@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use tracing::debug;
@@ -10,11 +9,11 @@ use tracing::debug;
 use crate::app::App;
 use crate::config::{Config, PartialConfig, save_config, save_partial_config};
 use crate::get_file_mtime;
-use crate::specs::{SpecStatus, parse_specs_readme};
 use crate::templates;
 use crate::validators::{
     validate_directory_exists, validate_executable_path, validate_file_exists,
 };
+use crate::work_source::{WorkItem, WorkItemStatus, WorkSource};
 
 /// Status of a file for the init modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,6 +421,7 @@ impl TabFormState {
                 } else {
                     None
                 },
+                mode: None, // Mode is read-only in the config modal
             },
         }
     }
@@ -808,22 +808,11 @@ impl ConfigModalState {
     }
 }
 
-/// A single spec entry parsed from the README.
-#[derive(Debug, Clone)]
-pub struct SpecEntry {
-    /// Name of the spec (from markdown link).
-    pub name: String,
-    /// Current status.
-    pub status: SpecStatus,
-    /// File creation/modification timestamp for sorting.
-    pub timestamp: Option<SystemTime>,
-}
-
-/// State for the specs panel modal.
+/// State for the specs/work panel modal.
 #[derive(Debug)]
 pub struct SpecsPanelState {
-    /// List of specs parsed from README.
-    pub specs: Vec<SpecEntry>,
+    /// List of work items.
+    pub specs: Vec<WorkItem>,
     /// Currently selected index.
     pub selected: usize,
     /// Scroll offset for the list.
@@ -832,15 +821,18 @@ pub struct SpecsPanelState {
     pub error: Option<String>,
     /// Directory where spec files are located.
     pub specs_dir: PathBuf,
+    /// Label for the panel title (e.g., "Specs", "Beads").
+    pub panel_label: String,
 }
 
 impl SpecsPanelState {
-    /// Create a new specs panel state by parsing the README.
-    pub fn new(specs_dir: &std::path::Path) -> Self {
-        match parse_specs_readme(specs_dir) {
-            Ok(mut specs) => {
+    /// Create a new specs panel state from a work source.
+    pub fn new(work_source: &dyn WorkSource, specs_dir: &std::path::Path) -> Self {
+        let panel_label = work_source.label().to_string();
+        match work_source.list_items() {
+            Ok(mut items) => {
                 // Sort by status (Blocked→Ready→InProgress→Done), then by timestamp (newest first)
-                specs.sort_by(|a, b| match a.status.cmp(&b.status) {
+                items.sort_by(|a, b| match a.status.cmp(&b.status) {
                     std::cmp::Ordering::Equal => {
                         // Within same status, sort by timestamp descending (newest first)
                         // None values go to the end
@@ -854,11 +846,12 @@ impl SpecsPanelState {
                     other => other,
                 });
                 Self {
-                    specs,
+                    specs: items,
                     selected: 0,
                     scroll_offset: 0,
                     error: None,
                     specs_dir: specs_dir.to_path_buf(),
+                    panel_label,
                 }
             }
             Err(e) => Self {
@@ -867,6 +860,7 @@ impl SpecsPanelState {
                 scroll_offset: 0,
                 error: Some(e),
                 specs_dir: specs_dir.to_path_buf(),
+                panel_label,
             },
         }
     }
@@ -909,11 +903,11 @@ impl SpecsPanelState {
         }
     }
 
-    /// Count of blocked specs.
+    /// Count of blocked items.
     pub fn blocked_count(&self) -> usize {
         self.specs
             .iter()
-            .filter(|s| s.status == SpecStatus::Blocked)
+            .filter(|s| s.status == WorkItemStatus::Blocked)
             .count()
     }
 

@@ -89,6 +89,8 @@ pub struct BehaviorConfig {
     /// When true, the system won't sleep while claude is running.
     /// Display may still sleep. Default: true.
     pub keep_awake: bool,
+    /// Work source mode: "specs" (default) or "beads".
+    pub mode: String,
     /// Legacy field - converted to iterations on load.
     /// `true` becomes `-1` (infinite), `false` becomes `0` (stopped).
     #[serde(skip_serializing, default)]
@@ -101,6 +103,7 @@ impl Default for BehaviorConfig {
             iterations: -1,                // Infinite mode by default
             auto_expand_tasks_panel: true, // Auto-expand by default for backwards compatibility
             keep_awake: true,              // Prevent system sleep by default
+            mode: "specs".to_string(),
             auto_continue: None,
         }
     }
@@ -203,6 +206,8 @@ pub struct PartialBehaviorConfig {
     pub auto_expand_tasks_panel: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_awake: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 /// Project-specific configuration where every field is optional.
@@ -233,7 +238,10 @@ fn is_partial_logging_empty(l: &PartialLoggingConfig) -> bool {
 }
 
 fn is_partial_behavior_empty(b: &PartialBehaviorConfig) -> bool {
-    b.iterations.is_none() && b.auto_expand_tasks_panel.is_none() && b.keep_awake.is_none()
+    b.iterations.is_none()
+        && b.auto_expand_tasks_panel.is_none()
+        && b.keep_awake.is_none()
+        && b.mode.is_none()
 }
 
 /// Merge a global config with a project-level partial config.
@@ -280,6 +288,11 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .behavior
                 .keep_awake
                 .unwrap_or(global.behavior.keep_awake),
+            mode: project
+                .behavior
+                .mode
+                .clone()
+                .unwrap_or_else(|| global.behavior.mode.clone()),
             auto_continue: None,
         },
     }
@@ -620,6 +633,11 @@ fn apply_env_overrides(mut config: Config) -> Config {
         config.logging.level = level;
     }
 
+    if let Ok(mode) = env::var("RALPH_MODE") {
+        debug!("Overriding behavior.mode from RALPH_MODE");
+        config.behavior.mode = mode;
+    }
+
     config
 }
 
@@ -896,6 +914,7 @@ foo = "bar"
                 iterations: Some(5),
                 auto_expand_tasks_panel: Some(false),
                 keep_awake: Some(false),
+                mode: None,
             },
         };
         let merged = merge_config(&global, &partial);
@@ -985,6 +1004,7 @@ iterations = 3
                 iterations: Some(5),
                 auto_expand_tasks_panel: Some(false),
                 keep_awake: None,
+                mode: None,
             },
         };
         let toml_str = toml::to_string_pretty(&partial).unwrap();

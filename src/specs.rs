@@ -1,9 +1,20 @@
 //! Spec parsing and detection functions.
 
+use std::time::SystemTime;
+
 use ratatui::style::Color;
 use tracing::{debug, warn};
 
-use crate::modals::SpecEntry;
+/// A single spec entry parsed from the README with filesystem metadata.
+#[derive(Debug, Clone)]
+pub struct SpecEntry {
+    /// Name of the spec (from markdown link).
+    pub name: String,
+    /// Current status.
+    pub status: SpecStatus,
+    /// File creation/modification timestamp for sorting.
+    pub timestamp: Option<SystemTime>,
+}
 
 /// A parsed spec from the README table (pure data, no timestamps).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +38,7 @@ pub enum SpecStatus {
     Done,
 }
 
+#[allow(dead_code)]
 impl SpecStatus {
     /// Parse status from string.
     pub fn from_str(s: &str) -> Option<Self> {
