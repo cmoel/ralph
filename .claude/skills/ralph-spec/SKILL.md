@@ -1,3 +1,8 @@
+---
+name: ralph-spec
+description: "Spec Shaping Interview. Use when the user wants to shape, define, or write a spec for a feature, bug fix, refactor, or other work item."
+---
+
 # Spec Shaping Interview
 
 Shape a specification through conversation. Your goal: produce a spec that an implementing agent can execute in small, valuable vertical slices.
