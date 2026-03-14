@@ -6,6 +6,7 @@ mod events;
 mod logging;
 mod modal_ui;
 mod modals;
+mod prompt_sniff;
 mod specs;
 mod templates;
 mod ui;
@@ -182,6 +183,14 @@ fn run_app(
     log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
 ) -> Result<()> {
     let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
+
+    // Sniff test: warn if PROMPT.md contains mode-mismatched content
+    let prompt_path = app.config.prompt_path();
+    if let Ok(content) = std::fs::read_to_string(&prompt_path) {
+        for warning in prompt_sniff::sniff_prompt(&content, &app.config.behavior.mode) {
+            app.add_text_line(warning);
+        }
+    }
 
     loop {
         // Poll for output from child process
