@@ -9,6 +9,7 @@ use tracing::debug;
 use crate::app::App;
 use crate::config::{Config, PartialConfig, save_config, save_partial_config};
 use crate::get_file_mtime;
+use crate::prompt_sniff;
 use crate::templates;
 use crate::validators::{
     validate_directory_exists, validate_executable_path, validate_file_exists,
@@ -22,6 +23,8 @@ pub enum InitFileStatus {
     WillCreate,
     /// File already exists (will be skipped).
     Exists,
+    /// File exists but contains stale content (will be regenerated with backup).
+    Stale,
 }
 
 /// A file entry for the init modal.
@@ -101,13 +104,25 @@ impl InitModalState {
         ));
         files_to_check.push((".ralph".to_string(), PathBuf::from(".ralph")));
 
+        let mode = &config.behavior.mode;
         let files = files_to_check
             .into_iter()
             .map(|(display, full)| {
-                let status = if full.exists() {
-                    InitFileStatus::Exists
-                } else {
+                let status = if !full.exists() {
                     InitFileStatus::WillCreate
+                } else if display.ends_with("PROMPT.md") {
+                    // Check if PROMPT.md contains stale mode-specific content
+                    if let Ok(content) = std::fs::read_to_string(&full) {
+                        if !prompt_sniff::sniff_prompt(&content, mode).is_empty() {
+                            InitFileStatus::Stale
+                        } else {
+                            InitFileStatus::Exists
+                        }
+                    } else {
+                        InitFileStatus::Exists
+                    }
+                } else {
+                    InitFileStatus::Exists
                 };
                 InitFileEntry {
                     display_path: display,
@@ -125,7 +140,7 @@ impl InitModalState {
         }
     }
 
-    /// Check if all files already exist (nothing to create).
+    /// Check if all files are up to date (nothing to create or regenerate).
     pub fn all_exist(&self) -> bool {
         self.files
             .iter()
@@ -161,9 +176,20 @@ impl InitModalState {
     /// Create all files. Returns Ok(()) on success, Err(message) on failure.
     pub fn create_files(&self) -> Result<(), String> {
         for file in &self.files {
-            // Skip files that already exist
+            // Skip files that already exist and are up to date
             if file.status == InitFileStatus::Exists {
                 continue;
+            }
+
+            // Backup stale files before overwriting
+            if file.status == InitFileStatus::Stale {
+                let backup_path = file.full_path.with_extension("md.bak");
+                std::fs::rename(&file.full_path, &backup_path).map_err(|e| {
+                    format!(
+                        "Failed to backup {}: {}",
+                        file.display_path, e
+                    )
+                })?;
             }
 
             // Determine template content based on file path

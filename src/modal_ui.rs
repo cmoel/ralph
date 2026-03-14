@@ -734,6 +734,11 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::DarkGray),
                 Some(" (exists, skipped)"),
             ),
+            InitFileStatus::Stale => (
+                "↻",
+                Style::default().fg(Color::Yellow),
+                Some(" (stale, will regenerate)"),
+            ),
         };
 
         let mut spans = vec![
