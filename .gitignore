@@ -1,3 +1,7 @@
 /target
 .devbox
 IMPLEMENTATION_PLAN.md
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
