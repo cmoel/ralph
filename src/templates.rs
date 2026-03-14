@@ -1,23 +1,19 @@
 //! File templates for project initialization.
 
-/// Generic agent workflow prompt template.
+/// Mode-agnostic agent workflow prompt template.
 pub const PROMPT_MD: &str = r#"# Agent Workflow
 
 Complete ONE vertical slice per session. A vertical slice delivers observable value to the end user.
 
+Mode-specific work discovery instructions follow this document.
+
 ## 1. Discover
 
-Read `specs/README.md` to understand project state.
-
-Select ONE spec marked **Ready** to work on.
-
-**Immediately after selecting:**
-1. Mark its status as **In Progress** in `specs/README.md`
-2. Commit this change before doing any implementation work
+Find available work using the mode-specific instructions below. Pick ONE item to work on.
 
 ## 2. Understand
 
-Read the selected spec. Identify:
+Read the selected work item. Identify:
 - What user-facing behavior this delivers
 - Key implementation requirements
 - Dependencies on other code
@@ -31,14 +27,9 @@ Before writing code, search the codebase for:
 
 ## 4. Implement
 
-Build the vertical slice. As you work:
-- Mark completed items in the spec with `[x]`
-- Keep `specs/README.md` accurate
+Build the vertical slice. Prefer TDD — write tests first, then implement. Use your judgment on when TDD doesn't fit (trivial config changes, pure UI work, etc.).
 
-**If blocked:** Document in BOTH the spec AND `specs/README.md`:
-- What failed
-- Why it's blocking
-- Options to resolve
+**If blocked:** Document what failed, why it's blocking, and options to resolve.
 
 ## 5. Validate
 
@@ -54,9 +45,7 @@ Do not commit until validation passes.
 
 ## 6. Commit
 
-When the slice is complete:
-1. Mark the spec complete in `specs/README.md`
-2. Commit with a clear message describing the user-facing change
+When the slice is complete, mark the work item done and commit with a clear message.
 
 ## 7. Exit
 
@@ -154,6 +143,53 @@ Specs evolve. Agents may update specs as they learn—adding discovered requirem
 /// Project-specific config file template.
 pub const RALPH_CONFIG: &str =
     "# Project-specific Ralph config \u{2014} edit with config modal (c)\n";
+
+/// Specs-mode work discovery instructions (compiled into binary).
+pub const SPECS_MODE_MD: &str = r#"
+# Specs Mode
+
+## Work Discovery
+
+Read `specs/README.md` to understand project state. Select ONE spec marked **Ready**.
+
+**Immediately after selecting:**
+1. Mark its status as **In Progress** in `specs/README.md`
+2. Commit this change before doing any implementation work
+
+## Understanding Your Work Item
+
+Read the selected spec file. Look for:
+- Acceptance criteria (checkboxes)
+- Technical constraints
+- Error cases to handle
+
+## Progress Tracking
+
+As you implement:
+- Mark completed items in the spec with `[x]`
+- Keep `specs/README.md` status accurate
+
+## When Blocked
+
+Document in BOTH the spec AND `specs/README.md`:
+- What failed
+- Why it's blocking
+- Options to resolve
+
+## Completing Work
+
+When the slice is complete:
+1. Mark the spec complete in `specs/README.md`
+2. Commit with a clear message describing the change
+"#;
+
+/// Returns mode-specific prompt content for the given mode, if any.
+pub fn mode_content(mode: &str) -> Option<&'static str> {
+    match mode {
+        "specs" => Some(SPECS_MODE_MD),
+        _ => None,
+    }
+}
 
 /// Spec shaping interview command.
 pub const RALPH_SPEC_MD: &str = r#"# Spec Shaping Interview

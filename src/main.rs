@@ -394,12 +394,33 @@ fn start_command(app: &mut App) -> Result<()> {
     let claude_path = app.config.claude_path();
     const CLAUDE_ARGS: &str =
         "--output-format=stream-json --verbose --print --include-partial-messages";
-    let command = format!(
-        "cat {} | {} {}",
-        prompt_path.display(),
-        claude_path.display(),
-        CLAUDE_ARGS
-    );
+
+    // Build cat command: PROMPT.md + optional mode-specific content
+    let mode = &app.config.behavior.mode;
+    let mode_temp_path = if let Some(content) = templates::mode_content(mode) {
+        let path = std::env::temp_dir().join("ralph-mode.md");
+        std::fs::write(&path, content)?;
+        Some(path)
+    } else {
+        None
+    };
+
+    let command = if let Some(ref mode_path) = mode_temp_path {
+        format!(
+            "cat {} {} | {} {}",
+            prompt_path.display(),
+            mode_path.display(),
+            claude_path.display(),
+            CLAUDE_ARGS
+        )
+    } else {
+        format!(
+            "cat {} | {} {}",
+            prompt_path.display(),
+            claude_path.display(),
+            CLAUDE_ARGS
+        )
+    };
     let child = Command::new("sh")
         .arg("-c")
         .arg(&command)
