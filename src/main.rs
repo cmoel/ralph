@@ -53,13 +53,23 @@ use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, info, trace, warn};
 
+/// CLI subcommands.
+#[derive(Debug, Parser)]
+enum Commands {
+    /// Initialize project with Ralph scaffolding
+    Init,
+}
+
 /// CLI argument parser.
 #[derive(Debug, Parser)]
 #[command(
     version,
     about = "TUI wrapper for claude CLI that displays formatted streaming output"
 )]
-struct Cli {}
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
 
 /// Message types for output processing.
 pub enum OutputMessage {
@@ -109,8 +119,13 @@ pub fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
 fn main() -> Result<()> {
     use std::time::Instant;
 
-    // Parse CLI args (handles --version, --help, future subcommands)
-    let _cli = Cli::parse();
+    // Parse CLI args (handles --version, --help, subcommands)
+    let cli = Cli::parse();
+
+    // Handle subcommands that don't need the TUI
+    if let Some(Commands::Init) = cli.command {
+        return run_init();
+    }
 
     let start_time = Instant::now();
 
@@ -173,6 +188,36 @@ fn main() -> Result<()> {
     );
 
     result
+}
+
+/// Run the init subcommand: create project scaffolding files.
+fn run_init() -> Result<()> {
+    let loaded_config = config::load_config();
+    let state = InitModalState::new(&loaded_config.config);
+
+    if state.all_exist() {
+        println!("All files already exist, nothing to create.");
+        return Ok(());
+    }
+
+    let create_count = state.create_count();
+    let skip_count = state.skip_count();
+
+    match state.create_files() {
+        Ok(()) => {
+            println!(
+                "Created {} file{}, skipped {} existing.",
+                create_count,
+                if create_count == 1 { "" } else { "s" },
+                skip_count
+            );
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn run_app(
@@ -888,6 +933,24 @@ mod tests {
     #[test]
     fn cli_unknown_arg_fails() {
         let result = Cli::try_parse_from(["ralph", "--bogus"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_init_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "init"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Init)));
+    }
+
+    #[test]
+    fn cli_no_subcommand_gives_none() {
+        let cli = Cli::try_parse_from(["ralph"]).unwrap();
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn cli_unknown_subcommand_fails() {
+        let result = Cli::try_parse_from(["ralph", "bogus"]);
         assert!(result.is_err());
     }
 }
