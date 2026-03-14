@@ -1,6 +1,6 @@
 # Agent Workflow
 
-Complete ONE vertical slice per session. A vertical slice delivers observable value to the end user—never build infrastructure without connecting it to user-facing behavior.
+Complete ONE vertical slice per session. A vertical slice delivers observable value — never build infrastructure without connecting it to user-facing behavior.
 
 ## Context Engineering
 
@@ -13,7 +13,7 @@ Your context window is precious. Protect it aggressively.
 - Any task where you need information but not the raw details
 
 **Keep in your context:**
-- The current spec you're implementing
+- The current work item you're implementing
 - The code you're actively writing
 - Errors you're actively debugging
 
@@ -21,28 +21,22 @@ When in doubt, spawn a subagent. A clean context beats a complete one.
 
 ## 1. Discover
 
-Read `specs/README.md` to understand project state.
+Find available work using the mode-specific instructions below. Pick ONE item to work on.
 
-Spawn parallel subagents to:
-- Read all incomplete specs (each subagent reads one, returns summary)
-- Optionally read completed specs for context
+If the work is under-specified (unclear acceptance criteria, vague scope), flag it and exit immediately.
 
-Select ONE spec (or one slice within a spec) to work on. The slice you find most interesting is fine.
+If the work is too big for a single session (multiple unrelated concerns, would touch many files across different domains), flag it and exit immediately.
 
-**Immediately after selecting a spec:**
-1. Mark its status as **In Progress** in `specs/README.md`
-2. Commit this change before doing any implementation work
-
-Only one spec should be In Progress at a time.
+**Immediately after selecting work:** mark it in progress using the mode-specific instructions.
 
 ## 2. Understand
 
-Spawn a subagent to read and summarize the selected spec. Have it identify:
-- What user-facing behavior this delivers
+Spawn a subagent to read the work item details. Have it identify:
+- What this delivers (user-facing behavior or shippable infrastructure)
 - Key implementation requirements
-- Dependencies on other specs or existing code
+- Dependencies on other code
 
-Use `IMPLEMENTATION_PLAN.md` as scratch space—delete its contents freely.
+Use `IMPLEMENTATION_PLAN.md` as scratch space — delete its contents freely.
 
 ## 3. Search
 
@@ -55,35 +49,32 @@ Never assume something isn't implemented.
 
 ## 4. Implement
 
-Build the vertical slice. As you work:
-- Mark completed items in the spec with `[x]`
-- Keep `specs/README.md` accurate
-- Keep `IMPLEMENTATION_PLAN.md` current
+Build the vertical slice. Prefer TDD — write tests first, then implement. Use your judgment on when TDD doesn't fit (trivial config changes, pure UI work, etc.).
 
 **For complex implementations:** Break into sub-tasks and use subagents for research-heavy steps. Keep your context focused on the code you're writing.
 
-**If blocked:** Stop and document in BOTH the spec AND `specs/README.md`:
-- What failed (exact error or situation)
-- Why it's blocking
-- 2-3 reasonable options to resolve
+**If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using mode-specific instructions and exit.
 
 ## 5. Validate
 
-Before committing:
+Before committing, run your project's validation:
+
 ```bash
-devbox run test     # all tests must pass
-devbox run fmt      # format all files
-devbox run check    # clippy must pass
+# Run your tests
+# Run your linter
+# Run your type checker
 ```
 
-Do not commit until all three pass.
+Do not commit until validation passes.
 
 ## 6. Commit
 
-When the slice is complete and validated:
-1. Mark the spec (or slice) complete in `specs/README.md`
-2. Commit with a clear message describing the user-facing change
+When the slice is complete, mark the work item done and commit with a clear message.
 
 ## 7. Exit
 
 After committing ONE vertical slice, exit immediately. Do not start another task.
+
+## Philosophy
+
+This workflow follows Shape Up methodology — appetite-driven, vertically-sliced, with clear boundaries. For deeper context, see https://www.ryansinger.co/posts/

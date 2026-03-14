@@ -3,33 +3,60 @@
 /// Mode-agnostic agent workflow prompt template.
 pub const PROMPT_MD: &str = r#"# Agent Workflow
 
-Complete ONE vertical slice per session. A vertical slice delivers observable value to the end user.
+Complete ONE vertical slice per session. A vertical slice delivers observable value — never build infrastructure without connecting it to user-facing behavior.
 
-Mode-specific work discovery instructions follow this document.
+## Context Engineering
+
+Your context window is precious. Protect it aggressively.
+
+**Use subagents for:**
+- Reading multiple files (spawn parallel readers, get summaries back)
+- Searching the codebase (don't let grep results pollute your context)
+- Exploring unfamiliar code (let the subagent summarize what matters)
+- Any task where you need information but not the raw details
+
+**Keep in your context:**
+- The current work item you're implementing
+- The code you're actively writing
+- Errors you're actively debugging
+
+When in doubt, spawn a subagent. A clean context beats a complete one.
 
 ## 1. Discover
 
 Find available work using the mode-specific instructions below. Pick ONE item to work on.
 
+If the work is under-specified (unclear acceptance criteria, vague scope), flag it and exit immediately.
+
+If the work is too big for a single session (multiple unrelated concerns, would touch many files across different domains), flag it and exit immediately.
+
+**Immediately after selecting work:** mark it in progress using the mode-specific instructions.
+
 ## 2. Understand
 
-Read the selected work item. Identify:
-- What user-facing behavior this delivers
+Spawn a subagent to read the work item details. Have it identify:
+- What this delivers (user-facing behavior or shippable infrastructure)
 - Key implementation requirements
 - Dependencies on other code
 
+Use `IMPLEMENTATION_PLAN.md` as scratch space — delete its contents freely.
+
 ## 3. Search
 
-Before writing code, search the codebase for:
+Before writing code, spawn parallel subagents to search the codebase:
 - Existing implementations you can extend
 - Patterns to follow
 - Code your changes might affect
+
+Never assume something isn't implemented.
 
 ## 4. Implement
 
 Build the vertical slice. Prefer TDD — write tests first, then implement. Use your judgment on when TDD doesn't fit (trivial config changes, pure UI work, etc.).
 
-**If blocked:** Document what failed, why it's blocking, and options to resolve.
+**For complex implementations:** Break into sub-tasks and use subagents for research-heavy steps. Keep your context focused on the code you're writing.
+
+**If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using mode-specific instructions and exit.
 
 ## 5. Validate
 
@@ -50,6 +77,10 @@ When the slice is complete, mark the work item done and commit with a clear mess
 ## 7. Exit
 
 After committing ONE vertical slice, exit immediately. Do not start another task.
+
+## Philosophy
+
+This workflow follows Shape Up methodology — appetite-driven, vertically-sliced, with clear boundaries. For deeper context, see https://www.ryansinger.co/posts/
 "#;
 
 /// Specs README template with status key and empty table.
@@ -150,37 +181,28 @@ pub const SPECS_MODE_MD: &str = r#"
 
 ## Work Discovery
 
-Read `specs/README.md` to understand project state. Select ONE spec marked **Ready**.
+Read `specs/README.md` to find specs marked **Ready**.
 
-**Immediately after selecting:**
-1. Mark its status as **In Progress** in `specs/README.md`
-2. Commit this change before doing any implementation work
+**To flag:** Note issues in the spec file or README.
 
-## Understanding Your Work Item
+**To mark in progress:** Update status to **In Progress** in `specs/README.md` and commit.
 
-Read the selected spec file. Look for:
-- Acceptance criteria (checkboxes)
-- Technical constraints
-- Error cases to handle
+## Details
+
+Read the spec file for acceptance criteria, technical constraints, and error cases.
 
 ## Progress Tracking
 
-As you implement:
 - Mark completed items in the spec with `[x]`
 - Keep `specs/README.md` status accurate
 
 ## When Blocked
 
-Document in BOTH the spec AND `specs/README.md`:
-- What failed
-- Why it's blocking
-- Options to resolve
+Document in BOTH the spec AND `specs/README.md`.
 
 ## Completing Work
 
-When the slice is complete:
-1. Mark the spec complete in `specs/README.md`
-2. Commit with a clear message describing the change
+Mark the spec complete in `specs/README.md`.
 "#;
 
 /// Beads-mode work discovery instructions (compiled into binary).
@@ -189,38 +211,26 @@ pub const BEADS_MODE_MD: &str = r#"
 
 ## Work Discovery
 
-Run `bd ready --json` to find available work. Pick ONE bead.
+Run `bd ready --json` to find available work.
 
-**Immediately after selecting:**
-1. Mark it in progress: `bd update <id> --status in_progress`
-2. Only one bead should be in progress at a time
+**To flag:** `bd label add <id> shaping-required` or `bd label add <id> too-big`
 
-## Understanding Your Work Item
+**To mark in progress:** `bd update <id> --status in_progress` (one bead at a time)
 
-Run `bd show <id>` to read full details. Look for:
-- What this delivers (user-facing behavior)
-- Acceptance criteria
-- Dependencies on other code
+## Details
 
-## Triage
-
-If the bead is under-specified: `bd label add <id> shaping-required` — then stop.
-
-If the bead is too big for one session: `bd label add <id> too-big` — then stop.
+Run `bd show <id>` for full bead details.
 
 ## When Blocked
 
-Add a comment documenting the situation:
 ```
 bd comments add <id> -m "What failed, why it blocks, options to resolve"
+bd label add <id> blocked
 ```
-Then label it: `bd label add <id> blocked` — and stop.
 
 ## Completing Work
 
-When the slice is complete:
-1. Close the bead: `bd close <id>`
-2. Commit with a clear message describing the change
+Close the bead: `bd close <id>`
 "#;
 
 /// Returns mode-specific prompt content for the given mode, if any.
