@@ -117,6 +117,11 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Get active form values
     let form = state.map(|s| s.active_form());
+    let mode: &str = if let Some(f) = form {
+        f.selected_mode()
+    } else {
+        app.config.behavior.mode.as_str()
+    };
     let (
         claude_path,
         prompt_file,
@@ -425,16 +430,42 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     }
     content.push(Line::from(keep_awake_line));
 
-    // Mode (read-only)
-    let mode_line = vec![
-        Span::styled("  Mode:              ", label_style),
-        Span::styled(
-            &app.config.behavior.mode,
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(" (set via .ralph or RALPH_MODE)", label_style),
+    // Mode dropdown
+    let mode_focused = focus == Some(ConfigModalField::Mode);
+    let mode_inherited = is_inherited(ConfigModalField::Mode);
+    let mode_label_style = if mode_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mode_display = if mode_focused {
+        format!("< {} >", mode)
+    } else {
+        mode.to_string()
+    };
+    let mode_value_style = if mode_focused {
+        Style::default().fg(Color::Cyan)
+    } else if mode_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut mode_line = vec![
+        Span::styled("  Mode:              ", mode_label_style),
+        Span::styled(mode_display, mode_value_style),
     ];
+    if mode_inherited && !mode_focused {
+        mode_line.push(Span::styled(" (inherited)", label_style));
+    }
     content.push(Line::from(mode_line));
+
+    // Inline warning when selected mode differs from active mode
+    if mode != app.config.behavior.mode {
+        content.push(Line::from(Span::styled(
+            "                     \u{26a0} Changing mode will reset your work panel",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
 
     content.push(Line::from(""));
 

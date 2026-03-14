@@ -10,17 +10,17 @@ The mode field in the config modal changes from read-only text to an interactive
 
 ### Acceptance Criteria
 
-- [ ] Add `Mode` variant to `ConfigModalField` enum, positioned after `KeepAwake` and before `SaveButton`
-- [ ] Add `mode_index: usize` to `TabFormState`, indexing into a `MODE_OPTIONS` constant (`["specs", "beads"]`)
-- [ ] `TabFormState::from_config()` and `from_partial_config()` initialize `mode_index` from config value
-- [ ] Field navigation (`next()`/`prev()`) includes `Mode` in the tab order
-- [ ] Arrow keys cycle through mode options when `Mode` is focused (same pattern as LogLevel)
-- [ ] Rendering follows LogLevel style: `< specs >` when focused (cyan), plain text otherwise
-- [ ] On project tab, mode respects inherited vs explicit field tracking (dark gray when inherited)
-- [ ] Inline warning text appears below the mode field when selected value differs from `app.config.behavior.mode`
-- [ ] `to_config()` and `to_partial_config()` include the selected mode value
-- [ ] Remove the old read-only mode rendering and "(set via .ralph or RALPH_MODE)" hint
-- [ ] No validation needed — options are hardcoded
+- [x] Add `Mode` variant to `ConfigModalField` enum, positioned after `KeepAwake` and before `SaveButton`
+- [x] Add `mode_index: usize` to `TabFormState`, indexing into a `MODE_OPTIONS` constant (`["specs", "beads"]`)
+- [x] `TabFormState::from_config()` and `from_partial_config()` initialize `mode_index` from config value
+- [x] Field navigation (`next()`/`prev()`) includes `Mode` in the tab order
+- [x] Arrow keys cycle through mode options when `Mode` is focused (same pattern as LogLevel)
+- [x] Rendering follows LogLevel style: `< specs >` when focused (cyan), plain text otherwise
+- [x] On project tab, mode respects inherited vs explicit field tracking (dark gray when inherited)
+- [x] Inline warning text appears below the mode field when selected value differs from `app.config.behavior.mode`
+- [x] `to_config()` and `to_partial_config()` include the selected mode value
+- [x] Remove the old read-only mode rendering and "(set via .ralph or RALPH_MODE)" hint
+- [x] No validation needed — options are hardcoded
 
 ### Technical Constraints
 

@@ -193,6 +193,7 @@ impl InitModalState {
 
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+pub const MODE_OPTIONS: &[&str] = &["specs", "beads"];
 
 /// Which tab is active in the config modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +212,7 @@ pub struct TabFormState {
     pub iterations: i32,
     pub auto_expand_tasks: bool,
     pub keep_awake: bool,
+    pub mode_index: usize,
     pub cursor_pos: usize,
     pub error: Option<String>,
     pub validation_errors: HashMap<ConfigModalField, String>,
@@ -228,6 +230,7 @@ pub enum ConfigModalField {
     Iterations,
     AutoExpandTasks,
     KeepAwake,
+    Mode,
     SaveButton,
     CancelButton,
 }
@@ -241,7 +244,8 @@ impl ConfigModalField {
             Self::LogLevel => Self::Iterations,
             Self::Iterations => Self::AutoExpandTasks,
             Self::AutoExpandTasks => Self::KeepAwake,
-            Self::KeepAwake => Self::SaveButton,
+            Self::KeepAwake => Self::Mode,
+            Self::Mode => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
         }
@@ -256,7 +260,8 @@ impl ConfigModalField {
             Self::Iterations => Self::LogLevel,
             Self::AutoExpandTasks => Self::Iterations,
             Self::KeepAwake => Self::AutoExpandTasks,
-            Self::SaveButton => Self::KeepAwake,
+            Self::Mode => Self::KeepAwake,
+            Self::SaveButton => Self::Mode,
             Self::CancelButton => Self::SaveButton,
         }
     }
@@ -285,6 +290,11 @@ impl TabFormState {
             .position(|&l| l == config.logging.level)
             .unwrap_or(2);
 
+        let mode_index = MODE_OPTIONS
+            .iter()
+            .position(|&m| m == config.behavior.mode)
+            .unwrap_or(0);
+
         Self {
             claude_path: config.claude.path.clone(),
             prompt_file: config.paths.prompt.clone(),
@@ -293,6 +303,7 @@ impl TabFormState {
             iterations: config.behavior.iterations,
             auto_expand_tasks: config.behavior.auto_expand_tasks_panel,
             keep_awake: config.behavior.keep_awake,
+            mode_index,
             cursor_pos: config.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -326,12 +337,20 @@ impl TabFormState {
         if partial.behavior.keep_awake.is_some() {
             explicit_fields.insert(ConfigModalField::KeepAwake);
         }
+        if partial.behavior.mode.is_some() {
+            explicit_fields.insert(ConfigModalField::Mode);
+        }
 
         // Display merged values (so inherited fields show their effective value)
         let log_level_index = LOG_LEVELS
             .iter()
             .position(|&l| l == merged.logging.level)
             .unwrap_or(2);
+
+        let mode_index = MODE_OPTIONS
+            .iter()
+            .position(|&m| m == merged.behavior.mode)
+            .unwrap_or(0);
 
         Self {
             claude_path: merged.claude.path.clone(),
@@ -341,6 +360,7 @@ impl TabFormState {
             iterations: merged.behavior.iterations,
             auto_expand_tasks: merged.behavior.auto_expand_tasks_panel,
             keep_awake: merged.behavior.keep_awake,
+            mode_index,
             cursor_pos: merged.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -367,6 +387,7 @@ impl TabFormState {
         config.behavior.iterations = self.iterations;
         config.behavior.auto_expand_tasks_panel = self.auto_expand_tasks;
         config.behavior.keep_awake = self.keep_awake;
+        config.behavior.mode = self.selected_mode().to_string();
         config
     }
 
@@ -421,7 +442,11 @@ impl TabFormState {
                 } else {
                     None
                 },
-                mode: None, // Mode is read-only in the config modal
+                mode: if self.explicit_fields.contains(&ConfigModalField::Mode) {
+                    Some(self.selected_mode().to_string())
+                } else {
+                    None
+                },
                 bd_path: None,
             },
         }
@@ -429,6 +454,10 @@ impl TabFormState {
 
     pub fn selected_log_level(&self) -> &'static str {
         LOG_LEVELS[self.log_level_index]
+    }
+
+    pub fn selected_mode(&self) -> &'static str {
+        MODE_OPTIONS[self.mode_index]
     }
 
     /// Check if there are any validation errors.
@@ -723,6 +752,28 @@ impl ConfigModalState {
             form.log_level_index += 1;
         } else {
             form.log_level_index = 0;
+        }
+        self.mark_explicit();
+    }
+
+    /// Cycle mode selection backward.
+    pub fn mode_prev(&mut self) {
+        let form = self.active_form_mut();
+        if form.mode_index > 0 {
+            form.mode_index -= 1;
+        } else {
+            form.mode_index = MODE_OPTIONS.len() - 1;
+        }
+        self.mark_explicit();
+    }
+
+    /// Cycle mode selection forward.
+    pub fn mode_next(&mut self) {
+        let form = self.active_form_mut();
+        if form.mode_index < MODE_OPTIONS.len() - 1 {
+            form.mode_index += 1;
+        } else {
+            form.mode_index = 0;
         }
         self.mark_explicit();
     }
@@ -1037,6 +1088,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::Iterations => state.iterations_decrement(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Mode => state.mode_prev(),
             _ => state.cursor_left(),
         },
 
@@ -1045,6 +1097,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::Iterations => state.iterations_increment(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Mode => state.mode_next(),
             _ => state.cursor_right(),
         },
 
@@ -1062,6 +1115,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::Iterations => state.iterations_increment(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Mode => state.mode_prev(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
         },
@@ -1071,6 +1125,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::Iterations => state.iterations_decrement(),
             ConfigModalField::AutoExpandTasks => state.toggle_auto_expand_tasks(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Mode => state.mode_next(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
         },
@@ -1181,6 +1236,8 @@ mod tests {
         let field = field.next();
         assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.next();
+        assert_eq!(field, ConfigModalField::Mode);
+        let field = field.next();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.next();
         assert_eq!(field, ConfigModalField::CancelButton);
@@ -1206,6 +1263,8 @@ mod tests {
         assert_eq!(field, ConfigModalField::CancelButton);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::SaveButton);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::Mode);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.prev();
@@ -1241,6 +1300,7 @@ mod tests {
             ConfigModalField::Iterations,
             ConfigModalField::AutoExpandTasks,
             ConfigModalField::KeepAwake,
+            ConfigModalField::Mode,
             ConfigModalField::SaveButton,
             ConfigModalField::CancelButton,
         ];
