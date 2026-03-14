@@ -74,23 +74,28 @@ impl InitModalState {
         let prompt_path = config.prompt_path();
         let specs_path = config.specs_path();
 
-        // Build list of files to check
-        let files_to_check = vec![
+        // Build list of files to check — mode-agnostic files always,
+        // specs-specific files only in specs mode
+        let mut files_to_check = vec![
             (config.paths.prompt.clone(), prompt_path.clone()),
-            (
+        ];
+
+        if config.behavior.mode == "specs" {
+            files_to_check.push((
                 format!("{}/README.md", config.paths.specs),
                 specs_path.join("README.md"),
-            ),
-            (
+            ));
+            files_to_check.push((
                 format!("{}/TEMPLATE.md", config.paths.specs),
                 specs_path.join("TEMPLATE.md"),
-            ),
-            (
-                ".claude/commands/ralph-spec.md".to_string(),
-                PathBuf::from(".claude/commands/ralph-spec.md"),
-            ),
-            (".ralph".to_string(), PathBuf::from(".ralph")),
-        ];
+            ));
+        }
+
+        files_to_check.push((
+            ".claude/commands/ralph-spec.md".to_string(),
+            PathBuf::from(".claude/commands/ralph-spec.md"),
+        ));
+        files_to_check.push((".ralph".to_string(), PathBuf::from(".ralph")));
 
         let files = files_to_check
             .into_iter()
@@ -1309,5 +1314,61 @@ mod tests {
             assert_eq!(field.next().prev(), field);
             assert_eq!(field.prev().next(), field);
         }
+    }
+
+    // InitModalState mode-aware file list tests
+
+    fn config_with_mode(mode: &str) -> Config {
+        let mut config = Config::default();
+        config.behavior.mode = mode.to_string();
+        config
+    }
+
+    #[test]
+    fn test_init_specs_mode_includes_specs_files() {
+        let config = config_with_mode("specs");
+        let state = InitModalState::new(&config);
+
+        let paths: Vec<&str> = state.files.iter().map(|f| f.display_path.as_str()).collect();
+        assert!(paths.iter().any(|p| p.ends_with("README.md")));
+        assert!(paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
+    }
+
+    #[test]
+    fn test_init_beads_mode_excludes_specs_files() {
+        let config = config_with_mode("beads");
+        let state = InitModalState::new(&config);
+
+        let paths: Vec<&str> = state.files.iter().map(|f| f.display_path.as_str()).collect();
+        assert!(!paths.iter().any(|p| p.ends_with("README.md")));
+        assert!(!paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
+    }
+
+    #[test]
+    fn test_init_both_modes_include_prompt_and_ralph() {
+        for mode in &["specs", "beads"] {
+            let config = config_with_mode(mode);
+            let state = InitModalState::new(&config);
+
+            let paths: Vec<&str> =
+                state.files.iter().map(|f| f.display_path.as_str()).collect();
+            assert!(paths.iter().any(|p| p.ends_with("PROMPT.md")));
+            assert!(paths.iter().any(|p| *p == ".ralph"));
+            assert!(paths.iter().any(|p| p.ends_with("ralph-spec.md")));
+        }
+    }
+
+    #[test]
+    fn test_init_specs_mode_has_five_files() {
+        let config = config_with_mode("specs");
+        let state = InitModalState::new(&config);
+        assert_eq!(state.files.len(), 5);
+    }
+
+    #[test]
+    fn test_init_beads_mode_has_three_files() {
+        let config = config_with_mode("beads");
+        let state = InitModalState::new(&config);
+        assert_eq!(state.files.len(), 3);
     }
 }
