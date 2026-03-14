@@ -92,8 +92,8 @@ impl InitModalState {
         }
 
         files_to_check.push((
-            ".claude/commands/ralph-spec.md".to_string(),
-            PathBuf::from(".claude/commands/ralph-spec.md"),
+            ".claude/skills/ralph-spec/SKILL.md".to_string(),
+            PathBuf::from(".claude/skills/ralph-spec/SKILL.md"),
         ));
         files_to_check.push((".ralph".to_string(), PathBuf::from(".ralph")));
 
@@ -170,8 +170,8 @@ impl InitModalState {
                     templates::SPECS_README_MD
                 } else if file.display_path.ends_with("TEMPLATE.md") {
                     templates::SPECS_TEMPLATE_MD
-                } else if file.display_path.ends_with("ralph-spec.md") {
-                    templates::RALPH_SPEC_MD
+                } else if file.display_path.ends_with("SKILL.md") {
+                    templates::RALPH_SPEC_SKILL_MD
                 } else if file.display_path == ".ralph" {
                     templates::RALPH_CONFIG
                 } else {

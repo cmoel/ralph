@@ -242,14 +242,26 @@ pub fn mode_content(mode: &str) -> Option<&'static str> {
     }
 }
 
-/// Spec shaping interview command.
-pub const RALPH_SPEC_MD: &str = r#"# Spec Shaping Interview
+/// Spec shaping interview skill (with YAML frontmatter).
+pub const RALPH_SPEC_SKILL_MD: &str = r#"---
+name: ralph-spec
+description: "Spec Shaping Interview. Use when the user wants to shape, define, or write a spec for a feature, bug fix, refactor, or other work item."
+---
+
+# Spec Shaping Interview
 
 Shape a specification through conversation. Your goal: produce a spec that an implementing agent can execute in small, valuable vertical slices.
 
 ## Setup
 
-Read `specs/README.md` and `specs/TEMPLATE.md` before starting.
+**Detect mode** by reading the `.ralph` config file in the project root. Look for `mode = "beads"` or `mode = "specs"` under `[behavior]`.
+
+- **Specs mode** (default): Read `specs/README.md` and `specs/TEMPLATE.md` before starting.
+- **Beads mode**: No spec files needed. Output will be `bd create` commands.
+
+**Announce the mode:** Tell the user which mode you detected. Example: *"I see this project uses beads mode, so I'll create beads (issues) instead of spec files. Let me know if you'd prefer specs instead."*
+
+If the user wants to override the detected mode, respect their choice.
 
 ---
 
@@ -317,12 +329,34 @@ Keep asking until you can articulate the value in one sentence.
 
 This is critical. Break work into **vertical slices**—each slice delivers observable value.
 
+### Work Items vs Slices
+
+One conversation might produce **multiple work items** (specs in specs mode, beads in beads mode).
+
+- **Work item** = A cohesive feature. "User can do X." Has its own value statement.
+- **Slice** = The smallest unit within a work item that still delivers user value.
+
+**Red flag:** If your "slices" deliver unrelated user value, you probably have multiple work items. Each work item should have a clear "User can do X" statement. Slices within that work item break it into smaller deliverables.
+
 ### What Makes a Good Slice
 
 A vertical slice:
 - Cuts through all layers (not "build API, then UI"—build one thin feature end-to-end)
 - Delivers something the user can see, verify, or benefit from
 - Works independently, even if limited
+- **Is smaller than you think.** One discrete change, not multiple changes bundled together.
+
+### Slice Sizing: Smaller Is Better
+
+**If a slice has "and" in it, it's probably too big.** Break it down.
+
+Bad: "Remove SwiftData and add GRDB"
+Good: Two slices — "Remove SwiftData" then "Add GRDB"
+
+Bad: "Set up database connection and migrations"
+Good: Two slices — "Set up database connection" then "Add migrations infrastructure"
+
+**Each slice = one focused change.** When in doubt, slice thinner.
 
 ### Shape Up Criteria
 
@@ -332,9 +366,9 @@ Use these to prioritize slices:
 - "Without this, the other work wouldn't mean anything"
 - Do core slices first
 
-**Small:** Can this be completed in one agent session?
+**Small:** Can this be completed in one short agent session?
 - If not, slice thinner
-- A few days of work, not weeks
+- Hours of work, not days
 
 **Novel:** Does this reduce uncertainty?
 - Unproven approaches should be validated early
@@ -400,7 +434,8 @@ For each failure mode:
 ## Phase 7: Dependencies
 
 **Check with subagents:**
-- Review `specs/README.md` for dependencies on other specs
+- **Specs mode:** Review `specs/README.md` for dependencies on other specs
+- **Beads mode:** Run `bd list --json` to check for dependencies on existing beads
 - Identify which slices depend on other slices
 - Check if required code/features already exist
 
@@ -416,21 +451,59 @@ Only if scope is ambiguous:
 
 ---
 
-## Phase 9: Write the Spec
+## Phase 9: Write the Work Items
 
 When the conversation converges:
 
-1. **Summarize** what you're about to write and confirm with the user
-2. **Create** `specs/[name].md` following `specs/TEMPLATE.md`
+1. **Summarize** what you're about to create and confirm with the user
+
+### Specs Mode
+
+2. **Create** `specs/[name].md` for each spec, following `specs/TEMPLATE.md`
 3. **Update** `specs/README.md`:
-   - Add to the table
+   - Add each spec to the table
    - Set status to **Ready**
    - Write one-line summary
-   - List dependencies
+   - List dependencies (specs can depend on other specs)
 
-## Phase 10: Commit
+### Beads Mode
 
-Make a commit once getting approval from the user
+2. **Create beads** using `bd create` for each work item. For each bead:
+   - Title: Clear, action-oriented (e.g., "Add user authentication")
+   - Description: Include the value statement, slices as a checklist, technical constraints, and error handling notes
+   - Type: `feature`, `bug`, `task`, `refactor`, etc.
+   - Priority: 0-4 (0 = highest)
+   - Dependencies: Use `--deps` to link related beads
+
+   Example:
+   ```bash
+   bd create "Add user authentication" \
+     --description="User can log in with email/password.
+
+   ## Slices
+   - [ ] Slice 1: Basic login form with email/password fields
+   - [ ] Slice 2: Session persistence across page reloads
+   - [ ] Slice 3: Error messaging for invalid credentials
+
+   ## Technical Constraints
+   - Follow existing auth patterns in the codebase
+   - Use bcrypt for password hashing
+
+   ## Error Cases
+   - Invalid credentials: show generic 'invalid email or password' message
+   - Rate limiting: lock account after 5 failed attempts" \
+     -t feature -p 2
+   ```
+
+3. **Show the user** the `bd create` commands before running them for confirmation
+
+## Phase 10: Finalize
+
+### Specs Mode
+Make a commit once getting approval from the user.
+
+### Beads Mode
+Run the confirmed `bd create` commands to create the beads. No file commit needed — beads are tracked by `bd`.
 
 ---
 
@@ -447,5 +520,9 @@ Make a commit once getting approval from the user
 
 ## Start
 
-Read `specs/README.md` and `specs/TEMPLATE.md`, then ask: **"What are we working on?"**
+1. Read `.ralph` to detect the mode
+2. **Specs mode:** Read `specs/README.md` and `specs/TEMPLATE.md`
+3. **Beads mode:** Run `bd list --json` to see existing beads for context
+4. Announce the detected mode to the user
+5. Ask: **"What are we working on?"**
 "#;

@@ -1,4 +1,5 @@
 # Project-specific Ralph config — edit with config modal (c)
 
 [behavior]
+iterations = -1
 mode = "beads"
