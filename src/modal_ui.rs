@@ -739,6 +739,11 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::Yellow),
                 Some(" (stale, will regenerate)"),
             ),
+            InitFileStatus::WillRegenerate => (
+                "↻",
+                Style::default().fg(Color::Cyan),
+                Some(" (will regenerate)"),
+            ),
         };
 
         let mut spans = vec![

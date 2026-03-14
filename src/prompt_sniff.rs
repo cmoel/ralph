@@ -34,7 +34,7 @@ pub fn sniff_prompt(content: &str, mode: &str) -> Vec<String> {
         .join(", ");
 
     vec![format!(
-        "Warning: PROMPT.md contains {} from a different mode (current: {}). Run `ralph init` to regenerate it.",
+        "Warning: PROMPT.md contains {} from a different mode (current: {}). Run `ralph reinit` to regenerate it.",
         keyword_list, mode
     )]
 }
@@ -57,7 +57,7 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("specs/README.md"));
         assert!(warnings[0].contains("current: beads"));
-        assert!(warnings[0].contains("ralph init"));
+        assert!(warnings[0].contains("ralph reinit"));
     }
 
     #[test]

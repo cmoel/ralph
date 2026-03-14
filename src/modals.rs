@@ -25,6 +25,8 @@ pub enum InitFileStatus {
     Exists,
     /// File exists but contains stale content (will be regenerated with backup).
     Stale,
+    /// File exists and will be force-regenerated (reinit mode).
+    WillRegenerate,
 }
 
 /// A file entry for the init modal.
@@ -173,6 +175,66 @@ impl InitModalState {
         self.focus = self.focus.prev();
     }
 
+    /// Count files that will be regenerated.
+    pub fn regenerate_count(&self) -> usize {
+        self.files
+            .iter()
+            .filter(|f| f.status == InitFileStatus::WillRegenerate)
+            .count()
+    }
+
+    /// Create a reinit state: same files as init but excludes `.ralph` config
+    /// and marks existing files as `WillRegenerate` instead of `Exists`.
+    pub fn new_reinit(config: &Config) -> Self {
+        let prompt_path = config.prompt_path();
+        let specs_path = config.specs_path();
+
+        let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
+
+        if config.behavior.mode == "specs" {
+            files_to_check.push((
+                format!("{}/README.md", config.paths.specs),
+                specs_path.join("README.md"),
+            ));
+            files_to_check.push((
+                format!("{}/TEMPLATE.md", config.paths.specs),
+                specs_path.join("TEMPLATE.md"),
+            ));
+        }
+
+        files_to_check.push((
+            ".claude/skills/brain-dump/SKILL.md".to_string(),
+            PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
+        ));
+        files_to_check.push((
+            ".claude/skills/shape/SKILL.md".to_string(),
+            PathBuf::from(".claude/skills/shape/SKILL.md"),
+        ));
+
+        let files = files_to_check
+            .into_iter()
+            .map(|(display, full)| {
+                let status = if full.exists() {
+                    InitFileStatus::WillRegenerate
+                } else {
+                    InitFileStatus::WillCreate
+                };
+                InitFileEntry {
+                    display_path: display,
+                    full_path: full,
+                    status,
+                }
+            })
+            .collect();
+
+        Self {
+            files,
+            focus: InitModalField::InitializeButton,
+            error: None,
+            success: None,
+        }
+    }
+
     /// Create all files. Returns Ok(()) on success, Err(message) on failure.
     pub fn create_files(&self) -> Result<(), String> {
         for file in &self.files {
@@ -181,9 +243,16 @@ impl InitModalState {
                 continue;
             }
 
-            // Backup stale files before overwriting
-            if file.status == InitFileStatus::Stale {
-                let backup_path = file.full_path.with_extension("md.bak");
+            // Backup stale or regenerated files before overwriting
+            if file.status == InitFileStatus::Stale
+                || file.status == InitFileStatus::WillRegenerate
+            {
+                let backup_ext = if file.display_path.ends_with(".md") {
+                    "md.bak"
+                } else {
+                    "bak"
+                };
+                let backup_path = file.full_path.with_extension(backup_ext);
                 std::fs::rename(&file.full_path, &backup_path).map_err(|e| {
                     format!(
                         "Failed to backup {}: {}",

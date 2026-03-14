@@ -58,6 +58,8 @@ use tracing::{debug, info, trace, warn};
 enum Commands {
     /// Initialize project with Ralph scaffolding
     Init,
+    /// Force-regenerate all managed files (preserves .ralph config)
+    Reinit,
     /// Show status summary of work items
     Status {
         /// Print individual item statuses
@@ -131,6 +133,7 @@ fn main() -> Result<()> {
     // Handle subcommands that don't need the TUI
     match cli.command {
         Some(Commands::Init) => return run_init(),
+        Some(Commands::Reinit) => return run_reinit(),
         Some(Commands::Status { verbose }) => return run_status(verbose),
         None => {}
     }
@@ -218,6 +221,49 @@ fn run_init() -> Result<()> {
                 create_count,
                 if create_count == 1 { "" } else { "s" },
                 skip_count
+            );
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Run the reinit subcommand: force-regenerate all managed files.
+fn run_reinit() -> Result<()> {
+    let loaded_config = config::load_config();
+    let state = InitModalState::new_reinit(&loaded_config.config);
+
+    let create_count = state.create_count();
+    let regenerate_count = state.regenerate_count();
+
+    if create_count == 0 && regenerate_count == 0 {
+        println!("Nothing to do.");
+        return Ok(());
+    }
+
+    match state.create_files() {
+        Ok(()) => {
+            let mut parts = Vec::new();
+            if regenerate_count > 0 {
+                parts.push(format!(
+                    "regenerated {} file{}",
+                    regenerate_count,
+                    if regenerate_count == 1 { "" } else { "s" }
+                ));
+            }
+            if create_count > 0 {
+                parts.push(format!(
+                    "created {} file{}",
+                    create_count,
+                    if create_count == 1 { "" } else { "s" }
+                ));
+            }
+            println!(
+                "{} (old files backed up as .bak).",
+                parts.join(", ")
             );
             Ok(())
         }
@@ -1015,6 +1061,12 @@ mod tests {
     fn cli_unknown_subcommand_fails() {
         let result = Cli::try_parse_from(["ralph", "bogus"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_reinit_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "reinit"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Reinit)));
     }
 
     #[test]
