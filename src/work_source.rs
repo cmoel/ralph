@@ -28,6 +28,7 @@ pub enum WorkRemaining {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WorkItemStatus {
     Blocked,
+    NeedsShaping,
     Ready,
     InProgress,
     Done,
@@ -38,6 +39,7 @@ impl WorkItemStatus {
     pub fn color(&self) -> Color {
         match self {
             Self::Blocked => Color::Red,
+            Self::NeedsShaping => Color::Yellow,
             Self::Ready => Color::Cyan,
             Self::InProgress => Color::Green,
             Self::Done => Color::DarkGray,
@@ -48,6 +50,7 @@ impl WorkItemStatus {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Blocked => "Blocked",
+            Self::NeedsShaping => "Needs Shaping",
             Self::Ready => "Ready",
             Self::InProgress => "In Progress",
             Self::Done => "Done",
@@ -59,6 +62,7 @@ impl From<SpecStatus> for WorkItemStatus {
     fn from(s: SpecStatus) -> Self {
         match s {
             SpecStatus::Blocked => Self::Blocked,
+            SpecStatus::NeedsShaping => Self::NeedsShaping,
             SpecStatus::Ready => Self::Ready,
             SpecStatus::InProgress => Self::InProgress,
             SpecStatus::Done => Self::Done,

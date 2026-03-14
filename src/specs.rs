@@ -30,6 +30,8 @@ pub struct ParsedSpec {
 pub enum SpecStatus {
     /// Blocked - needs attention (sorted first)
     Blocked,
+    /// Needs Shaping - captured but not yet shaped
+    NeedsShaping,
     /// Ready - can be worked on
     Ready,
     /// In Progress - currently being worked on
@@ -44,6 +46,7 @@ impl SpecStatus {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.trim() {
             "Blocked" => Some(Self::Blocked),
+            "Needs Shaping" => Some(Self::NeedsShaping),
             "Ready" => Some(Self::Ready),
             "In Progress" => Some(Self::InProgress),
             "Done" => Some(Self::Done),
@@ -55,6 +58,7 @@ impl SpecStatus {
     pub fn color(&self) -> Color {
         match self {
             Self::Blocked => Color::Red,
+            Self::NeedsShaping => Color::Yellow,
             Self::Ready => Color::Cyan,
             Self::InProgress => Color::Green,
             Self::Done => Color::DarkGray,
@@ -65,6 +69,7 @@ impl SpecStatus {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Blocked => "Blocked",
+            Self::NeedsShaping => "Needs Shaping",
             Self::Ready => "Ready",
             Self::InProgress => "In Progress",
             Self::Done => "Done",
@@ -225,6 +230,14 @@ mod tests {
     }
 
     #[test]
+    fn test_spec_status_from_str_needs_shaping() {
+        assert_eq!(
+            SpecStatus::from_str("Needs Shaping"),
+            Some(SpecStatus::NeedsShaping)
+        );
+    }
+
+    #[test]
     fn test_spec_status_from_str_ready() {
         assert_eq!(SpecStatus::from_str("Ready"), Some(SpecStatus::Ready));
     }
@@ -271,6 +284,11 @@ mod tests {
     }
 
     #[test]
+    fn test_spec_status_label_needs_shaping() {
+        assert_eq!(SpecStatus::NeedsShaping.label(), "Needs Shaping");
+    }
+
+    #[test]
     fn test_spec_status_label_ready() {
         assert_eq!(SpecStatus::Ready.label(), "Ready");
     }
@@ -290,6 +308,7 @@ mod tests {
         // Verify that label() returns a value that from_str() can parse back
         for status in [
             SpecStatus::Blocked,
+            SpecStatus::NeedsShaping,
             SpecStatus::Ready,
             SpecStatus::InProgress,
             SpecStatus::Done,
@@ -313,21 +332,24 @@ mod tests {
     fn test_parse_specs_table_all_status_variants() {
         let contents = "\
 | [blocked-spec](blocked-spec.md) | Blocked | Blocked summary | — |
+| [shaping-spec](shaping-spec.md) | Needs Shaping | Needs shaping summary | — |
 | [ready-spec](ready-spec.md) | Ready | Ready summary | — |
 | [in-progress-spec](in-progress-spec.md) | In Progress | In progress summary | — |
 | [done-spec](done-spec.md) | Done | Done summary | — |";
 
         let specs = parse_specs_table(contents);
 
-        assert_eq!(specs.len(), 4);
+        assert_eq!(specs.len(), 5);
         assert_eq!(specs[0].name, "blocked-spec");
         assert_eq!(specs[0].status, SpecStatus::Blocked);
-        assert_eq!(specs[1].name, "ready-spec");
-        assert_eq!(specs[1].status, SpecStatus::Ready);
-        assert_eq!(specs[2].name, "in-progress-spec");
-        assert_eq!(specs[2].status, SpecStatus::InProgress);
-        assert_eq!(specs[3].name, "done-spec");
-        assert_eq!(specs[3].status, SpecStatus::Done);
+        assert_eq!(specs[1].name, "shaping-spec");
+        assert_eq!(specs[1].status, SpecStatus::NeedsShaping);
+        assert_eq!(specs[2].name, "ready-spec");
+        assert_eq!(specs[2].status, SpecStatus::Ready);
+        assert_eq!(specs[3].name, "in-progress-spec");
+        assert_eq!(specs[3].status, SpecStatus::InProgress);
+        assert_eq!(specs[4].name, "done-spec");
+        assert_eq!(specs[4].status, SpecStatus::Done);
     }
 
     #[test]

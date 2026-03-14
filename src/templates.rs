@@ -90,6 +90,7 @@ Single source of truth for specification status.
 
 ## Status Key
 
+- **Needs Shaping** — Captured but not yet shaped — needs refinement via /shape
 - **Ready** — Shaped and ready for implementation
 - **In Progress** — Currently being worked on
 - **Done** — Complete
