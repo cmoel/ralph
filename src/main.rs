@@ -58,6 +58,12 @@ use tracing::{debug, info, trace, warn};
 enum Commands {
     /// Initialize project with Ralph scaffolding
     Init,
+    /// Show status summary of work items
+    Status {
+        /// Print individual item statuses
+        #[arg(long)]
+        verbose: bool,
+    },
 }
 
 /// CLI argument parser.
@@ -123,8 +129,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle subcommands that don't need the TUI
-    if let Some(Commands::Init) = cli.command {
-        return run_init();
+    match cli.command {
+        Some(Commands::Init) => return run_init(),
+        Some(Commands::Status { verbose }) => return run_status(verbose),
+        None => {}
     }
 
     let start_time = Instant::now();
@@ -218,6 +226,61 @@ fn run_init() -> Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+/// Run the status subcommand: print work item status summary.
+fn run_status(verbose: bool) -> Result<()> {
+    let loaded_config = config::load_config();
+    let cfg = &loaded_config.config;
+    let work_source = work_source::create_work_source(
+        &cfg.behavior.mode,
+        cfg.specs_path(),
+        &cfg.behavior.bd_path,
+    );
+
+    let items = match work_source.list_items() {
+        Ok(items) => items,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if items.is_empty() {
+        println!("{}", work_source.complete_message());
+        return Ok(());
+    }
+
+    let blocked = items.iter().filter(|i| i.status == work_source::WorkItemStatus::Blocked).count();
+    let ready = items.iter().filter(|i| i.status == work_source::WorkItemStatus::Ready).count();
+    let in_progress = items.iter().filter(|i| i.status == work_source::WorkItemStatus::InProgress).count();
+    let done = items.iter().filter(|i| i.status == work_source::WorkItemStatus::Done).count();
+
+    // Build summary parts, only including non-zero counts
+    let mut parts = Vec::new();
+    if in_progress > 0 {
+        parts.push(format!("{} in progress", in_progress));
+    }
+    if ready > 0 {
+        parts.push(format!("{} ready", ready));
+    }
+    if blocked > 0 {
+        parts.push(format!("{} blocked", blocked));
+    }
+    if done > 0 {
+        parts.push(format!("{} done", done));
+    }
+
+    println!("{}", parts.join(", "));
+
+    if verbose {
+        println!();
+        for item in &items {
+            println!("  [{}] {}", item.status.label(), item.name);
+        }
+    }
+
+    Ok(())
 }
 
 fn run_app(
@@ -952,5 +1015,17 @@ mod tests {
     fn cli_unknown_subcommand_fails() {
         let result = Cli::try_parse_from(["ralph", "bogus"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_status_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "status"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Status { verbose: false })));
+    }
+
+    #[test]
+    fn cli_status_verbose_parses() {
+        let cli = Cli::try_parse_from(["ralph", "status", "--verbose"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Status { verbose: true })));
     }
 }
