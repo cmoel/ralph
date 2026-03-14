@@ -13,6 +13,8 @@ mod validators;
 mod wake_lock;
 mod work_source;
 
+use clap::Parser;
+
 use crate::app::{App, AppStatus, ContentBlockState, PendingToolCall, SelectedPanel};
 use crate::config::{LoadedConfig, load_global_config, load_project_config};
 use crate::events::{
@@ -49,6 +51,14 @@ use crossterm::terminal::{
 use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, info, trace, warn};
+
+/// CLI argument parser.
+#[derive(Debug, Parser)]
+#[command(
+    version,
+    about = "TUI wrapper for claude CLI that displays formatted streaming output"
+)]
+struct Cli {}
 
 /// Message types for output processing.
 pub enum OutputMessage {
@@ -97,6 +107,9 @@ pub fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
 
 fn main() -> Result<()> {
     use std::time::Instant;
+
+    // Parse CLI args (handles --version, --help, future subcommands)
+    let _cli = Cli::parse();
 
     let start_time = Instant::now();
 
@@ -813,5 +826,38 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             // Flush any remaining text
             app.flush_current_line();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn cli_no_args_parses_successfully() {
+        Cli::try_parse_from(["ralph"]).unwrap();
+    }
+
+    #[test]
+    fn cli_version_flag_exits() {
+        let result = Cli::try_parse_from(["ralph", "--version"]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+    }
+
+    #[test]
+    fn cli_help_flag_exits() {
+        let result = Cli::try_parse_from(["ralph", "--help"]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
+
+    #[test]
+    fn cli_unknown_arg_fails() {
+        let result = Cli::try_parse_from(["ralph", "--bogus"]);
+        assert!(result.is_err());
     }
 }
