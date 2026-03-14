@@ -42,7 +42,7 @@ Single source of truth for specification status.
 | [project-config](project-config.md) | Done | Project-specific config via `.ralph` file with merge precedence | configuration, config-modal, project-init |
 | [init-skip-existing](init-skip-existing.md) | Done | Init creates missing files and skips existing ones | project-init |
 | [work-source-modes](work-source-modes.md) | Done | Pluggable work sources: specs mode (current) and beads mode | configuration, project-config |
-| [config-modal-mode-selector](config-modal-mode-selector.md) | Ready | Editable mode dropdown in config modal with change warning | work-source-modes, config-modal |
+| [config-modal-mode-selector](config-modal-mode-selector.md) | In Progress | Editable mode dropdown in config modal with change warning | work-source-modes, config-modal |
 
 ## Notes
 
