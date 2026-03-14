@@ -183,10 +183,51 @@ When the slice is complete:
 2. Commit with a clear message describing the change
 "#;
 
+/// Beads-mode work discovery instructions (compiled into binary).
+pub const BEADS_MODE_MD: &str = r#"
+# Beads Mode
+
+## Work Discovery
+
+Run `bd ready --json` to find available work. Pick ONE bead.
+
+**Immediately after selecting:**
+1. Mark it in progress: `bd update <id> --status in_progress`
+2. Only one bead should be in progress at a time
+
+## Understanding Your Work Item
+
+Run `bd show <id>` to read full details. Look for:
+- What this delivers (user-facing behavior)
+- Acceptance criteria
+- Dependencies on other code
+
+## Triage
+
+If the bead is under-specified: `bd label add <id> shaping-required` — then stop.
+
+If the bead is too big for one session: `bd label add <id> too-big` — then stop.
+
+## When Blocked
+
+Add a comment documenting the situation:
+```
+bd comments add <id> -m "What failed, why it blocks, options to resolve"
+```
+Then label it: `bd label add <id> blocked` — and stop.
+
+## Completing Work
+
+When the slice is complete:
+1. Close the bead: `bd close <id>`
+2. Commit with a clear message describing the change
+"#;
+
 /// Returns mode-specific prompt content for the given mode, if any.
 pub fn mode_content(mode: &str) -> Option<&'static str> {
     match mode {
         "specs" => Some(SPECS_MODE_MD),
+        "beads" => Some(BEADS_MODE_MD),
         _ => None,
     }
 }
