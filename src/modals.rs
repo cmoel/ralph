@@ -14,7 +14,7 @@ use crate::templates;
 use crate::validators::{
     validate_directory_exists, validate_executable_path, validate_file_exists,
 };
-use crate::work_source::{WorkItem, WorkItemStatus, WorkSource};
+use crate::work_source::{WorkItem, WorkItemStatus};
 
 /// Status of a file for the init modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,9 +81,7 @@ impl InitModalState {
 
         // Build list of files to check — mode-agnostic files always,
         // specs-specific files only in specs mode
-        let mut files_to_check = vec![
-            (config.paths.prompt.clone(), prompt_path.clone()),
-        ];
+        let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
 
         if config.behavior.mode == "specs" {
             files_to_check.push((
@@ -244,8 +242,7 @@ impl InitModalState {
             }
 
             // Backup stale or regenerated files before overwriting
-            if file.status == InitFileStatus::Stale
-                || file.status == InitFileStatus::WillRegenerate
+            if file.status == InitFileStatus::Stale || file.status == InitFileStatus::WillRegenerate
             {
                 let backup_ext = if file.display_path.ends_with(".md") {
                     "md.bak"
@@ -253,12 +250,8 @@ impl InitModalState {
                     "bak"
                 };
                 let backup_path = file.full_path.with_extension(backup_ext);
-                std::fs::rename(&file.full_path, &backup_path).map_err(|e| {
-                    format!(
-                        "Failed to backup {}: {}",
-                        file.display_path, e
-                    )
-                })?;
+                std::fs::rename(&file.full_path, &backup_path)
+                    .map_err(|e| format!("Failed to backup {}: {}", file.display_path, e))?;
             }
 
             // Determine template content based on file path
@@ -981,46 +974,53 @@ pub struct SpecsPanelState {
     pub specs_dir: PathBuf,
     /// Label for the panel title (e.g., "Specs", "Beads").
     pub panel_label: String,
+    /// Whether data is still loading from a background thread.
+    pub is_loading: bool,
 }
 
 impl SpecsPanelState {
-    /// Create a new specs panel state from a work source.
-    pub fn new(work_source: &dyn WorkSource, specs_dir: &std::path::Path) -> Self {
-        let panel_label = work_source.label().to_string();
-        match work_source.list_items() {
+    /// Create a panel in loading state (data will arrive via populate()).
+    pub fn new_loading(label: &str, specs_dir: &std::path::Path) -> Self {
+        Self {
+            specs: Vec::new(),
+            selected: 0,
+            scroll_offset: 0,
+            error: None,
+            specs_dir: specs_dir.to_path_buf(),
+            panel_label: label.to_string(),
+            is_loading: true,
+        }
+    }
+
+    /// Populate the panel with results from a background list_items call.
+    pub fn populate(&mut self, result: Result<Vec<WorkItem>, String>) {
+        self.is_loading = false;
+        match result {
             Ok(mut items) => {
-                // Sort by status (Blocked→Ready→InProgress→Done), then by timestamp (newest first)
-                items.sort_by(|a, b| match a.status.cmp(&b.status) {
-                    std::cmp::Ordering::Equal => {
-                        // Within same status, sort by timestamp descending (newest first)
-                        // None values go to the end
-                        match (&b.timestamp, &a.timestamp) {
-                            (Some(b_ts), Some(a_ts)) => b_ts.cmp(a_ts),
-                            (Some(_), None) => std::cmp::Ordering::Less,
-                            (None, Some(_)) => std::cmp::Ordering::Greater,
-                            (None, None) => std::cmp::Ordering::Equal,
-                        }
-                    }
-                    other => other,
-                });
-                Self {
-                    specs: items,
-                    selected: 0,
-                    scroll_offset: 0,
-                    error: None,
-                    specs_dir: specs_dir.to_path_buf(),
-                    panel_label,
+                Self::sort_items(&mut items);
+                self.specs = items;
+            }
+            Err(e) => {
+                self.error = Some(e);
+            }
+        }
+    }
+
+    /// Sort work items by status then timestamp.
+    fn sort_items(items: &mut [WorkItem]) {
+        items.sort_by(|a, b| match a.status.cmp(&b.status) {
+            std::cmp::Ordering::Equal => {
+                // Within same status, sort by timestamp descending (newest first)
+                // None values go to the end
+                match (&b.timestamp, &a.timestamp) {
+                    (Some(b_ts), Some(a_ts)) => b_ts.cmp(a_ts),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
                 }
             }
-            Err(e) => Self {
-                specs: Vec::new(),
-                selected: 0,
-                scroll_offset: 0,
-                error: Some(e),
-                specs_dir: specs_dir.to_path_buf(),
-                panel_label,
-            },
-        }
+            other => other,
+        });
     }
 
     /// Get the path to the currently selected spec file.
@@ -1430,7 +1430,11 @@ mod tests {
         let config = config_with_mode("specs");
         let state = InitModalState::new(&config);
 
-        let paths: Vec<&str> = state.files.iter().map(|f| f.display_path.as_str()).collect();
+        let paths: Vec<&str> = state
+            .files
+            .iter()
+            .map(|f| f.display_path.as_str())
+            .collect();
         assert!(paths.iter().any(|p| p.ends_with("README.md")));
         assert!(paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
     }
@@ -1440,7 +1444,11 @@ mod tests {
         let config = config_with_mode("beads");
         let state = InitModalState::new(&config);
 
-        let paths: Vec<&str> = state.files.iter().map(|f| f.display_path.as_str()).collect();
+        let paths: Vec<&str> = state
+            .files
+            .iter()
+            .map(|f| f.display_path.as_str())
+            .collect();
         assert!(!paths.iter().any(|p| p.ends_with("README.md")));
         assert!(!paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
     }
@@ -1451,8 +1459,11 @@ mod tests {
             let config = config_with_mode(mode);
             let state = InitModalState::new(&config);
 
-            let paths: Vec<&str> =
-                state.files.iter().map(|f| f.display_path.as_str()).collect();
+            let paths: Vec<&str> = state
+                .files
+                .iter()
+                .map(|f| f.display_path.as_str())
+                .collect();
             assert!(paths.iter().any(|p| p.ends_with("PROMPT.md")));
             assert!(paths.iter().any(|p| *p == ".ralph"));
             assert!(paths.iter().any(|p| p.contains("brain-dump")));

@@ -261,10 +261,7 @@ fn run_reinit() -> Result<()> {
                     if create_count == 1 { "" } else { "s" }
                 ));
             }
-            println!(
-                "{} (old files backed up as .bak).",
-                parts.join(", ")
-            );
+            println!("{} (old files backed up as .bak).", parts.join(", "));
             Ok(())
         }
         Err(e) => {
@@ -297,10 +294,22 @@ fn run_status(verbose: bool) -> Result<()> {
         return Ok(());
     }
 
-    let blocked = items.iter().filter(|i| i.status == work_source::WorkItemStatus::Blocked).count();
-    let ready = items.iter().filter(|i| i.status == work_source::WorkItemStatus::Ready).count();
-    let in_progress = items.iter().filter(|i| i.status == work_source::WorkItemStatus::InProgress).count();
-    let done = items.iter().filter(|i| i.status == work_source::WorkItemStatus::Done).count();
+    let blocked = items
+        .iter()
+        .filter(|i| i.status == work_source::WorkItemStatus::Blocked)
+        .count();
+    let ready = items
+        .iter()
+        .filter(|i| i.status == work_source::WorkItemStatus::Ready)
+        .count();
+    let in_progress = items
+        .iter()
+        .filter(|i| i.status == work_source::WorkItemStatus::InProgress)
+        .count();
+    let done = items
+        .iter()
+        .filter(|i| i.status == work_source::WorkItemStatus::Done)
+        .count();
 
     // Build summary parts, only including non-zero counts
     let mut parts = Vec::new();
@@ -356,6 +365,10 @@ fn run_app(
             app.increment_iteration();
             start_command(&mut app)?;
         }
+
+        // Poll for background work source operations
+        app.poll_work_check();
+        app.poll_work_items();
 
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
@@ -459,10 +472,17 @@ fn run_app(
                     KeyCode::Char('l') => {
                         // Open work panel (available in all states)
                         app.show_specs_panel = true;
-                        app.specs_panel_state = Some(SpecsPanelState::new(
-                            app.work_source.as_ref(),
+                        app.specs_panel_state = Some(SpecsPanelState::new_loading(
+                            app.work_source.label(),
                             &app.config.specs_path(),
                         ));
+                        // Kick off background list_items
+                        let (tx, rx) = mpsc::channel();
+                        let ws = Arc::clone(&app.work_source);
+                        std::thread::spawn(move || {
+                            let _ = tx.send(ws.list_items());
+                        });
+                        app.work_items_rx = Some(rx);
                     }
                     KeyCode::Char('i') => {
                         // Open init modal
@@ -1072,12 +1092,18 @@ mod tests {
     #[test]
     fn cli_status_subcommand_parses() {
         let cli = Cli::try_parse_from(["ralph", "status"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Status { verbose: false })));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Status { verbose: false })
+        ));
     }
 
     #[test]
     fn cli_status_verbose_parses() {
         let cli = Cli::try_parse_from(["ralph", "status", "--verbose"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Status { verbose: true })));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Status { verbose: true })
+        ));
     }
 }

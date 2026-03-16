@@ -588,8 +588,14 @@ pub fn draw_specs_panel(f: &mut Frame, app: &mut App) {
         )));
     }
 
-    // Handle error case
-    if let Some(error) = &state.error {
+    // Handle loading/error/empty cases
+    if state.is_loading {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "  Loading...",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if let Some(error) = &state.error {
         content.push(Line::from(""));
         content.push(Line::from(Span::styled(
             format!("  Error: {}", error),

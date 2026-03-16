@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -18,7 +18,7 @@ use crate::logging::ReloadHandle;
 use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState};
 use crate::ui::{TodoItem, TodoStatus};
 use crate::wake_lock::WakeLock;
-use crate::work_source::{WorkRemaining, WorkSource, create_work_source};
+use crate::work_source::{WorkItem, WorkRemaining, WorkSource, create_work_source};
 use crate::{OutputMessage, get_file_mtime, logging};
 
 /// Application status states.
@@ -196,7 +196,13 @@ pub struct App {
     /// Whether we're currently in an indented text block (for flush).
     pub in_indented_text: bool,
     /// Pluggable work source (specs, beads, etc.).
-    pub work_source: Box<dyn WorkSource>,
+    pub work_source: Arc<dyn WorkSource>,
+    /// Receiver for background detect_current() result (poll_spec).
+    pub spec_poll_rx: Option<Receiver<Option<String>>>,
+    /// Receiver for background check_remaining() result (auto-continue).
+    pub pending_work_check: Option<Receiver<(WorkRemaining, &'static str)>>,
+    /// Receiver for background list_items() result (work panel modal).
+    pub work_items_rx: Option<Receiver<Result<Vec<WorkItem>, String>>>,
 }
 
 impl App {
@@ -270,6 +276,9 @@ impl App {
             pending_tool_calls: HashMap::new(),
             in_indented_text: false,
             work_source,
+            spec_poll_rx: None,
+            pending_work_check: None,
+            work_items_rx: None,
         }
     }
 
@@ -383,7 +392,23 @@ impl App {
     }
 
     pub fn poll_spec(&mut self) {
-        // Only poll when running
+        // Check for completed background detect_current
+        if let Some(rx) = self.spec_poll_rx.take() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.current_spec = result;
+                }
+                Err(TryRecvError::Empty) => {
+                    self.spec_poll_rx = Some(rx); // still running
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    // Thread finished without sending (shouldn't happen)
+                }
+            }
+        }
+
+        // Only kick new poll when running
         if self.status != AppStatus::Running {
             return;
         }
@@ -394,7 +419,14 @@ impl App {
         }
 
         self.last_spec_poll = Instant::now();
-        self.current_spec = self.work_source.detect_current();
+
+        // Kick off background detect_current
+        let (tx, rx) = mpsc::channel();
+        let ws = Arc::clone(&self.work_source);
+        std::thread::spawn(move || {
+            let _ = tx.send(ws.detect_current());
+        });
+        self.spec_poll_rx = Some(rx);
     }
 
     pub fn poll_config(&mut self) {
@@ -469,6 +501,7 @@ impl App {
             || new_bd_path != &self.config.behavior.bd_path
         {
             self.work_source = create_work_source(new_mode, new_specs_path, new_bd_path);
+            self.clear_pending_work_ops();
         }
 
         self.config = reloaded.config;
@@ -491,47 +524,15 @@ impl App {
         // Determine next state based on exit code and iteration control
         match exit_code {
             Some(0) if self.should_auto_continue() => {
-                // Check if there's remaining work
+                // Kick off background check_remaining (non-blocking)
                 let complete_msg = self.work_source.complete_message();
-                match self.work_source.check_remaining() {
-                    WorkRemaining::Yes => {
-                        info!(
-                            current = self.current_iteration,
-                            total = self.total_iterations,
-                            "auto_continue"
-                        );
-                        self.add_text_line(
-                            "══════════════════ AUTO-CONTINUING ══════════════════".to_string(),
-                        );
-                        self.auto_continue_pending = true;
-                        self.status = AppStatus::Stopped;
-                        // Don't clear tasks during auto-continue
-                    }
-                    WorkRemaining::No => {
-                        info!("all_work_complete");
-                        self.add_text_line(format!(
-                            "══════════════════ {} ══════════════════",
-                            complete_msg
-                        ));
-                        self.reset_iteration_state();
-                        self.status = AppStatus::Stopped;
-                        self.clear_tasks();
-                    }
-                    WorkRemaining::Missing => {
-                        warn!("work_source_missing");
-                        self.add_text_line("[Error: work source not found]".to_string());
-                        self.reset_iteration_state();
-                        self.status = AppStatus::Error;
-                        self.clear_tasks();
-                    }
-                    WorkRemaining::ReadError(e) => {
-                        warn!(error = %e, "work_source_read_error");
-                        self.add_text_line(format!("[Error reading work source: {}]", e));
-                        self.reset_iteration_state();
-                        self.status = AppStatus::Error;
-                        self.clear_tasks();
-                    }
-                }
+                let (tx, rx) = mpsc::channel();
+                let ws = Arc::clone(&self.work_source);
+                std::thread::spawn(move || {
+                    let _ = tx.send((ws.check_remaining(), complete_msg));
+                });
+                self.pending_work_check = Some(rx);
+                self.status = AppStatus::Stopped;
             }
             Some(0) => {
                 // Countdown exhausted or iterations = 0, just stop
@@ -552,6 +553,106 @@ impl App {
                 self.clear_tasks();
             }
         }
+    }
+
+    /// Poll for background check_remaining result (auto-continue decision).
+    pub fn poll_work_check(&mut self) {
+        let rx = match self.pending_work_check.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok((result, complete_msg)) => {
+                // Discard stale results if we're no longer in Stopped state
+                if self.status != AppStatus::Stopped {
+                    return;
+                }
+                self.handle_work_remaining(result, complete_msg);
+            }
+            Err(TryRecvError::Empty) => {
+                self.pending_work_check = Some(rx); // still running
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.handle_work_remaining(
+                    WorkRemaining::ReadError("background check failed".to_string()),
+                    self.work_source.complete_message(),
+                );
+            }
+        }
+    }
+
+    /// Process a check_remaining result for auto-continue decisions.
+    fn handle_work_remaining(&mut self, result: WorkRemaining, complete_msg: &str) {
+        match result {
+            WorkRemaining::Yes => {
+                info!(
+                    current = self.current_iteration,
+                    total = self.total_iterations,
+                    "auto_continue"
+                );
+                self.add_text_line(
+                    "══════════════════ AUTO-CONTINUING ══════════════════".to_string(),
+                );
+                self.auto_continue_pending = true;
+                // Don't clear tasks during auto-continue
+            }
+            WorkRemaining::No => {
+                info!("all_work_complete");
+                self.add_text_line(format!(
+                    "══════════════════ {} ══════════════════",
+                    complete_msg
+                ));
+                self.reset_iteration_state();
+                self.status = AppStatus::Stopped;
+                self.clear_tasks();
+            }
+            WorkRemaining::Missing => {
+                warn!("work_source_missing");
+                self.add_text_line("[Error: work source not found]".to_string());
+                self.reset_iteration_state();
+                self.status = AppStatus::Error;
+                self.clear_tasks();
+            }
+            WorkRemaining::ReadError(e) => {
+                warn!(error = %e, "work_source_read_error");
+                self.add_text_line(format!("[Error reading work source: {}]", e));
+                self.reset_iteration_state();
+                self.status = AppStatus::Error;
+                self.clear_tasks();
+            }
+        }
+    }
+
+    /// Poll for background list_items result (work panel modal).
+    pub fn poll_work_items(&mut self) {
+        let rx = match self.work_items_rx.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                if let Some(ref mut panel) = self.specs_panel_state {
+                    panel.populate(result);
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.work_items_rx = Some(rx); // still running
+            }
+            Err(TryRecvError::Disconnected) => {
+                if let Some(ref mut panel) = self.specs_panel_state {
+                    panel.populate(Err("Background fetch failed".to_string()));
+                }
+            }
+        }
+    }
+
+    /// Clear all pending background work source operations.
+    fn clear_pending_work_ops(&mut self) {
+        self.spec_poll_rx = None;
+        self.pending_work_check = None;
+        self.work_items_rx = None;
     }
 
     /// Determine if we should auto-continue based on iteration state.

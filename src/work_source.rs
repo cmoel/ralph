@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use ratatui::style::Color;
@@ -84,9 +85,9 @@ pub struct WorkItem {
 /// Trait for pluggable work sources.
 ///
 /// Implementations provide work items to ralph's core loop.
-/// Methods are synchronous (matching the current polling model).
-/// Only used on the main thread — no Send + Sync required.
-pub trait WorkSource {
+/// Methods are synchronous but callers run them on background threads
+/// to avoid blocking the TUI event loop.
+pub trait WorkSource: Send + Sync {
     /// Check if there's remaining work (for auto-continue decisions).
     fn check_remaining(&self) -> WorkRemaining;
 
@@ -298,13 +299,13 @@ impl WorkSource for BeadsWorkSource {
 }
 
 /// Construct a work source from a mode string and config.
-pub fn create_work_source(mode: &str, specs_dir: PathBuf, bd_path: &str) -> Box<dyn WorkSource> {
+pub fn create_work_source(mode: &str, specs_dir: PathBuf, bd_path: &str) -> Arc<dyn WorkSource> {
     match mode {
-        "specs" => Box::new(SpecsWorkSource::new(specs_dir)),
-        "beads" => Box::new(BeadsWorkSource::new(bd_path.to_string())),
+        "specs" => Arc::new(SpecsWorkSource::new(specs_dir)),
+        "beads" => Arc::new(BeadsWorkSource::new(bd_path.to_string())),
         other => {
             warn!(mode = other, "unknown_mode_falling_back_to_specs");
-            Box::new(SpecsWorkSource::new(specs_dir))
+            Arc::new(SpecsWorkSource::new(specs_dir))
         }
     }
 }
