@@ -10,7 +10,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::app::{App, AppStatus, SelectedPanel};
+use crate::app::{App, AppStatus, DoltServerState, SelectedPanel};
 use crate::modal_ui::{draw_config_modal, draw_help_modal, draw_init_modal, draw_specs_panel};
 
 /// Maximum length for truncated tool input display.
@@ -639,13 +639,40 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         Span::styled(" Help", label_style),
     ];
 
+    // Dolt server indicator (beads mode only)
+    let dolt_spans: Vec<Span> = if app.config.behavior.mode == "beads" {
+        let dim = Style::default().fg(Color::DarkGray);
+        match app.dolt_server_state {
+            DoltServerState::On => vec![
+                Span::styled("Dolt ", dim),
+                Span::styled("● ", Style::default().fg(Color::Green)),
+            ],
+            DoltServerState::Off => vec![
+                Span::styled("Dolt ", dim),
+                Span::styled("○ ", dim),
+            ],
+            DoltServerState::Starting | DoltServerState::Stopping => vec![
+                Span::styled("Dolt ", dim),
+                Span::styled("… ", Style::default().fg(Color::Yellow)),
+            ],
+            DoltServerState::Unknown => vec![
+                Span::styled("Dolt ", dim),
+                Span::styled("? ", dim),
+            ],
+        }
+    } else {
+        vec![]
+    };
+    let dolt_len: usize = dolt_spans.iter().map(|s| s.content.len()).sum();
+
     let commands_len: usize = command_spans.iter().map(|s| s.content.len()).sum();
     let inner_width = chunks[2].width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
-    let spacing = inner_width.saturating_sub(commands_len + status_len);
+    let spacing = inner_width.saturating_sub(commands_len + dolt_len + status_len);
 
     let mut line_spans = command_spans;
     line_spans.push(Span::raw(" ".repeat(spacing)));
+    line_spans.extend(dolt_spans);
     line_spans.push(Span::styled(status_dot, Style::default().fg(status_color)));
     line_spans.push(Span::styled(status_text, Style::default().fg(status_color)));
 

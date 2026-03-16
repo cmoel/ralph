@@ -828,7 +828,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
 /// Draw the help modal.
 pub fn draw_help_modal(f: &mut Frame, _app: &App) {
     let modal_width: u16 = 50;
-    let modal_height: u16 = 20;
+    let modal_height: u16 = 21;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -858,6 +858,11 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
             Span::raw("    "),
             Span::styled("q", key_style),
             Span::styled("  Quit", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("D", key_style),
+            Span::styled("  Toggle Dolt server (beads)", desc_style),
         ]),
         Line::from(""),
         // Panels section

@@ -373,6 +373,11 @@ fn run_app(
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
 
+        // Poll for Dolt server state (beads mode only)
+        // Process toggle results first so stale status polls don't override
+        app.poll_dolt_toggle();
+        app.poll_dolt_status();
+
         // Poll for config file changes (throttled to every 2 seconds)
         app.poll_config();
 
@@ -431,6 +436,7 @@ fn run_app(
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
                         app.kill_child();
+                        app.stop_dolt_on_quit();
                         return Ok(());
                     }
                     KeyCode::Char('s') => match app.status {
@@ -500,6 +506,10 @@ fn run_app(
                     KeyCode::Char('t') => {
                         // Toggle tasks panel collapsed state
                         app.toggle_tasks_panel_collapsed();
+                    }
+                    KeyCode::Char('D') => {
+                        // Toggle Dolt server (beads mode only)
+                        app.toggle_dolt_server();
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         scroll_selected_panel(&mut app, ScrollDirection::Up, 1);
