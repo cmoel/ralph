@@ -12,27 +12,26 @@ A TUI for running [Ralph loops](https://ghuntley.com/ralph/).
 ralph
 ```
 
-Run from a directory containing your `PROMPT.md` and `specs/` folder. Press `s` to start, `q` to quit.
+Run from a directory containing your `PROMPT.md` and a [Beads](https://github.com/steveyegge/beads) database. Press `s` to start, `q` to quit.
 
 ## How It Works
 
-Ralph runs Claude Code in a loop, feeding it your prompt and specs until all specs are complete.
+Ralph runs Claude Code in a loop, feeding it your prompt and work items until everything is complete.
 
 **You provide:**
 
 1. `PROMPT.md` — Instructions for Claude (what to build, constraints, workflow)
-2. `specs/*.md` — Individual feature specifications
-3. `specs/README.md` — Index of all specs with status (Ready, In Progress, Done, Blocked)
+2. Work items via [Beads](https://github.com/steveyegge/beads) (`bd` CLI)
 
 **Ralph handles:**
 
 - Spawning Claude with your prompt
 - Streaming and formatting output
 - Tracking iterations and token usage
-- Auto-continuing until specs are complete (configurable)
+- Auto-continuing until all beads are complete (configurable)
 - Keeping your system awake during long runs
 
-Press `c` to open the config panel and customize behavior.
+Press `c` to open the config panel and customize behavior (including switching between beads and specs modes).
 
 ## Keyboard Shortcuts
 
@@ -41,7 +40,7 @@ Press `c` to open the config panel and customize behavior.
 | `s` | Start/Stop |
 | `q` | Quit |
 | `c` | Open config panel |
-| `l` | Open specs panel |
+| `l` | Open work items panel |
 | `Tab` | Switch panel (Output/Tasks) |
 | `t` | Toggle tasks panel collapsed |
 | `j` / `↓` | Scroll down |
@@ -59,8 +58,27 @@ Override config values for scripting and CI:
 |----------|-------------|
 | `RALPH_CLAUDE_PATH` | Path to Claude CLI |
 | `RALPH_PROMPT_PATH` | Path to prompt file |
-| `RALPH_SPECS_DIR` | Path to specs directory |
+| `RALPH_MODE` | Work source mode (`beads` or `specs`) |
+| `RALPH_BD_PATH` | Path to `bd` CLI (beads mode) |
+| `RALPH_SPECS_DIR` | Path to specs directory (specs mode) |
 | `RALPH_LOG` | Log level (debug, info, warn, error) |
+
+<details>
+<summary>Using specs mode instead of beads</summary>
+
+Ralph also supports a specs-based workflow where work items are tracked as markdown files.
+
+Set the mode to `specs` via the config panel or `RALPH_MODE=specs`.
+
+**You provide:**
+
+1. `PROMPT.md` — Instructions for Claude (what to build, constraints, workflow)
+2. `specs/*.md` — Individual feature specifications
+3. `specs/README.md` — Index of all specs with status (Ready, In Progress, Done, Blocked)
+
+Ralph will loop until all specs are marked Done.
+
+</details>
 
 ## Installation
 
