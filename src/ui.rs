@@ -646,18 +646,22 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
             DoltServerState::On => vec![
                 Span::styled("Dolt ", dim),
                 Span::styled("● ", Style::default().fg(Color::Green)),
+                Span::styled("│ ", dim),
             ],
             DoltServerState::Off => vec![
                 Span::styled("Dolt ", dim),
                 Span::styled("○ ", dim),
+                Span::styled("│ ", dim),
             ],
             DoltServerState::Starting | DoltServerState::Stopping => vec![
                 Span::styled("Dolt ", dim),
                 Span::styled("… ", Style::default().fg(Color::Yellow)),
+                Span::styled("│ ", dim),
             ],
             DoltServerState::Unknown => vec![
                 Span::styled("Dolt ", dim),
                 Span::styled("? ", dim),
+                Span::styled("│ ", dim),
             ],
         }
     } else {
