@@ -71,7 +71,7 @@ enum Commands {
 /// CLI argument parser.
 #[derive(Debug, Parser)]
 #[command(
-    version,
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHA"), ")"),
     about = "TUI wrapper for claude CLI that displays formatted streaming output"
 )]
 struct Cli {
