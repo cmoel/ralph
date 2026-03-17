@@ -2,17 +2,46 @@
 
 A TUI for running [Ralph loops](https://ghuntley.com/ralph/).
 
+![Ralph TUI](assets/screenshot.png)
+
+## Installation
+
+### Homebrew (macOS)
+
+```bash
+brew install cmoel/tap/ralph
+```
+
+### Pre-built Binaries
+
+Download from [GitHub Releases](https://github.com/cmoel/ralph/releases):
+
+- macOS (Intel and Apple Silicon)
+- Linux (x86_64 and ARM64)
+- Windows (x86_64 and ARM64)
+
+### Build from Source
+
+```bash
+git clone https://github.com/cmoel/ralph.git
+cd ralph
+cargo build --release
+```
+
+Binary: `target/release/ralph`
+
 ## Prerequisites
 
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- [Beads](https://github.com/steveyegge/beads) (`bd` CLI) installed
 
 ## Quick Start
 
 ```bash
-ralph
+cd your-project
+ralph init        # generates PROMPT.md and scaffolding
+ralph             # press s to start, q to quit
 ```
-
-Run from a directory containing your `PROMPT.md` and a [Beads](https://github.com/steveyegge/beads) database. Press `s` to start, `q` to quit.
 
 ## How It Works
 
@@ -79,26 +108,6 @@ Set the mode to `specs` via the config panel or `RALPH_MODE=specs`.
 Ralph will loop until all specs are marked Done.
 
 </details>
-
-## Installation
-
-### Pre-built Binaries
-
-Download from [GitHub Releases](https://github.com/cmoel/ralph/releases):
-
-- macOS (Intel and Apple Silicon)
-- Linux (x86_64 and ARM64)
-- Windows (x86_64 and ARM64)
-
-### Build from Source
-
-```bash
-git clone https://github.com/cmoel/ralph.git
-cd ralph
-cargo build --release
-```
-
-Binary: `target/release/ralph`
 
 ## Contributing
 

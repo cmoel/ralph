@@ -440,7 +440,7 @@ fn run_app(
                         return Ok(());
                     }
                     KeyCode::Char('s') => match app.status {
-                        AppStatus::Stopped => {
+                        AppStatus::Stopped | AppStatus::Error => {
                             // Start new iteration run (reads config, sets up tracking)
                             if app.start_iteration_run() {
                                 start_command(&mut app)?;
@@ -450,7 +450,6 @@ fn run_app(
                         AppStatus::Running => {
                             app.stop_command();
                         }
-                        AppStatus::Error => {}
                     },
                     KeyCode::Char('c') => {
                         // Open config modal with project tab if .ralph exists
