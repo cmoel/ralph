@@ -1,0 +1,13 @@
+name: Notify homebrew-tap
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api repos/cmoel/homebrew-tap/dispatches -f event_type=ralph-release
+        env:
+          GH_TOKEN: ${{ github.token }}
