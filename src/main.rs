@@ -414,6 +414,17 @@ fn run_app(
         app.doctor_rx = Some(rx);
     }
 
+    // Initialize tool history database
+    match db::open() {
+        Ok(conn) => {
+            app.tool_history_db = Some(conn);
+        }
+        Err(e) => {
+            warn!(error = %e, "tool_history_db_open_failed");
+            app.add_text_line(format!("[Tool history DB failed: {}]", e));
+        }
+    }
+
     loop {
         // Poll for output from child process
         poll_output(&mut app);
@@ -925,6 +936,21 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
                                 content_str
                             };
 
+                            // Update tool call record with result
+                            if let Some(ref conn) = app.tool_history_db
+                                && !db::update_tool_result(
+                                    conn,
+                                    &tool_use_id,
+                                    &app.session_id,
+                                    is_error,
+                                    &content_str,
+                                )
+                            {
+                                app.add_text_line(
+                                    "[Warning: failed to update tool result]".to_string(),
+                                );
+                            }
+
                             // Check for pending tool call to correlate with
                             if let Some(pending) = app.pending_tool_calls.remove(&tool_use_id) {
                                 // Display tool call first
@@ -1053,19 +1079,43 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             debug!(index = stop.index, "Content block stopped");
             // Flush any pending text (uses indentation flag automatically)
             app.flush_current_line();
+            // Extract data from content block state before mutating app
+            let block_data = app.content_blocks.get(&stop.index).and_then(|state| {
+                state.tool_name.as_ref().map(|name| {
+                    (
+                        name.clone(),
+                        state.tool_use_id.clone(),
+                        state.input_json.clone(),
+                    )
+                })
+            });
             // Then process tool_use blocks
-            if let Some(state) = app.content_blocks.get(&stop.index)
-                && let Some(tool_name) = &state.tool_name
-            {
+            if let Some((tool_name, tool_use_id, input_json)) = block_data {
                 // Register tool_use_id → tool_name mapping for result correlation
-                if let Some(ref id) = state.tool_use_id {
+                if let Some(ref id) = tool_use_id {
                     app.tool_id_to_name.insert(id.clone(), tool_name.clone());
+                }
+                // Record tool call to history DB
+                if let Some(ref conn) = app.tool_history_db {
+                    app.tool_call_sequence += 1;
+                    if db::insert_tool_call(
+                        conn,
+                        &app.session_id,
+                        &tool_name,
+                        tool_use_id.as_deref(),
+                        &input_json,
+                        app.tool_call_sequence,
+                    )
+                    .is_none()
+                    {
+                        app.add_text_line("[Warning: failed to record tool call]".to_string());
+                    }
                 }
                 // Track the last tool used for exchange categorization
                 app.last_tool_used = Some(tool_name.clone());
                 // Special handling for TodoWrite to update tasks panel
                 if tool_name == "TodoWrite" {
-                    match parse_todos_from_json(&state.input_json) {
+                    match parse_todos_from_json(&input_json) {
                         Ok(tasks) => {
                             if tasks.is_empty() {
                                 // Empty todos array clears the panel
@@ -1080,9 +1130,9 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                         }
                     }
                 } else {
-                    let styled_line = format_tool_summary_styled(tool_name, &state.input_json);
+                    let styled_line = format_tool_summary_styled(&tool_name, &input_json);
                     // Buffer tool call if it has an ID (for correlation with result)
-                    if let Some(ref id) = state.tool_use_id {
+                    if let Some(ref id) = tool_use_id {
                         app.pending_tool_calls.insert(
                             id.clone(),
                             PendingToolCall {

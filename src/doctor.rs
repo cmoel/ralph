@@ -31,9 +31,10 @@ impl CheckResult {
 pub fn check_config(loaded: &LoadedConfig) -> CheckResult {
     match &loaded.status {
         ConfigLoadStatus::Loaded => CheckResult::pass("Config loaded"),
-        ConfigLoadStatus::Created => {
-            CheckResult::pass(format!("Config created at {}", loaded.config_path.display()))
-        }
+        ConfigLoadStatus::Created => CheckResult::pass(format!(
+            "Config created at {}",
+            loaded.config_path.display()
+        )),
         ConfigLoadStatus::Error(e) => CheckResult::fail(format!(
             "Config error: {} — check {}",
             e,
@@ -50,10 +51,7 @@ pub fn check_claude(config: &Config) -> CheckResult {
             let version = String::from_utf8_lossy(&output.stdout);
             CheckResult::pass(format!("Claude CLI ({})", version.trim()))
         }
-        Ok(_) => CheckResult::fail(format!(
-            "Claude CLI failed — check {}",
-            path.display()
-        )),
+        Ok(_) => CheckResult::fail(format!("Claude CLI failed — check {}", path.display())),
         Err(_) => CheckResult::fail(
             "Claude CLI not found — install from https://claude.ai/download or set claude.path in config",
         ),

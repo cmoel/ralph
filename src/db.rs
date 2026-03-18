@@ -1,13 +1,13 @@
 //! SQLite database foundation for tool history and future persistent storage.
-// No callers yet — the recording layer (ralph-66j) will wire this in.
-#![allow(dead_code)]
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use tracing::warn;
 
-const CURRENT_SCHEMA_VERSION: i32 = 1;
+#[cfg(test)]
+const CURRENT_SCHEMA_VERSION: i32 = 2;
 
 /// Returns the platform-appropriate database directory.
 ///
@@ -28,8 +28,9 @@ pub fn open() -> Result<Connection> {
     let path = db_path()?;
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create database directory: {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("Failed to create database directory: {}", parent.display())
+        })?;
     }
 
     let conn = Connection::open(&path)
@@ -71,6 +72,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     if current < 1 {
         migrate_v1(conn)?;
     }
+    if current < 2 {
+        migrate_v2(conn)?;
+    }
 
     Ok(())
 }
@@ -100,6 +104,106 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_v2(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "ALTER TABLE tool_calls ADD COLUMN tool_use_id TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_use_id
+            ON tool_calls(tool_use_id);
+
+        INSERT INTO schema_version (version) VALUES (2);",
+    )?;
+    Ok(())
+}
+
+/// Inserts a tool call record at ContentBlockStop time.
+/// Returns the row ID on success, or logs a warning and returns None on failure.
+pub fn insert_tool_call(
+    conn: &Connection,
+    session_id: &str,
+    tool_name: &str,
+    tool_use_id: Option<&str>,
+    tool_arguments: &str,
+    sequence_number: u32,
+) -> Option<i64> {
+    let timestamp = iso8601_now();
+    match conn.execute(
+        "INSERT INTO tool_calls (session_id, tool_name, tool_use_id, tool_arguments, timestamp, sequence_number)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![session_id, tool_name, tool_use_id, tool_arguments, timestamp, sequence_number],
+    ) {
+        Ok(_) => Some(conn.last_insert_rowid()),
+        Err(e) => {
+            warn!(error = %e, tool_name, "Failed to record tool call");
+            None
+        }
+    }
+}
+
+/// Updates a tool call record with its result at User event time.
+/// Returns true on success, or logs a warning and returns false on failure.
+pub fn update_tool_result(
+    conn: &Connection,
+    tool_use_id: &str,
+    session_id: &str,
+    is_error: bool,
+    result_content: &str,
+) -> bool {
+    match conn.execute(
+        "UPDATE tool_calls SET is_error = ?1, result_content = ?2
+         WHERE tool_use_id = ?3 AND session_id = ?4",
+        rusqlite::params![is_error as i32, result_content, tool_use_id, session_id],
+    ) {
+        Ok(0) => {
+            warn!(tool_use_id, "No tool call found to update");
+            false
+        }
+        Ok(_) => true,
+        Err(e) => {
+            warn!(error = %e, tool_use_id, "Failed to update tool result");
+            false
+        }
+    }
+}
+
+/// Returns the current time as an ISO 8601 string in UTC.
+fn iso8601_now() -> String {
+    use std::time::SystemTime;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    // Convert to date-time components
+    let days = secs / 86400;
+    let time_secs = secs % 86400;
+    let hours = time_secs / 3600;
+    let minutes = (time_secs % 3600) / 60;
+    let seconds = time_secs % 60;
+
+    // Days since epoch to Y-M-D (simplified algorithm)
+    let (year, month, day) = days_to_ymd(days);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
+}
+
+/// Converts days since Unix epoch to (year, month, day).
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Civil days algorithm from Howard Hinnant
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,20 +213,24 @@ mod tests {
         let conn = open_memory().unwrap();
 
         let version: i32 = conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
-    fn tool_calls_table_exists() {
+    fn tool_calls_table_has_all_columns() {
         let conn = open_memory().unwrap();
 
-        // Insert a row to verify the table and columns exist.
+        // Insert a row including the v2 tool_use_id column.
         conn.execute(
-            "INSERT INTO tool_calls (session_id, tool_name, tool_arguments, is_error, result_content, timestamp, sequence_number)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params!["sess-1", "Read", r#"{"path":"/tmp"}"#, 0, "ok", "2026-03-17T12:00:00Z", 1],
+            "INSERT INTO tool_calls (session_id, tool_name, tool_use_id, tool_arguments, is_error, result_content, timestamp, sequence_number)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params!["sess-1", "Read", "toolu_abc123", r#"{"path":"/tmp"}"#, 0, "ok", "2026-03-17T12:00:00Z", 1],
         )
         .unwrap();
 
@@ -142,7 +250,7 @@ mod tests {
         let count: i32 = conn
             .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
             .unwrap();
-        // Two rows (one per migrate call) but both version 1 — the important thing
+        // Multiple rows from multiple migrate calls — the important thing
         // is that the table and indexes survive a second pass without error.
         assert!(count >= 1);
     }
@@ -174,5 +282,155 @@ mod tests {
         assert!(indexes.contains(&"idx_tool_calls_session".to_string()));
         assert!(indexes.contains(&"idx_tool_calls_tool_name".to_string()));
         assert!(indexes.contains(&"idx_tool_calls_timestamp".to_string()));
+        assert!(indexes.contains(&"idx_tool_calls_tool_use_id".to_string()));
+    }
+
+    #[test]
+    fn insert_tool_call_records_row() {
+        let conn = open_memory().unwrap();
+
+        let id = insert_tool_call(
+            &conn,
+            "sess-1",
+            "Read",
+            Some("toolu_abc"),
+            r#"{"path":"/tmp"}"#,
+            1,
+        );
+        assert!(id.is_some());
+
+        let (name, use_id, args, seq): (String, Option<String>, String, u32) = conn
+            .query_row(
+                "SELECT tool_name, tool_use_id, tool_arguments, sequence_number FROM tool_calls WHERE id = ?1",
+                [id.unwrap()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+
+        assert_eq!(name, "Read");
+        assert_eq!(use_id.as_deref(), Some("toolu_abc"));
+        assert_eq!(args, r#"{"path":"/tmp"}"#);
+        assert_eq!(seq, 1);
+    }
+
+    #[test]
+    fn insert_without_tool_use_id() {
+        let conn = open_memory().unwrap();
+
+        let id = insert_tool_call(&conn, "sess-1", "Read", None, "{}", 1);
+        assert!(id.is_some());
+
+        let use_id: Option<String> = conn
+            .query_row(
+                "SELECT tool_use_id FROM tool_calls WHERE id = ?1",
+                [id.unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(use_id.is_none());
+    }
+
+    #[test]
+    fn update_tool_result_sets_fields() {
+        let conn = open_memory().unwrap();
+
+        insert_tool_call(
+            &conn,
+            "sess-1",
+            "Bash",
+            Some("toolu_xyz"),
+            r#"{"command":"ls"}"#,
+            1,
+        );
+
+        let updated = update_tool_result(&conn, "toolu_xyz", "sess-1", false, "file1\nfile2");
+        assert!(updated);
+
+        let (is_error, result): (i32, String) = conn
+            .query_row(
+                "SELECT is_error, result_content FROM tool_calls WHERE tool_use_id = ?1",
+                ["toolu_xyz"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(is_error, 0);
+        assert_eq!(result, "file1\nfile2");
+    }
+
+    #[test]
+    fn update_tool_result_with_error() {
+        let conn = open_memory().unwrap();
+
+        insert_tool_call(
+            &conn,
+            "sess-1",
+            "Bash",
+            Some("toolu_err"),
+            r#"{"command":"false"}"#,
+            1,
+        );
+
+        let updated = update_tool_result(&conn, "toolu_err", "sess-1", true, "command failed");
+        assert!(updated);
+
+        let is_error: i32 = conn
+            .query_row(
+                "SELECT is_error FROM tool_calls WHERE tool_use_id = ?1",
+                ["toolu_err"],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(is_error, 1);
+    }
+
+    #[test]
+    fn update_nonexistent_returns_false() {
+        let conn = open_memory().unwrap();
+
+        let updated = update_tool_result(&conn, "toolu_missing", "sess-1", false, "data");
+        assert!(!updated);
+    }
+
+    #[test]
+    fn crash_leaves_null_result() {
+        let conn = open_memory().unwrap();
+
+        insert_tool_call(
+            &conn,
+            "sess-1",
+            "Bash",
+            Some("toolu_crash"),
+            r#"{"command":"hang"}"#,
+            1,
+        );
+
+        // Simulate crash: no update_tool_result call
+        let result: Option<String> = conn
+            .query_row(
+                "SELECT result_content FROM tool_calls WHERE tool_use_id = ?1",
+                ["toolu_crash"],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(
+            result.is_none(),
+            "result_content should be NULL for incomplete calls"
+        );
+    }
+
+    #[test]
+    fn iso8601_now_format() {
+        let ts = iso8601_now();
+        // Should match YYYY-MM-DDTHH:MM:SSZ
+        assert_eq!(ts.len(), 20);
+        assert!(ts.ends_with('Z'));
+        assert_eq!(&ts[4..5], "-");
+        assert_eq!(&ts[7..8], "-");
+        assert_eq!(&ts[10..11], "T");
+        assert_eq!(&ts[13..14], ":");
+        assert_eq!(&ts[16..17], ":");
     }
 }

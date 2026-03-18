@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 use ratatui::style::Color;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
 use crate::config::reload_config;
@@ -231,6 +232,10 @@ pub struct App {
     pub error_at: Option<Instant>,
     /// Receiver for background doctor checks (run once on TUI open).
     pub doctor_rx: Option<Receiver<Vec<doctor::CheckResult>>>,
+    /// SQLite connection for tool call recording (None if DB open failed at startup).
+    pub tool_history_db: Option<Connection>,
+    /// Sequence counter for tool calls within this session.
+    pub tool_call_sequence: u32,
 }
 
 impl App {
@@ -314,6 +319,8 @@ impl App {
             last_dolt_poll: Instant::now() - Duration::from_secs(10),
             error_at: None,
             doctor_rx: None,
+            tool_history_db: None,
+            tool_call_sequence: 0,
         }
     }
 
@@ -913,13 +920,11 @@ impl App {
             Err(TryRecvError::Empty) => {
                 self.dolt_toggle_rx = Some(rx);
             }
-            Err(TryRecvError::Disconnected) => {
-                match self.dolt_server_state {
-                    DoltServerState::Starting => self.dolt_server_state = DoltServerState::Off,
-                    DoltServerState::Stopping => self.dolt_server_state = DoltServerState::On,
-                    _ => {}
-                }
-            }
+            Err(TryRecvError::Disconnected) => match self.dolt_server_state {
+                DoltServerState::Starting => self.dolt_server_state = DoltServerState::Off,
+                DoltServerState::Stopping => self.dolt_server_state = DoltServerState::On,
+                _ => {}
+            },
         }
     }
 
