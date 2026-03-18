@@ -14,6 +14,7 @@ use tracing::warn;
 use crate::specs::{self, SpecStatus, SpecsRemaining};
 
 /// Result of checking if there's remaining work.
+#[derive(Debug, PartialEq)]
 pub enum WorkRemaining {
     /// There are work items with active status.
     Yes,
@@ -234,32 +235,7 @@ impl BeadsWorkSource {
 impl WorkSource for BeadsWorkSource {
     fn check_remaining(&self) -> WorkRemaining {
         match self.run_bd(&["ready", "--json"]) {
-            Ok(stdout) => match serde_json::from_str::<serde_json::Value>(&stdout) {
-                Ok(serde_json::Value::Array(arr)) => {
-                    if arr.is_empty() {
-                        WorkRemaining::No
-                    } else {
-                        let implementable: Vec<_> = arr
-                            .iter()
-                            .filter(|item| {
-                                let labels = item
-                                    .get("labels")
-                                    .and_then(|l| l.as_array());
-                                !labels.is_some_and(|ls| {
-                                    ls.iter().any(|l| l.as_str() == Some("needs-shaping"))
-                                })
-                            })
-                            .collect();
-                        if implementable.is_empty() {
-                            WorkRemaining::NeedsShaping(arr.len())
-                        } else {
-                            WorkRemaining::Yes
-                        }
-                    }
-                }
-                Ok(_) => WorkRemaining::ReadError("unexpected bd ready output".to_string()),
-                Err(e) => WorkRemaining::ReadError(format!("failed to parse bd output: {}", e)),
-            },
+            Ok(stdout) => parse_ready_output(&stdout),
             Err(e) => WorkRemaining::ReadError(e),
         }
     }
@@ -324,5 +300,90 @@ pub fn create_work_source(mode: &str, specs_dir: PathBuf, bd_path: &str) -> Arc<
             warn!(mode = other, "unknown_mode_falling_back_to_specs");
             Arc::new(SpecsWorkSource::new(specs_dir))
         }
+    }
+}
+
+/// Parse the JSON output of `bd ready --json` into a `WorkRemaining` value.
+///
+/// This is the pure logic extracted from `BeadsWorkSource::check_remaining()`
+/// so it can be unit tested without spawning processes.
+fn parse_ready_output(stdout: &str) -> WorkRemaining {
+    match serde_json::from_str::<serde_json::Value>(stdout) {
+        Ok(serde_json::Value::Array(arr)) => {
+            if arr.is_empty() {
+                WorkRemaining::No
+            } else {
+                let implementable: Vec<_> = arr
+                    .iter()
+                    .filter(|item| {
+                        let labels = item.get("labels").and_then(|l| l.as_array());
+                        !labels.is_some_and(|ls| {
+                            ls.iter().any(|l| l.as_str() == Some("needs-shaping"))
+                        })
+                    })
+                    .collect();
+                if implementable.is_empty() {
+                    WorkRemaining::NeedsShaping(arr.len())
+                } else {
+                    WorkRemaining::Yes
+                }
+            }
+        }
+        Ok(_) => WorkRemaining::ReadError("unexpected bd ready output".to_string()),
+        Err(e) => WorkRemaining::ReadError(format!("failed to parse bd output: {}", e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_array_returns_no() {
+        assert_eq!(parse_ready_output("[]"), WorkRemaining::No);
+    }
+
+    #[test]
+    fn all_needs_shaping_returns_needs_shaping_count() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["needs-shaping"]},
+            {"id": "ralph-2", "labels": ["needs-shaping", "other"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::NeedsShaping(2));
+    }
+
+    #[test]
+    fn mix_of_shaped_and_unshaped_returns_yes() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["needs-shaping"]},
+            {"id": "ralph-2", "labels": ["ready"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::Yes);
+    }
+
+    #[test]
+    fn no_labels_field_returns_yes() {
+        let input = r#"[{"id": "ralph-1", "title": "Do something"}]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::Yes);
+    }
+
+    #[test]
+    fn empty_labels_array_returns_yes() {
+        let input = r#"[{"id": "ralph-1", "labels": []}]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::Yes);
+    }
+
+    #[test]
+    fn invalid_json_returns_read_error() {
+        let result = parse_ready_output("not json at all");
+        assert!(matches!(result, WorkRemaining::ReadError(_)));
+    }
+
+    #[test]
+    fn non_array_json_returns_read_error() {
+        assert_eq!(
+            parse_ready_output("{}"),
+            WorkRemaining::ReadError("unexpected bd ready output".to_string()),
+        );
     }
 }
