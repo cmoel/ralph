@@ -226,6 +226,8 @@ pub struct App {
     pub dolt_toggle_rx: Option<Receiver<bool>>,
     /// Last time we polled dolt server status.
     pub last_dolt_poll: Instant,
+    /// When the app entered Error state (for auto-clearing the pulsing flash).
+    pub error_at: Option<Instant>,
 }
 
 impl App {
@@ -307,6 +309,7 @@ impl App {
             dolt_toggle_rx: None,
             // Initialize to "long ago" so we poll immediately on start
             last_dolt_poll: Instant::now() - Duration::from_secs(10),
+            error_at: None,
         }
     }
 
@@ -404,6 +407,16 @@ impl App {
             info!(pid, "process_killed");
         }
         self.output_receiver = None;
+    }
+
+    /// Auto-revert from Error to Stopped after a timeout so pulsing doesn't last forever.
+    pub fn check_error_timeout(&mut self) {
+        if let Some(at) = self.error_at
+            && at.elapsed() >= Duration::from_secs(5)
+        {
+            self.status = AppStatus::Stopped;
+            self.error_at = None;
+        }
     }
 
     /// Stop the running command (user-initiated)
@@ -568,10 +581,12 @@ impl App {
                 self.status = AppStatus::Stopped;
                 self.clear_tasks();
             }
-            Some(_code) => {
+            Some(code) => {
                 // Non-zero exit code → Error state
                 self.reset_iteration_state();
+                self.add_text_line(format!("[Error: process exited with code {}]", code));
                 self.status = AppStatus::Error;
+                self.error_at = Some(Instant::now());
                 self.clear_tasks();
             }
             None => {
@@ -640,6 +655,7 @@ impl App {
                 self.add_text_line("[Error: work source not found]".to_string());
                 self.reset_iteration_state();
                 self.status = AppStatus::Error;
+                self.error_at = Some(Instant::now());
                 self.clear_tasks();
             }
             WorkRemaining::ReadError(e) => {
@@ -647,6 +663,7 @@ impl App {
                 self.add_text_line(format!("[Error reading work source: {}]", e));
                 self.reset_iteration_state();
                 self.status = AppStatus::Error;
+                self.error_at = Some(Instant::now());
                 self.clear_tasks();
             }
         }

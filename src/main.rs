@@ -381,6 +381,9 @@ fn run_app(
         // Poll for config file changes (throttled to every 2 seconds)
         app.poll_config();
 
+        // Auto-clear error flash after timeout
+        app.check_error_timeout();
+
         // Draw UI
         terminal.draw(|f| draw_ui(f, &mut app))?;
 
@@ -563,6 +566,7 @@ fn start_command(app: &mut App) -> Result<()> {
     let prompt_path = app.config.prompt_path();
     if !prompt_path.exists() {
         app.status = AppStatus::Error;
+        app.error_at = Some(std::time::Instant::now());
         app.add_text_line(format!("Error: {} not found", prompt_path.display()));
         return Ok(());
     }
@@ -681,6 +685,7 @@ fn start_command(app: &mut App) -> Result<()> {
         }
         Err(e) => {
             app.status = AppStatus::Error;
+            app.error_at = Some(std::time::Instant::now());
             app.add_text_line(format!("Error starting command: {}", e));
         }
     }
@@ -725,7 +730,6 @@ fn poll_output(app: &mut App) {
                         if let Some(code) = status.code() {
                             if code != 0 {
                                 warn!(exit_code = code, "process_exit_nonzero");
-                                app.add_text_line(format!("[Process exited with code {}]", code));
                             }
                             (Some(code), Some(format!("exit_code={}", code)))
                         } else {
