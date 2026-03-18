@@ -24,3 +24,4 @@ directories = "6.0"
 dirs = "6.0"
 keepawake = "0.6"
 rand = "0.9"
+rusqlite = { version = "0.34", features = ["bundled"] }
