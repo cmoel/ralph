@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod doctor;
 mod events;
 mod logging;
 mod modal_ui;
@@ -66,6 +67,8 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
+    /// Check environment health and report pass/fail for each check
+    Doctor,
 }
 
 /// CLI argument parser.
@@ -135,6 +138,7 @@ fn main() -> Result<()> {
         Some(Commands::Init) => return run_init(),
         Some(Commands::Reinit) => return run_reinit(),
         Some(Commands::Status { verbose }) => return run_status(verbose),
+        Some(Commands::Doctor) => return run_doctor(),
         None => {}
     }
 
@@ -333,6 +337,40 @@ fn run_status(verbose: bool) -> Result<()> {
         for item in &items {
             println!("  [{}] {}", item.status.label(), item.name);
         }
+    }
+
+    Ok(())
+}
+
+/// Run the doctor subcommand: check environment health.
+fn run_doctor() -> Result<()> {
+    let loaded_config = config::load_config();
+    let cfg = &loaded_config.config;
+
+    let mut checks: Vec<doctor::CheckResult> = vec![
+        doctor::check_config(&loaded_config),
+        doctor::check_claude(cfg),
+        doctor::check_prompt(cfg),
+    ];
+
+    if cfg.behavior.mode == "beads" {
+        checks.push(doctor::check_bd(cfg));
+    }
+
+    checks.push(doctor::check_work_items(cfg));
+
+    let mut all_passed = true;
+    for check in &checks {
+        if check.passed {
+            println!("\u{2713} {}", check.message);
+        } else {
+            println!("\u{2717} {}", check.message);
+            all_passed = false;
+        }
+    }
+
+    if !all_passed {
+        std::process::exit(1);
     }
 
     Ok(())
@@ -1109,6 +1147,12 @@ mod tests {
             cli.command,
             Some(Commands::Status { verbose: false })
         ));
+    }
+
+    #[test]
+    fn cli_doctor_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "doctor"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Doctor)));
     }
 
     #[test]
