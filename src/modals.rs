@@ -901,7 +901,15 @@ impl ConfigModalState {
     }
 
     /// Validate a specific field and update validation_errors.
+    /// Skips validation for inherited (non-explicit) fields in the project tab.
     pub fn validate_field(&mut self, field: ConfigModalField) {
+        if self.active_tab() == ConfigTab::Project {
+            let form = self.active_form();
+            if !form.explicit_fields.contains(&field) {
+                return;
+            }
+        }
+
         let form = self.active_form();
         let error = match field {
             ConfigModalField::ClaudePath => validate_executable_path(&form.claude_path),
