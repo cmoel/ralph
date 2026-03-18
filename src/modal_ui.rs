@@ -281,30 +281,32 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         )));
     }
 
-    // Specs directory field
-    let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
-    let specs_inherited = is_inherited(ConfigModalField::SpecsDirectory);
-    let specs_label_style = if specs_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
-    specs_line.extend(render_field(
-        specs_dir,
-        specs_focused,
-        cursor_pos,
-        specs_inherited,
-    ));
-    if specs_inherited && !specs_focused {
-        specs_line.push(Span::styled(" (inherited)", label_style));
-    }
-    content.push(Line::from(specs_line));
-    if let Some(error) = get_field_error(ConfigModalField::SpecsDirectory) {
-        content.push(Line::from(Span::styled(
-            format!("                     \u{26a0} {}", error),
-            error_style,
-        )));
+    // Specs directory field (only relevant in specs mode)
+    if mode != "beads" {
+        let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
+        let specs_inherited = is_inherited(ConfigModalField::SpecsDirectory);
+        let specs_label_style = if specs_focused {
+            focused_label_style
+        } else {
+            label_style
+        };
+        let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
+        specs_line.extend(render_field(
+            specs_dir,
+            specs_focused,
+            cursor_pos,
+            specs_inherited,
+        ));
+        if specs_inherited && !specs_focused {
+            specs_line.push(Span::styled(" (inherited)", label_style));
+        }
+        content.push(Line::from(specs_line));
+        if let Some(error) = get_field_error(ConfigModalField::SpecsDirectory) {
+            content.push(Line::from(Span::styled(
+                format!("                     \u{26a0} {}", error),
+                error_style,
+            )));
+        }
     }
 
     // Log level dropdown

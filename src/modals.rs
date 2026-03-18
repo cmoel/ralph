@@ -654,6 +654,11 @@ impl ConfigModalState {
     pub fn focus_next(&mut self) {
         let leaving_field = self.focus;
         self.focus = self.focus.next();
+        if self.focus == ConfigModalField::SpecsDirectory
+            && self.active_form().selected_mode() == "beads"
+        {
+            self.focus = self.focus.next();
+        }
         self.update_cursor_for_new_focus();
         self.validate_field(leaving_field);
     }
@@ -663,6 +668,11 @@ impl ConfigModalState {
     pub fn focus_prev(&mut self) {
         let leaving_field = self.focus;
         self.focus = self.focus.prev();
+        if self.focus == ConfigModalField::SpecsDirectory
+            && self.active_form().selected_mode() == "beads"
+        {
+            self.focus = self.focus.prev();
+        }
         self.update_cursor_for_new_focus();
         self.validate_field(leaving_field);
     }
