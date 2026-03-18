@@ -19,6 +19,8 @@ pub enum WorkRemaining {
     Yes,
     /// All work items are done or blocked.
     No,
+    /// All ready beads need shaping (not implementable).
+    NeedsShaping(usize),
     /// Work source is missing (e.g., README not found).
     Missing,
     /// Error reading the work source.
@@ -237,7 +239,22 @@ impl WorkSource for BeadsWorkSource {
                     if arr.is_empty() {
                         WorkRemaining::No
                     } else {
-                        WorkRemaining::Yes
+                        let implementable: Vec<_> = arr
+                            .iter()
+                            .filter(|item| {
+                                let labels = item
+                                    .get("labels")
+                                    .and_then(|l| l.as_array());
+                                !labels.is_some_and(|ls| {
+                                    ls.iter().any(|l| l.as_str() == Some("needs-shaping"))
+                                })
+                            })
+                            .collect();
+                        if implementable.is_empty() {
+                            WorkRemaining::NeedsShaping(arr.len())
+                        } else {
+                            WorkRemaining::Yes
+                        }
                     }
                 }
                 Ok(_) => WorkRemaining::ReadError("unexpected bd ready output".to_string()),

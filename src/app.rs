@@ -661,6 +661,16 @@ impl App {
                 self.status = AppStatus::Stopped;
                 self.clear_tasks();
             }
+            WorkRemaining::NeedsShaping(count) => {
+                info!(count, "all_ready_beads_need_shaping");
+                self.add_text_line(
+                    "══════════════════ ALL READY BEADS NEED SHAPING ══════════════════"
+                        .to_string(),
+                );
+                self.reset_iteration_state();
+                self.status = AppStatus::Stopped;
+                self.clear_tasks();
+            }
             WorkRemaining::Missing => {
                 warn!("work_source_missing");
                 self.add_text_line("[Error: work source not found]".to_string());
