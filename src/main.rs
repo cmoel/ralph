@@ -14,6 +14,7 @@ mod templates;
 mod ui;
 mod validators;
 mod wake_lock;
+mod tool_history;
 mod work_source;
 
 use clap::Parser;
@@ -70,6 +71,30 @@ enum Commands {
     },
     /// Check environment health and report pass/fail for each check
     Doctor,
+    /// Query tool call history from the SQLite database
+    ToolHistory {
+        /// Filter by session ID
+        #[arg(long)]
+        session: Option<String>,
+        /// Filter by tool name (case-insensitive)
+        #[arg(long)]
+        tool: Option<String>,
+        /// Show tool calls since this time (e.g., 6h, 1d, today, 2025-01-15)
+        #[arg(long)]
+        since: Option<String>,
+        /// Show tool calls until this time (requires --since)
+        #[arg(long)]
+        until: Option<String>,
+        /// Filter to rejected/errored tool calls only
+        #[arg(long)]
+        rejected: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Print the database file path and exit
+        #[arg(long)]
+        db_path: bool,
+    },
 }
 
 /// CLI argument parser.
@@ -140,6 +165,15 @@ fn main() -> Result<()> {
         Some(Commands::Reinit) => return run_reinit(),
         Some(Commands::Status { verbose }) => return run_status(verbose),
         Some(Commands::Doctor) => return run_doctor(),
+        Some(Commands::ToolHistory {
+            session,
+            tool,
+            since,
+            until,
+            rejected,
+            json,
+            db_path,
+        }) => return tool_history::run(session, tool, since, until, rejected, json, db_path),
         None => {}
     }
 
@@ -1236,5 +1270,76 @@ mod tests {
             cli.command,
             Some(Commands::Status { verbose: true })
         ));
+    }
+
+    #[test]
+    fn cli_tool_history_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "tool-history"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::ToolHistory { .. })
+        ));
+    }
+
+    #[test]
+    fn cli_tool_history_session_parses() {
+        let cli = Cli::try_parse_from(["ralph", "tool-history", "--session", "abc123"]).unwrap();
+        match cli.command {
+            Some(Commands::ToolHistory { session, .. }) => {
+                assert_eq!(session.as_deref(), Some("abc123"));
+            }
+            _ => panic!("Expected ToolHistory"),
+        }
+    }
+
+    #[test]
+    fn cli_tool_history_tool_parses() {
+        let cli = Cli::try_parse_from(["ralph", "tool-history", "--tool", "Bash"]).unwrap();
+        match cli.command {
+            Some(Commands::ToolHistory { tool, .. }) => {
+                assert_eq!(tool.as_deref(), Some("Bash"));
+            }
+            _ => panic!("Expected ToolHistory"),
+        }
+    }
+
+    #[test]
+    fn cli_tool_history_since_parses() {
+        let cli =
+            Cli::try_parse_from(["ralph", "tool-history", "--since", "6h", "--until", "1h"])
+                .unwrap();
+        match cli.command {
+            Some(Commands::ToolHistory { since, until, .. }) => {
+                assert_eq!(since.as_deref(), Some("6h"));
+                assert_eq!(until.as_deref(), Some("1h"));
+            }
+            _ => panic!("Expected ToolHistory"),
+        }
+    }
+
+    #[test]
+    fn cli_tool_history_flags_parse() {
+        let cli =
+            Cli::try_parse_from(["ralph", "tool-history", "--rejected", "--json"]).unwrap();
+        match cli.command {
+            Some(Commands::ToolHistory {
+                rejected, json, ..
+            }) => {
+                assert!(rejected);
+                assert!(json);
+            }
+            _ => panic!("Expected ToolHistory"),
+        }
+    }
+
+    #[test]
+    fn cli_tool_history_db_path_parses() {
+        let cli = Cli::try_parse_from(["ralph", "tool-history", "--db-path"]).unwrap();
+        match cli.command {
+            Some(Commands::ToolHistory { db_path, .. }) => {
+                assert!(db_path);
+            }
+            _ => panic!("Expected ToolHistory"),
+        }
     }
 }
