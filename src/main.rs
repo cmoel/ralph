@@ -383,6 +383,7 @@ fn run_app(
     loaded_config: LoadedConfig,
     log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
 ) -> Result<()> {
+    let loaded_for_doctor = loaded_config.clone();
     let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
 
     // Sniff test: warn if PROMPT.md contains mode-mismatched content
@@ -391,6 +392,25 @@ fn run_app(
         for warning in prompt_sniff::sniff_prompt(&content, &app.config.behavior.mode) {
             app.add_text_line(warning);
         }
+    }
+
+    // Run doctor checks asynchronously — only surface failures
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let cfg = &loaded_for_doctor.config;
+            let mut checks = vec![
+                doctor::check_config(&loaded_for_doctor),
+                doctor::check_claude(cfg),
+                doctor::check_prompt(cfg),
+            ];
+            if cfg.behavior.mode == "beads" {
+                checks.push(doctor::check_bd(cfg));
+            }
+            checks.push(doctor::check_work_items(cfg));
+            let _ = tx.send(checks);
+        });
+        app.doctor_rx = Some(rx);
     }
 
     loop {
@@ -418,6 +438,9 @@ fn run_app(
 
         // Poll for config file changes (throttled to every 2 seconds)
         app.poll_config();
+
+        // Poll for background doctor check results
+        app.poll_doctor();
 
         // Auto-clear error flash after timeout
         app.check_error_timeout();

@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::reload_config;
 use crate::config::{Config, LoadedConfig, get_project_config_path};
+use crate::doctor;
 use crate::logging::ReloadHandle;
 use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState};
 use crate::ui::{TodoItem, TodoStatus};
@@ -228,6 +229,8 @@ pub struct App {
     pub last_dolt_poll: Instant,
     /// When the app entered Error state (for auto-clearing the pulsing flash).
     pub error_at: Option<Instant>,
+    /// Receiver for background doctor checks (run once on TUI open).
+    pub doctor_rx: Option<Receiver<Vec<doctor::CheckResult>>>,
 }
 
 impl App {
@@ -310,6 +313,7 @@ impl App {
             // Initialize to "long ago" so we poll immediately on start
             last_dolt_poll: Instant::now() - Duration::from_secs(10),
             error_at: None,
+            doctor_rx: None,
         }
     }
 
@@ -916,6 +920,28 @@ impl App {
                     _ => {}
                 }
             }
+        }
+    }
+
+    /// Poll for background doctor check results. Displays only failures.
+    pub fn poll_doctor(&mut self) {
+        let rx = match self.doctor_rx.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(checks) => {
+                for check in &checks {
+                    if !check.passed {
+                        self.add_text_line(format!("\u{2717} {}", check.message));
+                    }
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.doctor_rx = Some(rx);
+            }
+            Err(TryRecvError::Disconnected) => {}
         }
     }
 
