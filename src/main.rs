@@ -390,9 +390,15 @@ fn run_doctor() -> Result<()> {
 
     if cfg.behavior.mode == "beads" {
         checks.push(doctor::check_bd(cfg));
+        let dolt_check = doctor::check_dolt_status(cfg);
+        let dolt_running = dolt_check.passed;
+        checks.push(dolt_check);
+        if dolt_running {
+            checks.push(doctor::check_work_items(cfg));
+        }
+    } else {
+        checks.push(doctor::check_work_items(cfg));
     }
-
-    checks.push(doctor::check_work_items(cfg));
 
     let mut all_passed = true;
     for check in &checks {
@@ -441,8 +447,15 @@ fn run_app(
             ];
             if cfg.behavior.mode == "beads" {
                 checks.push(doctor::check_bd(cfg));
+                let dolt_check = doctor::check_dolt_status(cfg);
+                let dolt_running = dolt_check.passed;
+                checks.push(dolt_check);
+                if dolt_running {
+                    checks.push(doctor::check_work_items(cfg));
+                }
+            } else {
+                checks.push(doctor::check_work_items(cfg));
             }
-            checks.push(doctor::check_work_items(cfg));
             let _ = tx.send(checks);
         });
         app.doctor_rx = Some(rx);

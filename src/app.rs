@@ -465,6 +465,13 @@ impl App {
             return;
         }
 
+        // In beads mode, skip if dolt server is not confirmed running
+        if self.config.behavior.mode == "beads"
+            && self.dolt_server_state != DoltServerState::On
+        {
+            return;
+        }
+
         // Throttle: poll every 2 seconds
         if self.last_spec_poll.elapsed() < Duration::from_secs(2) {
             return;
@@ -576,15 +583,24 @@ impl App {
         // Determine next state based on exit code and iteration control
         match exit_code {
             Some(0) if self.should_auto_continue() => {
-                // Kick off background check_remaining (non-blocking)
-                let complete_msg = self.work_source.complete_message();
-                let (tx, rx) = mpsc::channel();
-                let ws = Arc::clone(&self.work_source);
-                std::thread::spawn(move || {
-                    let _ = tx.send((ws.check_remaining(), complete_msg));
-                });
-                self.pending_work_check = Some(rx);
-                self.status = AppStatus::Stopped;
+                // In beads mode, skip work check if dolt server is not running
+                if self.config.behavior.mode == "beads"
+                    && self.dolt_server_state != DoltServerState::On
+                {
+                    self.reset_iteration_state();
+                    self.status = AppStatus::Stopped;
+                    self.clear_tasks();
+                } else {
+                    // Kick off background check_remaining (non-blocking)
+                    let complete_msg = self.work_source.complete_message();
+                    let (tx, rx) = mpsc::channel();
+                    let ws = Arc::clone(&self.work_source);
+                    std::thread::spawn(move || {
+                        let _ = tx.send((ws.check_remaining(), complete_msg));
+                    });
+                    self.pending_work_check = Some(rx);
+                    self.status = AppStatus::Stopped;
+                }
             }
             Some(0) => {
                 // Countdown exhausted or iterations = 0, just stop
