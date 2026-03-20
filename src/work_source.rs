@@ -307,7 +307,7 @@ pub fn create_work_source(mode: &str, specs_dir: PathBuf, bd_path: &str) -> Arc<
 ///
 /// This is the pure logic extracted from `BeadsWorkSource::check_remaining()`
 /// so it can be unit tested without spawning processes.
-fn is_shaping_label(label: &str, extra: &[String]) -> bool {
+pub fn is_shaping_label(label: &str, extra: &[String]) -> bool {
     matches!(label, "needs-shaping" | "shaping-required") || extra.iter().any(|e| e == label)
 }
 

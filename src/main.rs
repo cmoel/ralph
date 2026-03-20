@@ -398,6 +398,7 @@ fn run_doctor() -> Result<()> {
         checks.push(dolt_check);
         if dolt_running {
             checks.push(doctor::check_work_items(cfg));
+            checks.push(doctor::check_unrecognized_labels(cfg));
         }
     } else {
         checks.push(doctor::check_work_items(cfg));

@@ -126,6 +126,53 @@ pub fn check_work_items(config: &Config) -> CheckResult {
     }
 }
 
+/// Check for bead labels not in the known set (beads mode only).
+pub fn check_unrecognized_labels(config: &Config) -> CheckResult {
+    let path = &config.behavior.bd_path;
+    match Command::new(path).args(["list", "--json"]).output() {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            check_labels_in_output(&stdout)
+        }
+        Ok(_) => CheckResult::fail("Could not list beads to check labels"),
+        Err(_) => CheckResult::fail("Could not run bd to check labels"),
+    }
+}
+
+fn check_labels_in_output(stdout: &str) -> CheckResult {
+    let items: Vec<serde_json::Value> = match serde_json::from_str(stdout) {
+        Ok(serde_json::Value::Array(arr)) => arr,
+        _ => return CheckResult::fail("Could not parse bd list output"),
+    };
+
+    let mut unrecognized: Vec<(String, String)> = Vec::new();
+    for item in &items {
+        let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+        if let Some(labels) = item.get("labels").and_then(|l| l.as_array()) {
+            for label in labels {
+                if let Some(s) = label.as_str()
+                    && !work_source::is_shaping_label(s, &[])
+                {
+                    unrecognized.push((id.to_string(), s.to_string()));
+                }
+            }
+        }
+    }
+
+    if unrecognized.is_empty() {
+        CheckResult::pass("All bead labels recognized")
+    } else {
+        let details: Vec<String> = unrecognized
+            .iter()
+            .map(|(id, label)| format!("{} has unrecognized label \"{}\"", id, label))
+            .collect();
+        CheckResult::fail(format!(
+            "Unrecognized bead labels:\n    {}",
+            details.join("\n    ")
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +233,70 @@ mod tests {
         let r = CheckResult::fail("bad");
         assert!(!r.passed);
         assert_eq!(r.message, "bad");
+    }
+
+    #[test]
+    fn labels_check_passes_for_empty_list() {
+        let result = check_labels_in_output("[]");
+        assert!(result.passed);
+        assert_eq!(result.message, "All bead labels recognized");
+    }
+
+    #[test]
+    fn labels_check_passes_when_no_labels() {
+        let input = r#"[{"id": "ralph-1", "title": "No labels here"}]"#;
+        let result = check_labels_in_output(input);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn labels_check_passes_for_known_labels() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["needs-shaping"]},
+            {"id": "ralph-2", "labels": ["shaping-required"]}
+        ]"#;
+        let result = check_labels_in_output(input);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn labels_check_fails_for_unrecognized_label() {
+        let input = r#"[{"id": "ralph-bmv", "labels": ["shapng-required"]}]"#;
+        let result = check_labels_in_output(input);
+        assert!(!result.passed);
+        assert!(
+            result
+                .message
+                .contains(r#"ralph-bmv has unrecognized label "shapng-required""#),
+            "message was: {}",
+            result.message,
+        );
+    }
+
+    #[test]
+    fn labels_check_reports_multiple_unrecognized() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["needs-shaping", "typo-label"]},
+            {"id": "ralph-2", "labels": ["other"]}
+        ]"#;
+        let result = check_labels_in_output(input);
+        assert!(!result.passed);
+        assert!(
+            result
+                .message
+                .contains(r#"ralph-1 has unrecognized label "typo-label""#)
+        );
+        assert!(
+            result
+                .message
+                .contains(r#"ralph-2 has unrecognized label "other""#)
+        );
+    }
+
+    #[test]
+    fn labels_check_fails_on_invalid_json() {
+        let result = check_labels_in_output("not json");
+        assert!(!result.passed);
+        assert!(result.message.contains("Could not parse"));
     }
 }
