@@ -73,6 +73,12 @@ enum Commands {
     Doctor,
     /// Run a single ralph loop interactively (claude owns the terminal)
     Once,
+    /// List implementable beads (beads mode only)
+    Ready {
+        /// Annotate each item with include/exclude reason
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Query tool call history from the SQLite database
     ToolHistory {
         /// Filter by session ID
@@ -168,6 +174,7 @@ fn main() -> Result<()> {
         Some(Commands::Status { verbose }) => return run_status(verbose),
         Some(Commands::Doctor) => return run_doctor(),
         Some(Commands::Once) => return run_once(),
+        Some(Commands::Ready { verbose }) => return run_ready(verbose),
         Some(Commands::ToolHistory {
             session,
             tool,
@@ -375,6 +382,101 @@ fn run_status(verbose: bool) -> Result<()> {
         for item in &items {
             println!("  [{}] {}", item.status.label(), item.name);
         }
+    }
+
+    Ok(())
+}
+
+/// Run the ready subcommand: list implementable beads.
+fn run_ready(verbose: bool) -> Result<()> {
+    let loaded_config = config::load_config();
+    let cfg = &loaded_config.config;
+
+    if cfg.behavior.mode != "beads" {
+        eprintln!("Error: ralph ready requires beads mode");
+        std::process::exit(1);
+    }
+
+    let output = Command::new(&cfg.behavior.bd_path)
+        .args(["ready", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            eprintln!("Error: {}: command not found", cfg.behavior.bd_path);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: failed to run bd: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("Error: bd ready failed: {}", stderr.trim());
+        std::process::exit(1);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
+        Ok(serde_json::Value::Array(arr)) => arr,
+        Ok(_) => {
+            eprintln!("Error: unexpected bd ready output");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: failed to parse bd output: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if items.is_empty() {
+        if verbose {
+            println!("No ready beads.");
+        }
+        std::process::exit(1);
+    }
+
+    let mut has_implementable = false;
+
+    for item in &items {
+        let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("???");
+        let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let labels = item.get("labels").and_then(|v| v.as_array());
+
+        let needs_shaping = labels.is_some_and(|ls| {
+            ls.iter()
+                .any(|l| l.as_str().is_some_and(|s| work_source::is_shaping_label(s, &[])))
+        });
+
+        if verbose {
+            if needs_shaping {
+                println!("{}: SKIPPED (needs-shaping) — {}", id, title);
+            } else {
+                println!("{}: READY — {}", id, title);
+                has_implementable = true;
+            }
+        } else if !needs_shaping {
+            println!("{}\t{}", id, title);
+            has_implementable = true;
+        }
+    }
+
+    if !has_implementable {
+        if verbose {
+            println!(
+                "\nAll {} ready bead{} {} shaping.",
+                items.len(),
+                if items.len() == 1 { "" } else { "s" },
+                if items.len() == 1 { "needs" } else { "need" }
+            );
+        }
+        std::process::exit(1);
     }
 
     Ok(())
@@ -1419,5 +1521,23 @@ mod tests {
     fn cli_once_subcommand_parses() {
         let cli = Cli::try_parse_from(["ralph", "once"]).unwrap();
         assert!(matches!(cli.command, Some(Commands::Once)));
+    }
+
+    #[test]
+    fn cli_ready_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "ready"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Ready { verbose: false })
+        ));
+    }
+
+    #[test]
+    fn cli_ready_verbose_parses() {
+        let cli = Cli::try_parse_from(["ralph", "ready", "--verbose"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Ready { verbose: true })
+        ));
     }
 }
