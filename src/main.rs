@@ -675,6 +675,45 @@ fn run_app(
     }
 }
 
+/// Assemble the prompt content and build the shell command string for Claude CLI.
+///
+/// Reads PROMPT.md and optional mode-specific content, writes a temp file for mode
+/// content if needed, and returns the full shell command to pipe into Claude.
+fn assemble_prompt(config: &crate::config::Config) -> Result<String> {
+    let prompt_path = config.prompt_path();
+    let claude_path = config.claude_path();
+    const CLAUDE_ARGS: &str =
+        "--output-format=stream-json --verbose --print --include-partial-messages";
+
+    let mode = &config.behavior.mode;
+    let mode_temp_path = if let Some(content) = templates::mode_content(mode) {
+        let path = std::env::temp_dir().join("ralph-mode.md");
+        std::fs::write(&path, content)?;
+        Some(path)
+    } else {
+        None
+    };
+
+    let command = if let Some(ref mode_path) = mode_temp_path {
+        format!(
+            "cat {} {} | {} {}",
+            prompt_path.display(),
+            mode_path.display(),
+            claude_path.display(),
+            CLAUDE_ARGS
+        )
+    } else {
+        format!(
+            "cat {} | {} {}",
+            prompt_path.display(),
+            claude_path.display(),
+            CLAUDE_ARGS
+        )
+    };
+
+    Ok(command)
+}
+
 /// Start the command.
 fn start_command(app: &mut App) -> Result<()> {
     if app.status == AppStatus::Running {
@@ -704,39 +743,7 @@ fn start_command(app: &mut App) -> Result<()> {
     app.content_blocks.clear();
     app.current_line.clear();
 
-    // Spawn the command using shell to handle the pipe
-    // Use config values for claude path and prompt path
-    // Args are hardcoded - Ralph depends on this specific format for streaming output
-    let claude_path = app.config.claude_path();
-    const CLAUDE_ARGS: &str =
-        "--output-format=stream-json --verbose --print --include-partial-messages";
-
-    // Build cat command: PROMPT.md + optional mode-specific content
-    let mode = &app.config.behavior.mode;
-    let mode_temp_path = if let Some(content) = templates::mode_content(mode) {
-        let path = std::env::temp_dir().join("ralph-mode.md");
-        std::fs::write(&path, content)?;
-        Some(path)
-    } else {
-        None
-    };
-
-    let command = if let Some(ref mode_path) = mode_temp_path {
-        format!(
-            "cat {} {} | {} {}",
-            prompt_path.display(),
-            mode_path.display(),
-            claude_path.display(),
-            CLAUDE_ARGS
-        )
-    } else {
-        format!(
-            "cat {} | {} {}",
-            prompt_path.display(),
-            claude_path.display(),
-            CLAUDE_ARGS
-        )
-    };
+    let command = assemble_prompt(&app.config)?;
     let child = Command::new("sh")
         .arg("-c")
         .arg(&command)
@@ -1354,5 +1361,29 @@ mod tests {
             }
             _ => panic!("Expected ToolHistory"),
         }
+    }
+
+    #[test]
+    fn assemble_prompt_default_mode_includes_prompt_and_mode_file() {
+        let config = crate::config::Config::default();
+        let command = assemble_prompt(&config).unwrap();
+
+        // Should pipe PROMPT.md and mode content through Claude CLI
+        assert!(command.contains("PROMPT.md"));
+        assert!(command.contains("ralph-mode.md"));
+        assert!(command.contains("--output-format=stream-json"));
+        assert!(command.contains("--print"));
+    }
+
+    #[test]
+    fn assemble_prompt_unknown_mode_omits_mode_file() {
+        let mut config = crate::config::Config::default();
+        config.behavior.mode = "nonexistent-mode".to_string();
+        let command = assemble_prompt(&config).unwrap();
+
+        // Should only have PROMPT.md, no mode temp file
+        assert!(command.contains("PROMPT.md"));
+        assert!(!command.contains("ralph-mode.md"));
+        assert!(command.contains("--output-format=stream-json"));
     }
 }
