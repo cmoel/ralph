@@ -95,14 +95,10 @@ pub fn check_dolt_status(config: &Config) -> CheckResult {
             if stdout.contains("server: running") {
                 CheckResult::pass("Dolt server running")
             } else {
-                CheckResult::fail(
-                    "Dolt server not running — press D to start it in ralph",
-                )
+                CheckResult::fail("Dolt server not running — press D to start it in ralph")
             }
         }
-        Ok(_) => CheckResult::fail(
-            "Dolt server not running — press D to start it in ralph",
-        ),
+        Ok(_) => CheckResult::fail("Dolt server not running — press D to start it in ralph"),
         Err(_) => CheckResult::fail("Could not check Dolt status"),
     }
 }

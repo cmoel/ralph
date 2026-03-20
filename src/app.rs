@@ -466,9 +466,7 @@ impl App {
         }
 
         // In beads mode, skip if dolt server is not confirmed running
-        if self.config.behavior.mode == "beads"
-            && self.dolt_server_state != DoltServerState::On
-        {
+        if self.config.behavior.mode == "beads" && self.dolt_server_state != DoltServerState::On {
             return;
         }
 

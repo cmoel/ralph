@@ -11,10 +11,10 @@ mod modals;
 mod prompt_sniff;
 mod specs;
 mod templates;
+mod tool_history;
 mod ui;
 mod validators;
 mod wake_lock;
-mod tool_history;
 mod work_source;
 
 use clap::Parser;
@@ -71,6 +71,8 @@ enum Commands {
     },
     /// Check environment health and report pass/fail for each check
     Doctor,
+    /// Run a single ralph loop interactively (claude owns the terminal)
+    Once,
     /// Query tool call history from the SQLite database
     ToolHistory {
         /// Filter by session ID
@@ -165,6 +167,7 @@ fn main() -> Result<()> {
         Some(Commands::Reinit) => return run_reinit(),
         Some(Commands::Status { verbose }) => return run_status(verbose),
         Some(Commands::Doctor) => return run_doctor(),
+        Some(Commands::Once) => return run_once(),
         Some(Commands::ToolHistory {
             session,
             tool,
@@ -712,6 +715,37 @@ fn assemble_prompt(config: &crate::config::Config) -> Result<String> {
     };
 
     Ok(command)
+}
+
+/// Run a single ralph loop interactively. Claude inherits the terminal.
+fn run_once() -> Result<()> {
+    let loaded_config = config::load_config();
+    let config = &loaded_config.config;
+
+    let prompt_path = config.prompt_path();
+    let mut prompt = std::fs::read_to_string(&prompt_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read prompt file {}: {}",
+            prompt_path.display(),
+            e
+        )
+    })?;
+
+    if let Some(mode_content) = templates::mode_content(&config.behavior.mode) {
+        prompt.push('\n');
+        prompt.push_str(mode_content);
+    }
+
+    let claude_path = config.claude_path();
+    let status = std::process::Command::new(claude_path.as_os_str())
+        .arg(&prompt)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn claude: {}", e))?;
+
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 /// Start the command.
@@ -1295,10 +1329,7 @@ mod tests {
     #[test]
     fn cli_tool_history_subcommand_parses() {
         let cli = Cli::try_parse_from(["ralph", "tool-history"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::ToolHistory { .. })
-        ));
+        assert!(matches!(cli.command, Some(Commands::ToolHistory { .. })));
     }
 
     #[test]
@@ -1325,9 +1356,8 @@ mod tests {
 
     #[test]
     fn cli_tool_history_since_parses() {
-        let cli =
-            Cli::try_parse_from(["ralph", "tool-history", "--since", "6h", "--until", "1h"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["ralph", "tool-history", "--since", "6h", "--until", "1h"])
+            .unwrap();
         match cli.command {
             Some(Commands::ToolHistory { since, until, .. }) => {
                 assert_eq!(since.as_deref(), Some("6h"));
@@ -1339,12 +1369,9 @@ mod tests {
 
     #[test]
     fn cli_tool_history_flags_parse() {
-        let cli =
-            Cli::try_parse_from(["ralph", "tool-history", "--rejected", "--json"]).unwrap();
+        let cli = Cli::try_parse_from(["ralph", "tool-history", "--rejected", "--json"]).unwrap();
         match cli.command {
-            Some(Commands::ToolHistory {
-                rejected, json, ..
-            }) => {
+            Some(Commands::ToolHistory { rejected, json, .. }) => {
                 assert!(rejected);
                 assert!(json);
             }
@@ -1385,5 +1412,11 @@ mod tests {
         assert!(command.contains("PROMPT.md"));
         assert!(!command.contains("ralph-mode.md"));
         assert!(command.contains("--output-format=stream-json"));
+    }
+
+    #[test]
+    fn cli_once_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "once"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Once)));
     }
 }

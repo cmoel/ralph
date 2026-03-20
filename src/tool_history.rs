@@ -164,9 +164,7 @@ pub fn query_tool_calls(
 ) -> Result<Vec<ToolCallRecord>> {
     let (sql, params) = build_query(filter, rejected_only);
 
-    let mut stmt = conn
-        .prepare(&sql)
-        .context("Failed to prepare query")?;
+    let mut stmt = conn.prepare(&sql).context("Failed to prepare query")?;
 
     let params_refs: Vec<&dyn rusqlite::types::ToSql> = params
         .iter()
@@ -355,10 +353,38 @@ mod tests {
         let conn = db::open_memory().unwrap();
 
         // Insert test data across two sessions
-        db::insert_tool_call(&conn, "sess-aaa111", "Read", Some("tu_1"), r#"{"path":"/tmp"}"#, 1);
-        db::insert_tool_call(&conn, "sess-aaa111", "Bash", Some("tu_2"), r#"{"command":"ls"}"#, 2);
-        db::insert_tool_call(&conn, "sess-bbb222", "Write", Some("tu_3"), r#"{"path":"/out"}"#, 1);
-        db::insert_tool_call(&conn, "sess-bbb222", "Bash", Some("tu_4"), r#"{"command":"rm"}"#, 2);
+        db::insert_tool_call(
+            &conn,
+            "sess-aaa111",
+            "Read",
+            Some("tu_1"),
+            r#"{"path":"/tmp"}"#,
+            1,
+        );
+        db::insert_tool_call(
+            &conn,
+            "sess-aaa111",
+            "Bash",
+            Some("tu_2"),
+            r#"{"command":"ls"}"#,
+            2,
+        );
+        db::insert_tool_call(
+            &conn,
+            "sess-bbb222",
+            "Write",
+            Some("tu_3"),
+            r#"{"path":"/out"}"#,
+            1,
+        );
+        db::insert_tool_call(
+            &conn,
+            "sess-bbb222",
+            "Bash",
+            Some("tu_4"),
+            r#"{"command":"rm"}"#,
+            2,
+        );
 
         // Mark one as an error
         db::update_tool_result(&conn, "tu_4", "sess-bbb222", true, "permission denied");
@@ -371,7 +397,8 @@ mod tests {
     #[test]
     fn query_by_session() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
+        let records =
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.session_id == "sess-aaa111"));
     }
@@ -451,7 +478,8 @@ mod tests {
     #[test]
     fn format_table_with_records() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
+        let records =
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
         let output = format_table(&records);
         assert!(output.contains("TOOL"));
         assert!(output.contains("Read"));
@@ -462,7 +490,8 @@ mod tests {
     #[test]
     fn format_json_output() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
+        let records =
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
         let output = format_json(&records).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed.len(), 2);
