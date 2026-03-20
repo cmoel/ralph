@@ -307,6 +307,10 @@ pub fn create_work_source(mode: &str, specs_dir: PathBuf, bd_path: &str) -> Arc<
 ///
 /// This is the pure logic extracted from `BeadsWorkSource::check_remaining()`
 /// so it can be unit tested without spawning processes.
+fn is_shaping_label(label: &str, extra: &[String]) -> bool {
+    matches!(label, "needs-shaping" | "shaping-required") || extra.iter().any(|e| e == label)
+}
+
 fn parse_ready_output(stdout: &str) -> WorkRemaining {
     match serde_json::from_str::<serde_json::Value>(stdout) {
         Ok(serde_json::Value::Array(arr)) => {
@@ -318,7 +322,8 @@ fn parse_ready_output(stdout: &str) -> WorkRemaining {
                     .filter(|item| {
                         let labels = item.get("labels").and_then(|l| l.as_array());
                         !labels.is_some_and(|ls| {
-                            ls.iter().any(|l| l.as_str() == Some("needs-shaping"))
+                            ls.iter()
+                                .any(|l| l.as_str().is_some_and(|s| is_shaping_label(s, &[])))
                         })
                     })
                     .collect();
@@ -385,5 +390,38 @@ mod tests {
             parse_ready_output("{}"),
             WorkRemaining::ReadError("unexpected bd ready output".to_string()),
         );
+    }
+
+    #[test]
+    fn is_shaping_label_matches_defaults() {
+        assert!(is_shaping_label("needs-shaping", &[]));
+        assert!(is_shaping_label("shaping-required", &[]));
+        assert!(!is_shaping_label("ready", &[]));
+        assert!(!is_shaping_label("blocked", &[]));
+    }
+
+    #[test]
+    fn is_shaping_label_matches_extra() {
+        let extra = vec!["wip".to_string()];
+        assert!(is_shaping_label("wip", &extra));
+        assert!(is_shaping_label("needs-shaping", &extra));
+        assert!(!is_shaping_label("ready", &extra));
+    }
+
+    #[test]
+    fn shaping_required_label_filters_bead() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["shaping-required"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::NeedsShaping(1));
+    }
+
+    #[test]
+    fn both_shaping_labels_filter_beads() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["needs-shaping"]},
+            {"id": "ralph-2", "labels": ["shaping-required"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::NeedsShaping(2));
     }
 }
