@@ -12,6 +12,7 @@ mod prompt_sniff;
 mod specs;
 mod templates;
 mod tool_history;
+mod tool_settings;
 mod ui;
 mod validators;
 mod wake_lock;
@@ -79,8 +80,16 @@ enum Commands {
         #[arg(long)]
         verbose: bool,
     },
+    /// Manage and inspect tool permissions and history
+    #[command(subcommand)]
+    Tool(ToolCommands),
+}
+
+/// Subcommands under `ralph tool`.
+#[derive(Debug, Parser)]
+enum ToolCommands {
     /// Query tool call history from the SQLite database
-    ToolHistory {
+    History {
         /// Filter by session ID
         #[arg(long)]
         session: Option<String>,
@@ -103,6 +112,24 @@ enum Commands {
         #[arg(long)]
         db_path: bool,
     },
+    /// Allow a tool pattern in settings
+    Allow {
+        /// Tool pattern (e.g., Read, Bash(git:*), WebFetch(domain:docs.rs))
+        pattern: String,
+        /// Write to .claude/settings.json instead of .claude/settings.local.json
+        #[arg(long)]
+        project: bool,
+    },
+    /// Deny a tool pattern in settings
+    Deny {
+        /// Tool pattern (e.g., Bash(rm:*), Bash(sudo *))
+        pattern: String,
+        /// Write to .claude/settings.json instead of .claude/settings.local.json
+        #[arg(long)]
+        project: bool,
+    },
+    /// List tool permissions across all settings files
+    List,
 }
 
 /// CLI argument parser.
@@ -175,15 +202,26 @@ fn main() -> Result<()> {
         Some(Commands::Doctor) => return run_doctor(),
         Some(Commands::Once) => return run_once(),
         Some(Commands::Ready { verbose }) => return run_ready(verbose),
-        Some(Commands::ToolHistory {
-            session,
-            tool,
-            since,
-            until,
-            rejected,
-            json,
-            db_path,
-        }) => return tool_history::run(session, tool, since, until, rejected, json, db_path),
+        Some(Commands::Tool(tool_cmd)) => {
+            return match tool_cmd {
+                ToolCommands::History {
+                    session,
+                    tool,
+                    since,
+                    until,
+                    rejected,
+                    json,
+                    db_path,
+                } => tool_history::run(session, tool, since, until, rejected, json, db_path),
+                ToolCommands::Allow { pattern, project } => {
+                    tool_settings::allow_pattern(&pattern, project)
+                }
+                ToolCommands::Deny { pattern, project } => {
+                    tool_settings::deny_pattern(&pattern, project)
+                }
+                ToolCommands::List => tool_settings::list_rules(),
+            };
+        }
         None => {}
     }
 
@@ -450,8 +488,10 @@ fn run_ready(verbose: bool) -> Result<()> {
         let labels = item.get("labels").and_then(|v| v.as_array());
 
         let needs_shaping = labels.is_some_and(|ls| {
-            ls.iter()
-                .any(|l| l.as_str().is_some_and(|s| work_source::is_shaping_label(s, &[])))
+            ls.iter().any(|l| {
+                l.as_str()
+                    .is_some_and(|s| work_source::is_shaping_label(s, &[]))
+            })
         });
 
         if verbose {
@@ -1431,66 +1471,117 @@ mod tests {
 
     #[test]
     fn cli_tool_history_subcommand_parses() {
-        let cli = Cli::try_parse_from(["ralph", "tool-history"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::ToolHistory { .. })));
+        let cli = Cli::try_parse_from(["ralph", "tool", "history"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Tool(ToolCommands::History { .. }))
+        ));
     }
 
     #[test]
     fn cli_tool_history_session_parses() {
-        let cli = Cli::try_parse_from(["ralph", "tool-history", "--session", "abc123"]).unwrap();
+        let cli = Cli::try_parse_from(["ralph", "tool", "history", "--session", "abc123"]).unwrap();
         match cli.command {
-            Some(Commands::ToolHistory { session, .. }) => {
+            Some(Commands::Tool(ToolCommands::History { session, .. })) => {
                 assert_eq!(session.as_deref(), Some("abc123"));
             }
-            _ => panic!("Expected ToolHistory"),
+            _ => panic!("Expected Tool History"),
         }
     }
 
     #[test]
     fn cli_tool_history_tool_parses() {
-        let cli = Cli::try_parse_from(["ralph", "tool-history", "--tool", "Bash"]).unwrap();
+        let cli = Cli::try_parse_from(["ralph", "tool", "history", "--tool", "Bash"]).unwrap();
         match cli.command {
-            Some(Commands::ToolHistory { tool, .. }) => {
+            Some(Commands::Tool(ToolCommands::History { tool, .. })) => {
                 assert_eq!(tool.as_deref(), Some("Bash"));
             }
-            _ => panic!("Expected ToolHistory"),
+            _ => panic!("Expected Tool History"),
         }
     }
 
     #[test]
     fn cli_tool_history_since_parses() {
-        let cli = Cli::try_parse_from(["ralph", "tool-history", "--since", "6h", "--until", "1h"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["ralph", "tool", "history", "--since", "6h", "--until", "1h"])
+                .unwrap();
         match cli.command {
-            Some(Commands::ToolHistory { since, until, .. }) => {
+            Some(Commands::Tool(ToolCommands::History { since, until, .. })) => {
                 assert_eq!(since.as_deref(), Some("6h"));
                 assert_eq!(until.as_deref(), Some("1h"));
             }
-            _ => panic!("Expected ToolHistory"),
+            _ => panic!("Expected Tool History"),
         }
     }
 
     #[test]
     fn cli_tool_history_flags_parse() {
-        let cli = Cli::try_parse_from(["ralph", "tool-history", "--rejected", "--json"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["ralph", "tool", "history", "--rejected", "--json"]).unwrap();
         match cli.command {
-            Some(Commands::ToolHistory { rejected, json, .. }) => {
+            Some(Commands::Tool(ToolCommands::History { rejected, json, .. })) => {
                 assert!(rejected);
                 assert!(json);
             }
-            _ => panic!("Expected ToolHistory"),
+            _ => panic!("Expected Tool History"),
         }
     }
 
     #[test]
     fn cli_tool_history_db_path_parses() {
-        let cli = Cli::try_parse_from(["ralph", "tool-history", "--db-path"]).unwrap();
+        let cli = Cli::try_parse_from(["ralph", "tool", "history", "--db-path"]).unwrap();
         match cli.command {
-            Some(Commands::ToolHistory { db_path, .. }) => {
+            Some(Commands::Tool(ToolCommands::History { db_path, .. })) => {
                 assert!(db_path);
             }
-            _ => panic!("Expected ToolHistory"),
+            _ => panic!("Expected Tool History"),
         }
+    }
+
+    #[test]
+    fn cli_tool_allow_parses() {
+        let cli = Cli::try_parse_from(["ralph", "tool", "allow", "Read"]).unwrap();
+        match cli.command {
+            Some(Commands::Tool(ToolCommands::Allow { pattern, project })) => {
+                assert_eq!(pattern, "Read");
+                assert!(!project);
+            }
+            _ => panic!("Expected Tool Allow"),
+        }
+    }
+
+    #[test]
+    fn cli_tool_allow_project_flag_parses() {
+        let cli =
+            Cli::try_parse_from(["ralph", "tool", "allow", "Bash(git:*)", "--project"]).unwrap();
+        match cli.command {
+            Some(Commands::Tool(ToolCommands::Allow { pattern, project })) => {
+                assert_eq!(pattern, "Bash(git:*)");
+                assert!(project);
+            }
+            _ => panic!("Expected Tool Allow"),
+        }
+    }
+
+    #[test]
+    fn cli_tool_deny_parses() {
+        let cli = Cli::try_parse_from(["ralph", "tool", "deny", "Bash(rm:*)"]).unwrap();
+        match cli.command {
+            Some(Commands::Tool(ToolCommands::Deny { pattern, project })) => {
+                assert_eq!(pattern, "Bash(rm:*)");
+                assert!(!project);
+            }
+            _ => panic!("Expected Tool Deny"),
+        }
+    }
+
+    #[test]
+    fn cli_tool_list_parses() {
+        let cli = Cli::try_parse_from(["ralph", "tool", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Tool(ToolCommands::List))
+        ));
     }
 
     #[test]
