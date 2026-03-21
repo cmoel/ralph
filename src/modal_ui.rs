@@ -128,7 +128,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         specs_dir,
         log_level,
         iterations,
-        auto_expand_tasks,
         keep_awake,
         cursor_pos,
         focus,
@@ -139,7 +138,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         &str,
         &str,
         i32,
-        bool,
         bool,
         usize,
         Option<ConfigModalField>,
@@ -152,7 +150,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
             f.specs_dir.as_str(),
             f.selected_log_level(),
             f.iterations,
-            f.auto_expand_tasks,
             f.keep_awake,
             f.cursor_pos,
             Some(s.focus),
@@ -165,7 +162,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
             app.config.paths.specs.as_str(),
             app.config.logging.level.as_str(),
             app.config.behavior.iterations,
-            app.config.behavior.auto_expand_tasks_panel,
             app.config.behavior.keep_awake,
             0,
             None,
@@ -371,36 +367,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         iter_line.push(Span::styled(" (inherited)", label_style));
     }
     content.push(Line::from(iter_line));
-
-    // Auto-expand tasks toggle
-    let auto_expand_focused = focus == Some(ConfigModalField::AutoExpandTasks);
-    let auto_expand_inherited = is_inherited(ConfigModalField::AutoExpandTasks);
-    let auto_expand_label_style = if auto_expand_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let auto_expand_value = if auto_expand_tasks { "ON" } else { "OFF" };
-    let auto_expand_display = if auto_expand_focused {
-        format!("< {} >", auto_expand_value)
-    } else {
-        auto_expand_value.to_string()
-    };
-    let auto_expand_value_style = if auto_expand_focused {
-        Style::default().fg(Color::Cyan)
-    } else if auto_expand_inherited {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::White)
-    };
-    let mut auto_expand_line = vec![
-        Span::styled("  Auto-expand tasks: ", auto_expand_label_style),
-        Span::styled(auto_expand_display, auto_expand_value_style),
-    ];
-    if auto_expand_inherited && !auto_expand_focused {
-        auto_expand_line.push(Span::styled(" (inherited)", label_style));
-    }
-    content.push(Line::from(auto_expand_line));
 
     // Keep awake toggle
     let keep_awake_focused = focus == Some(ConfigModalField::KeepAwake);
@@ -883,16 +849,6 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
             Span::raw("    "),
             Span::styled("i", key_style),
             Span::styled("  Initialize project", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("t", key_style),
-            Span::styled("  Toggle tasks panel", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("Tab", key_style),
-            Span::styled("  Switch panel focus", desc_style),
         ]),
         Line::from(""),
         // Scroll section

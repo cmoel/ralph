@@ -81,10 +81,6 @@ pub struct BehaviorConfig {
     /// - Zero (0): Stopped mode, pressing 's' has no effect
     /// - Positive (N): Runs exactly N iterations then stops
     pub iterations: i32,
-    /// Whether to auto-expand the tasks panel when tasks arrive.
-    /// When true, receiving tasks expands the panel.
-    /// When false, the panel stays collapsed and shows the count.
-    pub auto_expand_tasks_panel: bool,
     /// Whether to acquire a wake lock to prevent system idle sleep.
     /// When true, the system won't sleep while claude is running.
     /// Display may still sleep. Default: true.
@@ -102,9 +98,8 @@ pub struct BehaviorConfig {
 impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
-            iterations: -1,                // Infinite mode by default
-            auto_expand_tasks_panel: true, // Auto-expand by default for backwards compatibility
-            keep_awake: true,              // Prevent system sleep by default
+            iterations: -1,   // Infinite mode by default
+            keep_awake: true, // Prevent system sleep by default
             mode: "specs".to_string(),
             bd_path: "bd".to_string(),
             auto_continue: None,
@@ -206,8 +201,6 @@ pub struct PartialBehaviorConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iterations: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auto_expand_tasks_panel: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_awake: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
@@ -244,7 +237,6 @@ fn is_partial_logging_empty(l: &PartialLoggingConfig) -> bool {
 
 fn is_partial_behavior_empty(b: &PartialBehaviorConfig) -> bool {
     b.iterations.is_none()
-        && b.auto_expand_tasks_panel.is_none()
         && b.keep_awake.is_none()
         && b.mode.is_none()
         && b.bd_path.is_none()
@@ -286,10 +278,6 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .behavior
                 .iterations
                 .unwrap_or(global.behavior.iterations),
-            auto_expand_tasks_panel: project
-                .behavior
-                .auto_expand_tasks_panel
-                .unwrap_or(global.behavior.auto_expand_tasks_panel),
             keep_awake: project
                 .behavior
                 .keep_awake
@@ -849,7 +837,6 @@ keep_awake = false
         assert!(partial.paths.specs.is_none());
         assert!(partial.logging.level.is_none());
         assert!(partial.behavior.iterations.is_none());
-        assert!(partial.behavior.auto_expand_tasks_panel.is_none());
         assert!(partial.behavior.keep_awake.is_none());
     }
 
@@ -905,10 +892,6 @@ foo = "bar"
         assert_eq!(merged.paths.specs, global.paths.specs);
         assert_eq!(merged.logging.level, global.logging.level);
         assert_eq!(merged.behavior.iterations, global.behavior.iterations);
-        assert_eq!(
-            merged.behavior.auto_expand_tasks_panel,
-            global.behavior.auto_expand_tasks_panel
-        );
         assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
     }
 
@@ -928,7 +911,6 @@ foo = "bar"
             },
             behavior: PartialBehaviorConfig {
                 iterations: Some(5),
-                auto_expand_tasks_panel: Some(false),
                 keep_awake: Some(false),
                 mode: None,
                 bd_path: None,
@@ -941,7 +923,6 @@ foo = "bar"
         assert_eq!(merged.paths.specs, "./proj-specs");
         assert_eq!(merged.logging.level, "debug");
         assert_eq!(merged.behavior.iterations, 5);
-        assert!(!merged.behavior.auto_expand_tasks_panel);
         assert!(!merged.behavior.keep_awake);
     }
 
@@ -968,10 +949,6 @@ iterations = 3
         assert_eq!(merged.claude.path, global.claude.path);
         assert_eq!(merged.paths.specs, global.paths.specs);
         assert_eq!(merged.logging.level, global.logging.level);
-        assert_eq!(
-            merged.behavior.auto_expand_tasks_panel,
-            global.behavior.auto_expand_tasks_panel
-        );
         assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
     }
 
@@ -1019,7 +996,6 @@ iterations = 3
             logging: PartialLoggingConfig { level: None },
             behavior: PartialBehaviorConfig {
                 iterations: Some(5),
-                auto_expand_tasks_panel: Some(false),
                 keep_awake: None,
                 mode: None,
                 bd_path: None,
@@ -1033,7 +1009,6 @@ iterations = 3
         assert!(deserialized.paths.specs.is_none());
         assert!(deserialized.logging.level.is_none());
         assert_eq!(deserialized.behavior.iterations, Some(5));
-        assert_eq!(deserialized.behavior.auto_expand_tasks_panel, Some(false));
         assert!(deserialized.behavior.keep_awake.is_none());
     }
 }

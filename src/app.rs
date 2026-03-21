@@ -18,7 +18,6 @@ use crate::config::{Config, LoadedConfig, get_project_config_path};
 use crate::doctor;
 use crate::logging::ReloadHandle;
 use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState};
-use crate::ui::{TodoItem, TodoStatus};
 use crate::wake_lock::WakeLock;
 use crate::work_source::{WorkItem, WorkRemaining, WorkSource, create_work_source};
 use crate::{OutputMessage, get_file_mtime, logging};
@@ -44,26 +43,6 @@ pub enum DoltServerState {
     On,
     /// Server is shutting down.
     Stopping,
-}
-
-/// Panels that can be selected/focused for scrolling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SelectedPanel {
-    /// Main output panel (default).
-    #[default]
-    Main,
-    /// Tasks panel.
-    Tasks,
-}
-
-impl SelectedPanel {
-    /// Toggle between Main and Tasks panels.
-    pub fn toggle(self) -> Self {
-        match self {
-            Self::Main => Self::Tasks,
-            Self::Tasks => Self::Main,
-        }
-    }
 }
 
 impl AppStatus {
@@ -194,16 +173,6 @@ pub struct App {
     pub exchange_count: u32,
     /// Name of the last tool used (for categorizing exchanges).
     pub last_tool_used: Option<String>,
-    /// Current task list (updated in-place by TodoWrite events).
-    pub tasks: Vec<TodoItem>,
-    /// Scroll offset for the tasks panel.
-    pub tasks_scroll_offset: u16,
-    /// Height of the tasks panel content area (excluding borders).
-    pub tasks_pane_height: u16,
-    /// Currently selected panel for scroll operations.
-    pub selected_panel: SelectedPanel,
-    /// Whether the tasks panel is manually collapsed.
-    pub tasks_panel_collapsed: bool,
     /// Wake lock to prevent system idle sleep while running.
     pub wake_lock: Option<WakeLock>,
     /// Maps tool_use_id to tool name for correlating results with calls.
@@ -299,11 +268,6 @@ impl App {
             cumulative_tokens: 0,
             exchange_count: 0,
             last_tool_used: None,
-            tasks: Vec::new(),
-            tasks_scroll_offset: 0,
-            tasks_pane_height: 0,
-            selected_panel: SelectedPanel::default(),
-            tasks_panel_collapsed: false,
             wake_lock: None,
             tool_id_to_name: HashMap::new(),
             pending_tool_calls: HashMap::new(),
@@ -439,9 +403,7 @@ impl App {
         self.kill_child();
         self.status = AppStatus::Stopped;
         self.current_spec = None;
-        self.run_start_time = None;
-        self.clear_tasks();
-    }
+        self.run_start_time = None;    }
 
     pub fn poll_spec(&mut self) {
         // Check for completed background detect_current
@@ -587,7 +549,7 @@ impl App {
                 {
                     self.reset_iteration_state();
                     self.status = AppStatus::Stopped;
-                    self.clear_tasks();
+
                 } else {
                     // Kick off background check_remaining (non-blocking)
                     let complete_msg = self.work_source.complete_message();
@@ -604,7 +566,7 @@ impl App {
                 // Countdown exhausted or iterations = 0, just stop
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-                self.clear_tasks();
+
             }
             Some(code) => {
                 // Non-zero exit code → Error state
@@ -612,13 +574,13 @@ impl App {
                 self.add_text_line(format!("[Error: process exited with code {}]", code));
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
-                self.clear_tasks();
+
             }
             None => {
                 // Killed by signal (manual stop) → Stopped state
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-                self.clear_tasks();
+
             }
         }
     }
@@ -673,7 +635,7 @@ impl App {
                 ));
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-                self.clear_tasks();
+
             }
             WorkRemaining::NeedsShaping(count) => {
                 info!(count, "all_ready_beads_need_shaping");
@@ -683,7 +645,7 @@ impl App {
                 );
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-                self.clear_tasks();
+
             }
             WorkRemaining::Missing => {
                 warn!("work_source_missing");
@@ -691,7 +653,7 @@ impl App {
                 self.reset_iteration_state();
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
-                self.clear_tasks();
+
             }
             WorkRemaining::ReadError(e) => {
                 warn!(error = %e, "work_source_read_error");
@@ -699,7 +661,7 @@ impl App {
                 self.reset_iteration_state();
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
-                self.clear_tasks();
+
             }
         }
     }
@@ -779,85 +741,6 @@ impl App {
     /// Increment iteration counter for auto-continue.
     pub fn increment_iteration(&mut self) {
         self.current_iteration += 1;
-    }
-
-    /// Update the task list from a TodoWrite event.
-    /// Replaces all existing tasks and logs the change.
-    /// If `auto_expand_tasks_panel` config is enabled, expands the panel.
-    pub fn update_tasks(&mut self, tasks: Vec<TodoItem>) {
-        let task_count = tasks.len();
-        let completed = tasks
-            .iter()
-            .filter(|t| t.status == TodoStatus::Completed)
-            .count();
-        let in_progress = tasks
-            .iter()
-            .filter(|t| t.status == TodoStatus::InProgress)
-            .count();
-        let pending = tasks
-            .iter()
-            .filter(|t| t.status == TodoStatus::Pending)
-            .count();
-
-        info!(task_count, completed, in_progress, pending, "tasks_updated");
-
-        self.tasks = tasks;
-
-        // Auto-expand if configured (only affects collapse state when tasks arrive)
-        if self.config.behavior.auto_expand_tasks_panel && !self.tasks.is_empty() {
-            self.tasks_panel_collapsed = false;
-        }
-
-        // Reset scroll to bottom to show latest state
-        self.scroll_tasks_to_bottom();
-    }
-
-    /// Clear all tasks and reset scroll and collapse state.
-    pub fn clear_tasks(&mut self) {
-        if !self.tasks.is_empty() {
-            info!(previous_count = self.tasks.len(), "tasks_cleared");
-            self.tasks.clear();
-            self.tasks_scroll_offset = 0;
-            self.tasks_panel_collapsed = false;
-        }
-    }
-
-    /// Toggle the tasks panel collapsed state.
-    /// Only works when there are tasks (no-op when empty).
-    pub fn toggle_tasks_panel_collapsed(&mut self) {
-        if !self.tasks.is_empty() {
-            self.tasks_panel_collapsed = !self.tasks_panel_collapsed;
-        }
-    }
-
-    /// Get the count of completed tasks.
-    pub fn completed_task_count(&self) -> usize {
-        self.tasks
-            .iter()
-            .filter(|t| t.status == TodoStatus::Completed)
-            .count()
-    }
-
-    /// Calculate the maximum scroll offset for the tasks panel.
-    pub fn max_tasks_scroll(&self) -> u16 {
-        let task_lines = self.tasks.len() as u16;
-        task_lines.saturating_sub(self.tasks_pane_height)
-    }
-
-    /// Scroll the tasks panel up.
-    pub fn scroll_tasks_up(&mut self, amount: u16) {
-        self.tasks_scroll_offset = self.tasks_scroll_offset.saturating_sub(amount);
-    }
-
-    /// Scroll the tasks panel down.
-    pub fn scroll_tasks_down(&mut self, amount: u16) {
-        let max = self.max_tasks_scroll();
-        self.tasks_scroll_offset = (self.tasks_scroll_offset + amount).min(max);
-    }
-
-    /// Scroll tasks panel to bottom.
-    pub fn scroll_tasks_to_bottom(&mut self) {
-        self.tasks_scroll_offset = self.max_tasks_scroll();
     }
 
     /// Poll for Dolt server status (beads mode only, throttled).

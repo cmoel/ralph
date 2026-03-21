@@ -10,7 +10,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::app::{App, AppStatus, DoltServerState, SelectedPanel};
+use crate::app::{App, AppStatus, DoltServerState};
 use crate::modal_ui::{draw_config_modal, draw_help_modal, draw_init_modal, draw_specs_panel};
 
 /// Maximum length for truncated tool input display.
@@ -297,72 +297,6 @@ pub fn format_no_result_warning() -> String {
     format!("{} no result received", WARNING_ICON)
 }
 
-/// Represents a single todo item parsed from TodoWrite input.
-#[derive(Debug, Clone)]
-pub struct TodoItem {
-    pub content: String,
-    pub active_form: String,
-    pub status: TodoStatus,
-}
-
-/// Status of a todo item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TodoStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Unknown,
-}
-
-/// Parse TodoWrite JSON input into a vector of TodoItems.
-/// Returns Ok(Vec<TodoItem>) on success, or Err(String) on parse failure.
-pub fn parse_todos_from_json(input_json: &str) -> Result<Vec<TodoItem>, String> {
-    let input: serde_json::Value =
-        serde_json::from_str(input_json).map_err(|e| format!("Failed to parse JSON: {}", e))?;
-
-    let todos = input
-        .get("todos")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "Missing or invalid todos array".to_string())?;
-
-    Ok(todos.iter().map(parse_todo_item).collect())
-}
-
-/// Parse a single todo item from JSON.
-fn parse_todo_item(todo: &serde_json::Value) -> TodoItem {
-    let content = todo
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let active_form = todo
-        .get("activeForm")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| content.clone());
-
-    let status = match todo.get("status").and_then(|v| v.as_str()) {
-        Some("pending") => TodoStatus::Pending,
-        Some("in_progress") => TodoStatus::InProgress,
-        Some("completed") => TodoStatus::Completed,
-        _ => TodoStatus::Unknown,
-    };
-
-    // If content is empty but activeForm exists, use activeForm for content
-    let content = if content.is_empty() && !active_form.is_empty() {
-        active_form.clone()
-    } else {
-        content
-    };
-
-    TodoItem {
-        content,
-        active_form,
-        status,
-    }
-}
-
 /// Extract text content from Task tool results.
 /// Task results are JSON arrays of objects with "text" fields: `[{"text":"..."},...]`
 /// Returns the concatenated text from all objects, or None if parsing fails.
@@ -468,28 +402,6 @@ pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     Rect::new(x, y, width.min(area.width), height.min(area.height))
 }
 
-/// Calculate the height for the tasks panel based on task count, collapsed state, and screen size.
-/// Returns the height including borders.
-fn calculate_tasks_panel_height(
-    task_count: usize,
-    is_collapsed: bool,
-    available_height: u16,
-) -> u16 {
-    // Collapsed (either no tasks or manually collapsed): single title line
-    if task_count == 0 || is_collapsed {
-        return 1;
-    }
-
-    // Max ~25% of available space, minimum of 3 lines (border + 1 task + border)
-    let max_height = (available_height as usize * 25 / 100).max(3);
-
-    // Height needed: borders (2) + tasks
-    let needed_height = task_count + 2;
-
-    // Clamp between min and max
-    needed_height.clamp(3, max_height) as u16
-}
-
 /// Draw the main UI.
 pub fn draw_ui(f: &mut Frame, app: &mut App) {
     use ratatui::layout::{Constraint, Direction, Layout};
@@ -498,30 +410,20 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Increment frame counter for animations
     app.frame_count = app.frame_count.wrapping_add(1);
 
-    // Calculate tasks panel height based on task count and collapsed state
-    let total_height = f.area().height;
     let command_height = 3u16; // Fixed: border + 1 content + border
-    let available_for_panels = total_height.saturating_sub(command_height);
-    let tasks_panel_height = calculate_tasks_panel_height(
-        app.tasks.len(),
-        app.tasks_panel_collapsed,
-        available_for_panels,
-    );
 
-    // Three-panel layout: output (flexible) + tasks (dynamic) + command (fixed)
+    // Two-panel layout: output (flexible) + command (fixed)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),                     // Output panel (flexible, minimum 5 lines)
-            Constraint::Length(tasks_panel_height), // Tasks panel (dynamic)
-            Constraint::Length(command_height),     // Command panel (fixed 3 lines)
+            Constraint::Min(5),                 // Output panel (flexible, minimum 5 lines)
+            Constraint::Length(command_height), // Command panel (fixed 3 lines)
         ])
         .split(f.area());
 
     // Update pane dimensions for scroll calculations
     app.main_pane_height = chunks[0].height.saturating_sub(2); // Account for borders
     app.main_pane_width = chunks[0].width;
-    app.tasks_pane_height = chunks[1].height.saturating_sub(2); // Account for borders
 
     // === Output Panel ===
     let mut content: Vec<Line> = app.output_lines.to_vec();
@@ -549,12 +451,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     };
 
     // Top title: session ID (left), spec name (right)
-    // Selected panel gets brighter border
-    let output_border_color = if app.selected_panel == SelectedPanel::Main {
-        Color::White
-    } else {
-        app.status.pulsing_color(app.frame_count)
-    };
+    let output_border_color = Color::White;
     let mut output_block = Block::default()
         .borders(Borders::ALL)
         .border_type(app.status.border_type())
@@ -596,9 +493,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
         f.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
     }
-
-    // === Tasks Panel ===
-    draw_tasks_panel(f, app, chunks[1]);
 
     // === Command Panel ===
     let key_style = Style::default().fg(Color::Cyan);
@@ -670,7 +564,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let dolt_len: usize = dolt_spans.iter().map(|s| s.content.len()).sum();
 
     let commands_len: usize = command_spans.iter().map(|s| s.content.len()).sum();
-    let inner_width = chunks[2].width.saturating_sub(2) as usize;
+    let inner_width = chunks[1].width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
     let spacing = inner_width.saturating_sub(commands_len + dolt_len + status_len);
 
@@ -696,7 +590,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     if let Some(error) = config_error {
         let warning_style = Style::default().fg(Color::Yellow);
         // Truncate error to fit in bottom border
-        let max_len = chunks[2].width.saturating_sub(4) as usize;
+        let max_len = chunks[1].width.saturating_sub(4) as usize;
         let truncated = if error.len() > max_len {
             format!("{}…", &error[..max_len.saturating_sub(1)])
         } else {
@@ -707,7 +601,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
     let command_panel = Paragraph::new(command_line).block(block);
 
-    f.render_widget(command_panel, chunks[2]);
+    f.render_widget(command_panel, chunks[1]);
 
     // Popup dialog if needed
     if app.show_already_running_popup {
@@ -742,96 +636,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Help modal
     if app.show_help_modal {
         draw_help_modal(f, app);
-    }
-}
-
-/// Draw the tasks panel.
-fn draw_tasks_panel(f: &mut Frame, app: &App, area: Rect) {
-    let is_selected = app.selected_panel == SelectedPanel::Tasks;
-    // Selected panel gets brighter border (white), unselected uses status color
-    let border_color = if is_selected {
-        Color::White
-    } else {
-        app.status.pulsing_color(app.frame_count)
-    };
-    let border_type = app.status.border_type();
-
-    // Show collapsed state if no tasks OR manually collapsed
-    if app.tasks.is_empty() || app.tasks_panel_collapsed {
-        // Build title: "Tasks" or "Tasks [completed/total]" if there are tasks
-        let title = if app.tasks.is_empty() {
-            "Tasks".to_string()
-        } else {
-            let completed = app.completed_task_count();
-            let total = app.tasks.len();
-            format!("Tasks [{}/{}]", completed, total)
-        };
-
-        // Collapsed state: single line with title
-        // Calculate padding to center the title
-        let title_len = title.len() + 2; // +2 for spaces around title
-        let left_dashes = 3;
-        let right_dashes =
-            area.width
-                .saturating_sub(left_dashes as u16 + 1 + title_len as u16) as usize;
-
-        let collapsed_line = Line::from(vec![
-            Span::styled("━━━ ", Style::default().fg(border_color)),
-            Span::styled(title, Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                " ".to_string() + &"━".repeat(right_dashes),
-                Style::default().fg(border_color),
-            ),
-        ]);
-        let collapsed = Paragraph::new(collapsed_line);
-        f.render_widget(collapsed, area);
-        return;
-    }
-
-    // Build task lines with status indicators
-    let task_lines: Vec<Line> = app
-        .tasks
-        .iter()
-        .skip(app.tasks_scroll_offset as usize)
-        .take(app.tasks_pane_height as usize)
-        .map(|task| {
-            let (prefix, color, text) = match task.status {
-                TodoStatus::InProgress => ("▶", Color::Cyan, &task.active_form),
-                TodoStatus::Pending => ("○", Color::DarkGray, &task.content),
-                TodoStatus::Completed => ("✓", Color::Green, &task.content),
-                TodoStatus::Unknown => ("?", Color::Yellow, &task.content),
-            };
-            Line::from(vec![
-                Span::styled(format!("{} ", prefix), Style::default().fg(color)),
-                Span::styled(text.as_str(), Style::default().fg(Color::White)),
-            ])
-        })
-        .collect();
-
-    let tasks_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(border_type)
-        .border_style(Style::default().fg(border_color))
-        .title(Line::from(" Tasks ").left_aligned());
-
-    let tasks_panel = Paragraph::new(task_lines).block(tasks_block);
-
-    f.render_widget(tasks_panel, area);
-
-    // Tasks scrollbar
-    let task_count = app.tasks.len() as u16;
-    if task_count > app.tasks_pane_height {
-        let scrollbar = Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"));
-
-        let mut scrollbar_state = ScrollbarState::default()
-            .content_length(task_count as usize)
-            .position(app.tasks_scroll_offset as usize)
-            .viewport_content_length(app.tasks_pane_height as usize);
-
-        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
 }
 

@@ -20,7 +20,7 @@ mod work_source;
 
 use clap::Parser;
 
-use crate::app::{App, AppStatus, ContentBlockState, PendingToolCall, SelectedPanel};
+use crate::app::{App, AppStatus, ContentBlockState, PendingToolCall};
 use crate::config::{LoadedConfig, load_global_config, load_project_config};
 use crate::events::{
     ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
@@ -32,7 +32,7 @@ use crate::modals::{
 use crate::ui::{
     ExchangeType, draw_ui, extract_text_from_task_result, format_assistant_header_styled,
     format_no_result_warning_styled, format_tool_result_styled, format_tool_summary_styled,
-    format_usage_summary, parse_todos_from_json,
+    format_usage_summary,
 };
 
 use std::io::{self, BufRead, BufReader};
@@ -161,25 +161,11 @@ enum ScrollDirection {
     Down,
 }
 
-/// Scroll the currently selected panel.
-fn scroll_selected_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
-    match app.selected_panel {
-        SelectedPanel::Main => match direction {
-            ScrollDirection::Up => app.scroll_up(amount),
-            ScrollDirection::Down => app.scroll_down(amount),
-        },
-        SelectedPanel::Tasks => match direction {
-            ScrollDirection::Up => app.scroll_tasks_up(amount),
-            ScrollDirection::Down => app.scroll_tasks_down(amount),
-        },
-    }
-}
-
-/// Get the height of the currently selected panel.
-fn get_selected_pane_height(app: &App) -> u16 {
-    match app.selected_panel {
-        SelectedPanel::Main => app.main_pane_height,
-        SelectedPanel::Tasks => app.tasks_pane_height,
+/// Scroll the main output panel.
+fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
+    match direction {
+        ScrollDirection::Up => app.scroll_up(amount),
+        ScrollDirection::Down => app.scroll_down(amount),
     }
 }
 
@@ -767,48 +753,40 @@ fn run_app(
                         // Open help modal
                         app.show_help_modal = true;
                     }
-                    KeyCode::Tab => {
-                        // Toggle between Main and Tasks panels
-                        app.selected_panel = app.selected_panel.toggle();
-                    }
-                    KeyCode::Char('t') => {
-                        // Toggle tasks panel collapsed state
-                        app.toggle_tasks_panel_collapsed();
-                    }
                     KeyCode::Char('D') => {
                         // Toggle Dolt server (beads mode only)
                         app.toggle_dolt_server();
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        scroll_selected_panel(&mut app, ScrollDirection::Up, 1);
+                        scroll_panel(&mut app, ScrollDirection::Up, 1);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        scroll_selected_panel(&mut app, ScrollDirection::Down, 1);
+                        scroll_panel(&mut app, ScrollDirection::Down, 1);
                     }
                     KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let half_page = get_selected_pane_height(&app) / 2;
-                        scroll_selected_panel(&mut app, ScrollDirection::Up, half_page);
+                        let half_page = app.main_pane_height / 2;
+                        scroll_panel(&mut app, ScrollDirection::Up, half_page);
                     }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let half_page = get_selected_pane_height(&app) / 2;
-                        scroll_selected_panel(&mut app, ScrollDirection::Down, half_page);
+                        let half_page = app.main_pane_height / 2;
+                        scroll_panel(&mut app, ScrollDirection::Down, half_page);
                     }
                     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let full_page = get_selected_pane_height(&app);
-                        scroll_selected_panel(&mut app, ScrollDirection::Up, full_page);
+                        let full_page = app.main_pane_height;
+                        scroll_panel(&mut app, ScrollDirection::Up, full_page);
                     }
                     KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let full_page = get_selected_pane_height(&app);
-                        scroll_selected_panel(&mut app, ScrollDirection::Down, full_page);
+                        let full_page = app.main_pane_height;
+                        scroll_panel(&mut app, ScrollDirection::Down, full_page);
                     }
                     _ => {}
                 },
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollUp => {
-                        scroll_selected_panel(&mut app, ScrollDirection::Up, 3);
+                        scroll_panel(&mut app, ScrollDirection::Up, 3);
                     }
                     MouseEventKind::ScrollDown => {
-                        scroll_selected_panel(&mut app, ScrollDirection::Down, 3);
+                        scroll_panel(&mut app, ScrollDirection::Down, 3);
                     }
                     _ => {}
                 },
@@ -1145,12 +1123,6 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
                                     "unknown".to_string()
                                 });
 
-                            // Skip TodoWrite results (already handled by tasks panel)
-                            if tool_name == "TodoWrite" {
-                                debug!("Skipping TodoWrite result (handled by tasks panel)");
-                                continue;
-                            }
-
                             let is_error = is_error.unwrap_or(false);
 
                             // Extract content string
@@ -1344,37 +1316,19 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                 }
                 // Track the last tool used for exchange categorization
                 app.last_tool_used = Some(tool_name.clone());
-                // Special handling for TodoWrite to update tasks panel
-                if tool_name == "TodoWrite" {
-                    match parse_todos_from_json(&input_json) {
-                        Ok(tasks) => {
-                            if tasks.is_empty() {
-                                // Empty todos array clears the panel
-                                app.clear_tasks();
-                            } else {
-                                app.update_tasks(tasks);
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to parse TodoWrite input");
-                            // Preserve existing tasks on parse failure
-                        }
-                    }
+                let styled_line = format_tool_summary_styled(&tool_name, &input_json);
+                // Buffer tool call if it has an ID (for correlation with result)
+                if let Some(ref id) = tool_use_id {
+                    app.pending_tool_calls.insert(
+                        id.clone(),
+                        PendingToolCall {
+                            tool_name: tool_name.clone(),
+                            styled_line,
+                        },
+                    );
                 } else {
-                    let styled_line = format_tool_summary_styled(&tool_name, &input_json);
-                    // Buffer tool call if it has an ID (for correlation with result)
-                    if let Some(ref id) = tool_use_id {
-                        app.pending_tool_calls.insert(
-                            id.clone(),
-                            PendingToolCall {
-                                tool_name: tool_name.clone(),
-                                styled_line,
-                            },
-                        );
-                    } else {
-                        // No ID - display immediately
-                        app.add_line(styled_line);
-                    }
+                    // No ID - display immediately
+                    app.add_line(styled_line);
                 }
             }
         }
