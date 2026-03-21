@@ -411,27 +411,37 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     app.frame_count = app.frame_count.wrapping_add(1);
 
     let command_height = 3u16; // Fixed: border + 1 content + border
-    let tool_panel_height = calculate_tool_panel_height(
-        app.tool_call_entries.len(),
-        app.tool_panel_collapsed,
-        f.area().height.saturating_sub(command_height),
-    );
+    let show_tools_column = !app.tool_panel_collapsed && !app.tool_call_entries.is_empty();
 
-    // Three-panel layout: output (flexible) + tool calls (dynamic) + command (fixed)
-    let chunks = Layout::default()
+    // Two-level layout: content area (flexible) + command bar (fixed)
+    let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),                       // Output panel (flexible, minimum 5 lines)
-            Constraint::Length(tool_panel_height),     // Tool call panel (dynamic)
-            Constraint::Length(command_height),        // Command panel (fixed 3 lines)
+            Constraint::Min(5),                   // Content area
+            Constraint::Length(command_height),    // Command panel
         ])
         .split(f.area());
 
-    // Update pane dimensions for scroll calculations
-    app.main_pane_height = chunks[0].height.saturating_sub(2); // Account for borders
-    app.main_pane_width = chunks[0].width;
+    // Split content area: stream panel (left) + tools panel (right)
+    let content_constraints = if show_tools_column {
+        vec![Constraint::Percentage(70), Constraint::Percentage(30)]
+    } else {
+        vec![Constraint::Percentage(100)]
+    };
+    let content = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(content_constraints)
+        .split(outer[0]);
 
-    // === Output Panel ===
+    let stream_area = content[0];
+    let tools_area = if show_tools_column { Some(content[1]) } else { None };
+    let command_area = outer[1];
+
+    // Update pane dimensions for scroll calculations
+    app.main_pane_height = stream_area.height.saturating_sub(2); // Account for borders
+    app.main_pane_width = stream_area.width;
+
+    // === Stream Panel ===
     let mut content: Vec<Line> = app.output_lines.to_vec();
     if !app.current_line.is_empty() {
         content.push(Line::raw(&app.current_line));
@@ -486,9 +496,9 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         .wrap(Wrap { trim: false })
         .scroll((app.scroll_offset, 0));
 
-    f.render_widget(output_panel, chunks[0]);
+    f.render_widget(output_panel, stream_area);
 
-    // Output scrollbar
+    // Stream scrollbar
     let visual_lines = app.visual_line_count();
     if visual_lines > app.main_pane_height {
         let scrollbar = Scrollbar::default()
@@ -501,12 +511,16 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
             .position(app.scroll_offset as usize)
             .viewport_content_length(app.main_pane_height as usize);
 
-        f.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
+        f.render_stateful_widget(scrollbar, stream_area, &mut scrollbar_state);
     }
 
-    // === Tool Call Panel ===
-    app.tool_panel_height = tool_panel_height;
-    draw_tool_panel(f, app, chunks[1]);
+    // === Tools Panel ===
+    if let Some(tools_area) = tools_area {
+        app.tool_panel_height = tools_area.height;
+        draw_tool_panel(f, app, tools_area);
+    } else {
+        app.tool_panel_height = 0;
+    }
 
     // === Command Panel ===
     let key_style = Style::default().fg(Color::Cyan);
@@ -578,7 +592,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let dolt_len: usize = dolt_spans.iter().map(|s| s.content.len()).sum();
 
     let commands_len: usize = command_spans.iter().map(|s| s.content.len()).sum();
-    let inner_width = chunks[2].width.saturating_sub(2) as usize;
+    let inner_width = command_area.width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
     let spacing = inner_width.saturating_sub(commands_len + dolt_len + status_len);
 
@@ -604,7 +618,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     if let Some(error) = config_error {
         let warning_style = Style::default().fg(Color::Yellow);
         // Truncate error to fit in bottom border
-        let max_len = chunks[2].width.saturating_sub(4) as usize;
+        let max_len = command_area.width.saturating_sub(4) as usize;
         let truncated = if error.len() > max_len {
             format!("{}…", &error[..max_len.saturating_sub(1)])
         } else {
@@ -615,7 +629,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
     let command_panel = Paragraph::new(command_line).block(block);
 
-    f.render_widget(command_panel, chunks[2]);
+    f.render_widget(command_panel, command_area);
 
     // Popup dialog if needed
     if app.show_already_running_popup {
@@ -653,23 +667,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     }
 }
 
-/// Calculate the height for the tool call panel based on entry count and collapsed state.
-fn calculate_tool_panel_height(
-    entry_count: usize,
-    is_collapsed: bool,
-    available_height: u16,
-) -> u16 {
-    if entry_count == 0 || is_collapsed {
-        return 1; // Collapsed: single title line
-    }
-
-    // Content + 2 for borders, capped at 40% of available height
-    let desired = (entry_count as u16) + 2;
-    let max_height = available_height * 2 / 5; // 40% of available
-    desired.min(max_height).max(3)
-}
-
-/// Draw the tool call panel.
+/// Draw the tools panel (right column).
 fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
     let is_selected = app.selected_panel == SelectedPanel::Tools;
     let border_color = if is_selected {
