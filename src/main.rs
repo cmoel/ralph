@@ -20,7 +20,10 @@ mod work_source;
 
 use clap::Parser;
 
-use crate::app::{App, AppStatus, ContentBlockState, PendingToolCall};
+use crate::app::{
+    App, AppStatus, ContentBlockState, PendingToolCall, SelectedPanel, ToolCallEntry,
+    ToolCallStatus,
+};
 use crate::config::{LoadedConfig, load_global_config, load_project_config};
 use crate::events::{
     ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
@@ -30,9 +33,9 @@ use crate::modals::{
     handle_init_modal_input, handle_specs_panel_input,
 };
 use crate::ui::{
-    ExchangeType, draw_ui, extract_text_from_task_result, format_assistant_header_styled,
-    format_no_result_warning_styled, format_tool_result_styled, format_tool_summary_styled,
-    format_usage_summary,
+    ExchangeType, draw_ui, extract_text_from_task_result, extract_tool_summary,
+    format_assistant_header_styled, format_no_result_warning_styled, format_tool_result_styled,
+    format_tool_summary_styled, format_usage_summary,
 };
 
 use std::io::{self, BufRead, BufReader};
@@ -161,11 +164,17 @@ enum ScrollDirection {
     Down,
 }
 
-/// Scroll the main output panel.
+/// Scroll the focused panel.
 fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
-    match direction {
-        ScrollDirection::Up => app.scroll_up(amount),
-        ScrollDirection::Down => app.scroll_down(amount),
+    match app.selected_panel {
+        SelectedPanel::Main => match direction {
+            ScrollDirection::Up => app.scroll_up(amount),
+            ScrollDirection::Down => app.scroll_down(amount),
+        },
+        SelectedPanel::Tools => match direction {
+            ScrollDirection::Up => app.scroll_tools_up(amount),
+            ScrollDirection::Down => app.scroll_tools_down(amount),
+        },
     }
 }
 
@@ -757,6 +766,12 @@ fn run_app(
                         // Toggle Dolt server (beads mode only)
                         app.toggle_dolt_server();
                     }
+                    KeyCode::Tab => {
+                        app.selected_panel.toggle();
+                    }
+                    KeyCode::Char('t') => {
+                        app.tool_panel_collapsed = !app.tool_panel_collapsed;
+                    }
                     KeyCode::Char('k') | KeyCode::Up => {
                         scroll_panel(&mut app, ScrollDirection::Up, 1);
                     }
@@ -1154,6 +1169,14 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
                                 );
                             }
 
+                            // Update tool panel entry status
+                            let panel_status = if is_error {
+                                ToolCallStatus::Error
+                            } else {
+                                ToolCallStatus::Success
+                            };
+                            app.update_tool_call_status(&tool_use_id, panel_status);
+
                             // Check for pending tool call to correlate with
                             if let Some(pending) = app.pending_tool_calls.remove(&tool_use_id) {
                                 // Display tool call first
@@ -1316,6 +1339,14 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                 }
                 // Track the last tool used for exchange categorization
                 app.last_tool_used = Some(tool_name.clone());
+                // Add entry to tool panel
+                let summary = extract_tool_summary(&tool_name, &input_json);
+                app.add_tool_call_entry(ToolCallEntry {
+                    tool_name: tool_name.clone(),
+                    summary,
+                    status: ToolCallStatus::Pending,
+                    tool_use_id: tool_use_id.clone(),
+                });
                 let styled_line = format_tool_summary_styled(&tool_name, &input_json);
                 // Buffer tool call if it has an ID (for correlation with result)
                 if let Some(ref id) = tool_use_id {

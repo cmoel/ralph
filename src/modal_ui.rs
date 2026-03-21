@@ -796,7 +796,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
 /// Draw the help modal.
 pub fn draw_help_modal(f: &mut Frame, _app: &App) {
     let modal_width: u16 = 50;
-    let modal_height: u16 = 21;
+    let modal_height: u16 = 24;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -849,6 +849,16 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
             Span::raw("    "),
             Span::styled("i", key_style),
             Span::styled("  Initialize project", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("t", key_style),
+            Span::styled("  Toggle tool panel", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Tab", key_style),
+            Span::styled("  Switch panel focus", desc_style),
         ]),
         Line::from(""),
         // Scroll section

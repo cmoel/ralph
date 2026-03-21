@@ -94,6 +94,46 @@ pub struct PendingToolCall {
     pub styled_line: Line<'static>,
 }
 
+/// Status of a tool call in the panel display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallStatus {
+    /// Tool call sent, waiting for result.
+    Pending,
+    /// Tool call completed successfully.
+    Success,
+    /// Tool call returned an error.
+    Error,
+}
+
+/// A tool call entry for the panel display.
+#[derive(Debug, Clone)]
+pub struct ToolCallEntry {
+    /// The tool name (e.g., "Read", "Bash").
+    pub tool_name: String,
+    /// Summary of the key argument (e.g., "git status", "/path/to/file.rs").
+    pub summary: String,
+    /// Current status.
+    pub status: ToolCallStatus,
+    /// Tool use ID for correlating with results.
+    pub tool_use_id: Option<String>,
+}
+
+/// Which panel is currently focused for scrolling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectedPanel {
+    Main,
+    Tools,
+}
+
+impl SelectedPanel {
+    pub fn toggle(&mut self) {
+        *self = match self {
+            SelectedPanel::Main => SelectedPanel::Tools,
+            SelectedPanel::Tools => SelectedPanel::Main,
+        }
+    }
+}
+
 /// Main application state.
 pub struct App {
     pub status: AppStatus,
@@ -205,6 +245,16 @@ pub struct App {
     pub tool_history_db: Option<Connection>,
     /// Sequence counter for tool calls within this session.
     pub tool_call_sequence: u32,
+    /// Tool call entries for the panel display.
+    pub tool_call_entries: Vec<ToolCallEntry>,
+    /// Scroll offset for the tool panel.
+    pub tool_panel_scroll_offset: u16,
+    /// Which panel is currently focused for scrolling.
+    pub selected_panel: SelectedPanel,
+    /// Whether the tool panel is collapsed.
+    pub tool_panel_collapsed: bool,
+    /// Cached height of the tool panel (set during draw).
+    pub tool_panel_height: u16,
 }
 
 impl App {
@@ -285,6 +335,11 @@ impl App {
             doctor_rx: None,
             tool_history_db: None,
             tool_call_sequence: 0,
+            tool_call_entries: Vec::new(),
+            tool_panel_scroll_offset: 0,
+            selected_panel: SelectedPanel::Main,
+            tool_panel_collapsed: false,
+            tool_panel_height: 0,
         }
     }
 
@@ -382,6 +437,36 @@ impl App {
             info!(pid, "process_killed");
         }
         self.output_receiver = None;
+    }
+
+    /// Add a tool call entry to the panel.
+    pub fn add_tool_call_entry(&mut self, entry: ToolCallEntry) {
+        self.tool_call_entries.push(entry);
+    }
+
+    /// Update the status of a tool call entry by tool_use_id.
+    pub fn update_tool_call_status(&mut self, tool_use_id: &str, status: ToolCallStatus) {
+        if let Some(entry) = self
+            .tool_call_entries
+            .iter_mut()
+            .rev()
+            .find(|e| e.tool_use_id.as_deref() == Some(tool_use_id))
+        {
+            entry.status = status;
+        }
+    }
+
+    pub fn scroll_tools_up(&mut self, amount: u16) {
+        self.tool_panel_scroll_offset = self.tool_panel_scroll_offset.saturating_sub(amount);
+    }
+
+    pub fn scroll_tools_down(&mut self, amount: u16) {
+        let max = self
+            .tool_call_entries
+            .len()
+            .saturating_sub(self.tool_panel_height.saturating_sub(2) as usize)
+            as u16;
+        self.tool_panel_scroll_offset = (self.tool_panel_scroll_offset + amount).min(max);
     }
 
     /// Auto-revert from Error to Stopped after a timeout so pulsing doesn't last forever.

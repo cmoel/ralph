@@ -10,7 +10,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::app::{App, AppStatus, DoltServerState};
+use crate::app::{App, AppStatus, DoltServerState, SelectedPanel, ToolCallStatus};
 use crate::modal_ui::{draw_config_modal, draw_help_modal, draw_init_modal, draw_specs_panel};
 
 /// Maximum length for truncated tool input display.
@@ -411,13 +411,19 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     app.frame_count = app.frame_count.wrapping_add(1);
 
     let command_height = 3u16; // Fixed: border + 1 content + border
+    let tool_panel_height = calculate_tool_panel_height(
+        app.tool_call_entries.len(),
+        app.tool_panel_collapsed,
+        f.area().height.saturating_sub(command_height),
+    );
 
-    // Two-panel layout: output (flexible) + command (fixed)
+    // Three-panel layout: output (flexible) + tool calls (dynamic) + command (fixed)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),                 // Output panel (flexible, minimum 5 lines)
-            Constraint::Length(command_height), // Command panel (fixed 3 lines)
+            Constraint::Min(5),                       // Output panel (flexible, minimum 5 lines)
+            Constraint::Length(tool_panel_height),     // Tool call panel (dynamic)
+            Constraint::Length(command_height),        // Command panel (fixed 3 lines)
         ])
         .split(f.area());
 
@@ -451,7 +457,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     };
 
     // Top title: session ID (left), spec name (right)
-    let output_border_color = Color::White;
+    let output_border_color = if app.selected_panel == SelectedPanel::Main {
+        Color::White
+    } else {
+        app.status.pulsing_color(app.frame_count)
+    };
     let mut output_block = Block::default()
         .borders(Borders::ALL)
         .border_type(app.status.border_type())
@@ -493,6 +503,10 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
         f.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
     }
+
+    // === Tool Call Panel ===
+    app.tool_panel_height = tool_panel_height;
+    draw_tool_panel(f, app, chunks[1]);
 
     // === Command Panel ===
     let key_style = Style::default().fg(Color::Cyan);
@@ -564,7 +578,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let dolt_len: usize = dolt_spans.iter().map(|s| s.content.len()).sum();
 
     let commands_len: usize = command_spans.iter().map(|s| s.content.len()).sum();
-    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+    let inner_width = chunks[2].width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
     let spacing = inner_width.saturating_sub(commands_len + dolt_len + status_len);
 
@@ -590,7 +604,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     if let Some(error) = config_error {
         let warning_style = Style::default().fg(Color::Yellow);
         // Truncate error to fit in bottom border
-        let max_len = chunks[1].width.saturating_sub(4) as usize;
+        let max_len = chunks[2].width.saturating_sub(4) as usize;
         let truncated = if error.len() > max_len {
             format!("{}…", &error[..max_len.saturating_sub(1)])
         } else {
@@ -601,7 +615,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
     let command_panel = Paragraph::new(command_line).block(block);
 
-    f.render_widget(command_panel, chunks[1]);
+    f.render_widget(command_panel, chunks[2]);
 
     // Popup dialog if needed
     if app.show_already_running_popup {
@@ -637,6 +651,141 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     if app.show_help_modal {
         draw_help_modal(f, app);
     }
+}
+
+/// Calculate the height for the tool call panel based on entry count and collapsed state.
+fn calculate_tool_panel_height(
+    entry_count: usize,
+    is_collapsed: bool,
+    available_height: u16,
+) -> u16 {
+    if entry_count == 0 || is_collapsed {
+        return 1; // Collapsed: single title line
+    }
+
+    // Content + 2 for borders, capped at 40% of available height
+    let desired = (entry_count as u16) + 2;
+    let max_height = available_height * 2 / 5; // 40% of available
+    desired.min(max_height).max(3)
+}
+
+/// Draw the tool call panel.
+fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
+    let is_selected = app.selected_panel == SelectedPanel::Tools;
+    let border_color = if is_selected {
+        Color::White
+    } else {
+        app.status.pulsing_color(app.frame_count)
+    };
+    let border_type = app.status.border_type();
+
+    let entry_count = app.tool_call_entries.len();
+
+    // Collapsed state: single line with count
+    if entry_count == 0 || app.tool_panel_collapsed {
+        let title = if entry_count == 0 {
+            " Tools ".to_string()
+        } else {
+            format!(" Tools [{}] ", entry_count)
+        };
+        let collapsed = Paragraph::new("").block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_type(border_type)
+                .border_style(Style::default().fg(border_color))
+                .title(title),
+        );
+        f.render_widget(collapsed, area);
+        return;
+    }
+
+    // Build tool call lines
+    let dim = Style::default().fg(Color::DarkGray);
+    let cyan_bold = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+
+    let lines: Vec<Line> = app
+        .tool_call_entries
+        .iter()
+        .map(|entry| {
+            let (icon, icon_style) = match entry.status {
+                ToolCallStatus::Pending => ("▶", Style::default().fg(Color::Yellow)),
+                ToolCallStatus::Success => ("✓", Style::default().fg(Color::Green)),
+                ToolCallStatus::Error => ("✗", Style::default().fg(Color::Red)),
+            };
+
+            if entry.summary.is_empty() {
+                Line::from(vec![
+                    Span::styled(format!(" {} ", icon), icon_style),
+                    Span::styled(entry.tool_name.clone(), cyan_bold),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(format!(" {} ", icon), icon_style),
+                    Span::styled(entry.tool_name.clone(), cyan_bold),
+                    Span::styled(format!("({})", entry.summary), dim),
+                ])
+            }
+        })
+        .collect();
+
+    let title = format!(" Tools [{}] ", entry_count);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(border_type)
+        .border_style(Style::default().fg(border_color))
+        .title(title);
+
+    let inner_height = area.height.saturating_sub(2);
+
+    // Auto-scroll: if not focused, always show the latest entries
+    let scroll_offset = if !is_selected {
+        entry_count.saturating_sub(inner_height as usize) as u16
+    } else {
+        app.tool_panel_scroll_offset
+    };
+
+    let panel = Paragraph::new(lines)
+        .block(block)
+        .scroll((scroll_offset, 0));
+
+    f.render_widget(panel, area);
+
+    // Scrollbar if content exceeds panel
+    if entry_count as u16 > inner_height {
+        let scrollbar = Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"));
+
+        let mut scrollbar_state = ScrollbarState::default()
+            .content_length(entry_count)
+            .position(scroll_offset as usize)
+            .viewport_content_length(inner_height as usize);
+
+        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
+}
+
+/// Extract the key argument summary from tool arguments JSON.
+pub fn extract_tool_summary(tool_name: &str, input_json: &str) -> String {
+    let input: serde_json::Value = match serde_json::from_str(input_json) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+
+    let key_arg = match tool_name {
+        "Bash" => extract_bash_arg(&input),
+        "Read" => extract_file_path(&input),
+        "Edit" => extract_file_path(&input),
+        "Write" => extract_file_path(&input),
+        "Grep" => extract_pattern(&input),
+        "Glob" => extract_pattern(&input),
+        _ => None,
+    };
+
+    key_arg.unwrap_or_default()
 }
 
 #[cfg(test)]
