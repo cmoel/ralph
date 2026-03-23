@@ -708,6 +708,25 @@ fn run_app(
                 continue;
             }
 
+            // Handle quit confirmation modal input
+            if app.show_quit_modal {
+                if let Event::Key(key) = event {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            app.kill_child();
+                            app.cleanup_agent();
+                            app.stop_dolt_on_quit();
+                            return Ok(());
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            app.show_quit_modal = false;
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+
             // Handle help modal input
             if app.show_help_modal {
                 if let Event::Key(key) = event
@@ -729,10 +748,7 @@ fn run_app(
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
-                        app.kill_child();
-                        app.cleanup_agent();
-                        app.stop_dolt_on_quit();
-                        return Ok(());
+                        app.show_quit_modal = true;
                     }
                     KeyCode::Char('s') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {
