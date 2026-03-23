@@ -22,7 +22,7 @@ pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
     let output = Command::new(bd_path)
         .args([
             "create",
-            "--type=agent",
+            "--type=task",
             "--labels=rig:ralph",
             "--ephemeral",
             "--no-history",
