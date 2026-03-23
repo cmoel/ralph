@@ -11,6 +11,7 @@ use crate::config::{Config, PartialConfig, save_config, save_partial_config};
 use crate::get_file_mtime;
 use crate::prompt_sniff;
 use crate::templates;
+use crate::tool_settings;
 use crate::validators::{
     validate_directory_exists, validate_executable_path, validate_file_exists,
 };
@@ -1308,6 +1309,182 @@ pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
         },
 
         _ => {}
+    }
+}
+
+// === Tool Allow Modal ===
+
+/// Which field is focused in the tool allow modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolAllowField {
+    Pattern,
+    AllowButton,
+    CancelButton,
+}
+
+impl ToolAllowField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Pattern => Self::AllowButton,
+            Self::AllowButton => Self::CancelButton,
+            Self::CancelButton => Self::Pattern,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Pattern => Self::CancelButton,
+            Self::AllowButton => Self::Pattern,
+            Self::CancelButton => Self::AllowButton,
+        }
+    }
+}
+
+/// State for the tool allow modal.
+#[derive(Debug, Clone)]
+pub struct ToolAllowModalState {
+    /// The tool name (e.g., "Bash").
+    pub tool_name: String,
+    /// The editable pattern (e.g., "Bash(git status)").
+    pub pattern: String,
+    /// Cursor position within the pattern string.
+    pub cursor_pos: usize,
+    /// Currently focused field.
+    pub focus: ToolAllowField,
+    /// Error message from a failed allow attempt.
+    pub error: Option<String>,
+}
+
+impl ToolAllowModalState {
+    /// Create a new state pre-filled with the tool name and summary.
+    pub fn new(tool_name: &str, summary: &str) -> Self {
+        let pattern = if summary.is_empty() {
+            tool_name.to_string()
+        } else {
+            format!("{}({})", tool_name, summary)
+        };
+        let cursor_pos = pattern.len();
+        Self {
+            tool_name: tool_name.to_string(),
+            pattern,
+            cursor_pos,
+            focus: ToolAllowField::Pattern,
+            error: None,
+        }
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        self.pattern.insert(self.cursor_pos, c);
+        self.cursor_pos += c.len_utf8();
+    }
+
+    pub fn delete_char_before(&mut self) {
+        if self.cursor_pos > 0 {
+            let prev = self.pattern[..self.cursor_pos]
+                .chars()
+                .last()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos -= prev;
+            self.pattern.remove(self.cursor_pos);
+        }
+    }
+
+    pub fn cursor_left(&mut self) {
+        if self.cursor_pos > 0 {
+            let prev = self.pattern[..self.cursor_pos]
+                .chars()
+                .last()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos -= prev;
+        }
+    }
+
+    pub fn cursor_right(&mut self) {
+        if self.cursor_pos < self.pattern.len() {
+            let next = self.pattern[self.cursor_pos..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos += next;
+        }
+    }
+
+    pub fn cursor_home(&mut self) {
+        self.cursor_pos = 0;
+    }
+
+    pub fn cursor_end(&mut self) {
+        self.cursor_pos = self.pattern.len();
+    }
+}
+
+/// Handle input for the tool allow modal.
+pub fn handle_tool_allow_modal_input(app: &mut App, key_code: KeyCode, _modifiers: KeyModifiers) {
+    let Some(state) = &mut app.tool_allow_modal_state else {
+        return;
+    };
+
+    match key_code {
+        KeyCode::Esc => {
+            app.show_tool_allow_modal = false;
+            app.tool_allow_modal_state = None;
+        }
+        KeyCode::Tab => {
+            let next = state.focus.next();
+            state.focus = next;
+        }
+        KeyCode::BackTab => {
+            let prev = state.focus.prev();
+            state.focus = prev;
+        }
+        KeyCode::Enter => match state.focus {
+            ToolAllowField::Pattern | ToolAllowField::AllowButton => {
+                let pattern = state.pattern.clone();
+                if pattern.is_empty() {
+                    state.error = Some("Pattern cannot be empty".to_string());
+                    return;
+                }
+                match tool_settings::allow_pattern(&pattern, false) {
+                    Ok(()) => {
+                        debug!("Allowed tool pattern: {}", pattern);
+                        app.show_tool_allow_modal = false;
+                        app.tool_allow_modal_state = None;
+                    }
+                    Err(e) => {
+                        state.error = Some(format!("Failed: {e}"));
+                    }
+                }
+            }
+            ToolAllowField::CancelButton => {
+                app.show_tool_allow_modal = false;
+                app.tool_allow_modal_state = None;
+            }
+        },
+        _ => match state.focus {
+            ToolAllowField::Pattern => match key_code {
+                KeyCode::Char(c) => state.insert_char(c),
+                KeyCode::Backspace => state.delete_char_before(),
+                KeyCode::Left => state.cursor_left(),
+                KeyCode::Right => state.cursor_right(),
+                KeyCode::Home => state.cursor_home(),
+                KeyCode::End => state.cursor_end(),
+                _ => {}
+            },
+            ToolAllowField::AllowButton | ToolAllowField::CancelButton => match key_code {
+                KeyCode::Left => {
+                    let prev = state.focus.prev();
+                    state.focus = prev;
+                }
+                KeyCode::Right => {
+                    let next = state.focus.next();
+                    state.focus = next;
+                }
+                _ => {}
+            },
+        },
     }
 }
 

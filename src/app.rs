@@ -17,7 +17,7 @@ use crate::config::reload_config;
 use crate::config::{Config, LoadedConfig, get_project_config_path};
 use crate::doctor;
 use crate::logging::ReloadHandle;
-use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState};
+use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState, ToolAllowModalState};
 use crate::wake_lock::WakeLock;
 use crate::work_source::{WorkItem, WorkRemaining, WorkSource, create_work_source};
 use crate::{OutputMessage, get_file_mtime, logging};
@@ -255,6 +255,12 @@ pub struct App {
     pub tool_panel_collapsed: bool,
     /// Cached height of the tool panel (set during draw).
     pub tool_panel_height: u16,
+    /// Selected tool index when tools panel is focused (None = no selection).
+    pub tool_panel_selected: Option<usize>,
+    /// Whether the tool allow modal is visible.
+    pub show_tool_allow_modal: bool,
+    /// State for the tool allow modal (when open).
+    pub tool_allow_modal_state: Option<ToolAllowModalState>,
     /// Agent bead ID for this ralph instance (beads mode only).
     pub agent_bead_id: Option<String>,
     /// Git worktree name for this ralph instance (beads mode only).
@@ -348,6 +354,9 @@ impl App {
             selected_panel: SelectedPanel::Main,
             tool_panel_collapsed: false,
             tool_panel_height: 0,
+            tool_panel_selected: None,
+            show_tool_allow_modal: false,
+            tool_allow_modal_state: None,
             agent_bead_id: None,
             worktree_name: None,
             worktree_path: None,
@@ -469,16 +478,68 @@ impl App {
     }
 
     pub fn scroll_tools_up(&mut self, amount: u16) {
-        self.tool_panel_scroll_offset = self.tool_panel_scroll_offset.saturating_sub(amount);
+        if amount == 1 {
+            // Single-step: move selection
+            self.select_tool_prev();
+        } else {
+            // Page scroll
+            self.tool_panel_scroll_offset = self.tool_panel_scroll_offset.saturating_sub(amount);
+        }
     }
 
     pub fn scroll_tools_down(&mut self, amount: u16) {
-        let max = self
-            .tool_call_entries
-            .len()
-            .saturating_sub(self.tool_panel_height.saturating_sub(2) as usize)
-            as u16;
-        self.tool_panel_scroll_offset = (self.tool_panel_scroll_offset + amount).min(max);
+        if amount == 1 {
+            // Single-step: move selection
+            self.select_tool_next();
+        } else {
+            // Page scroll
+            let max = self
+                .tool_call_entries
+                .len()
+                .saturating_sub(self.tool_panel_height.saturating_sub(2) as usize)
+                as u16;
+            self.tool_panel_scroll_offset = (self.tool_panel_scroll_offset + amount).min(max);
+        }
+    }
+
+    /// Move tool panel selection up.
+    fn select_tool_prev(&mut self) {
+        if self.tool_call_entries.is_empty() {
+            return;
+        }
+        let current = self.tool_panel_selected.unwrap_or(0);
+        let new = current.saturating_sub(1);
+        self.tool_panel_selected = Some(new);
+        self.ensure_tool_selection_visible();
+    }
+
+    /// Move tool panel selection down.
+    fn select_tool_next(&mut self) {
+        if self.tool_call_entries.is_empty() {
+            return;
+        }
+        let max = self.tool_call_entries.len().saturating_sub(1);
+        let current = self.tool_panel_selected.unwrap_or(0);
+        let new = (current + 1).min(max);
+        self.tool_panel_selected = Some(new);
+        self.ensure_tool_selection_visible();
+    }
+
+    /// Ensure the selected tool is visible in the scroll viewport.
+    fn ensure_tool_selection_visible(&mut self) {
+        let Some(selected) = self.tool_panel_selected else {
+            return;
+        };
+        let inner_height = self.tool_panel_height.saturating_sub(2) as usize;
+        if inner_height == 0 {
+            return;
+        }
+        let offset = self.tool_panel_scroll_offset as usize;
+        if selected < offset {
+            self.tool_panel_scroll_offset = selected as u16;
+        } else if selected >= offset + inner_height {
+            self.tool_panel_scroll_offset = (selected - inner_height + 1) as u16;
+        }
     }
 
     /// Auto-revert from Error to Stopped after a timeout so pulsing doesn't last forever.

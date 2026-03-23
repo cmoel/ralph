@@ -11,7 +11,9 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, AppStatus, DoltServerState, SelectedPanel, ToolCallStatus};
-use crate::modal_ui::{draw_config_modal, draw_help_modal, draw_init_modal, draw_specs_panel};
+use crate::modal_ui::{
+    draw_config_modal, draw_help_modal, draw_init_modal, draw_specs_panel, draw_tool_allow_modal,
+};
 
 /// Maximum length for truncated tool input display.
 pub const TOOL_INPUT_MAX_LEN: usize = 60;
@@ -676,6 +678,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     if app.show_help_modal {
         draw_help_modal(f, app);
     }
+
+    // Tool allow modal
+    if app.show_tool_allow_modal {
+        draw_tool_allow_modal(f, app);
+    }
 }
 
 /// Draw the tools panel (right column).
@@ -714,28 +721,48 @@ fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
 
+    let selected_idx = if is_selected {
+        app.tool_panel_selected
+    } else {
+        None
+    };
+
     let lines: Vec<Line> = app
         .tool_call_entries
         .iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(i, entry)| {
+            let is_item_selected = selected_idx == Some(i);
             let (icon, icon_style) = match entry.status {
                 ToolCallStatus::Pending => ("▶", Style::default().fg(Color::Yellow)),
                 ToolCallStatus::Success => ("✓", Style::default().fg(Color::Green)),
                 ToolCallStatus::Error => ("✗", Style::default().fg(Color::Red)),
             };
 
-            if entry.summary.is_empty() {
+            let name_style = if entry.status == ToolCallStatus::Error {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else {
+                cyan_bold
+            };
+
+            let mut line = if entry.summary.is_empty() {
                 Line::from(vec![
                     Span::styled(format!(" {} ", icon), icon_style),
-                    Span::styled(entry.tool_name.clone(), cyan_bold),
+                    Span::styled(entry.tool_name.clone(), name_style),
                 ])
             } else {
                 Line::from(vec![
                     Span::styled(format!(" {} ", icon), icon_style),
-                    Span::styled(entry.tool_name.clone(), cyan_bold),
+                    Span::styled(entry.tool_name.clone(), name_style),
                     Span::styled(format!("({})", entry.summary), dim),
                 ])
+            };
+
+            if is_item_selected {
+                line = line.style(Style::default().bg(Color::DarkGray));
             }
+
+            line
         })
         .collect();
 

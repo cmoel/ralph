@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::App;
-use crate::modals::{ConfigModalField, ConfigTab, InitFileStatus, InitModalField};
+use crate::modals::{ConfigModalField, ConfigTab, InitFileStatus, InitModalField, ToolAllowField};
 use crate::ui::centered_rect;
 
 /// Draw the configuration modal.
@@ -796,7 +796,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
 /// Draw the help modal.
 pub fn draw_help_modal(f: &mut Frame, _app: &App) {
     let modal_width: u16 = 50;
-    let modal_height: u16 = 24;
+    let modal_height: u16 = 25;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -860,6 +860,11 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
             Span::styled("Tab", key_style),
             Span::styled("  Switch panel focus", desc_style),
         ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("A", key_style),
+            Span::styled("  Allow tool (tools panel)", desc_style),
+        ]),
         Line::from(""),
         // Scroll section
         Line::from(Span::styled("  Scroll", header_style)),
@@ -900,4 +905,147 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
     );
 
     f.render_widget(modal, modal_area);
+}
+
+/// Draw the tool allow modal.
+pub fn draw_tool_allow_modal(f: &mut Frame, app: &App) {
+    let Some(state) = &app.tool_allow_modal_state else {
+        return;
+    };
+
+    let modal_width: u16 = 60;
+    let modal_height: u16 = 11;
+    let modal_area = centered_rect(modal_width, modal_height, f.area());
+
+    f.render_widget(Clear, modal_area);
+
+    let label_style = Style::default().fg(Color::DarkGray);
+    let field_width = modal_width.saturating_sub(6) as usize;
+
+    // Pattern field with cursor
+    let pattern_focused = state.focus == ToolAllowField::Pattern;
+    let pattern_spans = if pattern_focused {
+        render_text_field(&state.pattern, state.cursor_pos, field_width)
+    } else {
+        let display = if state.pattern.len() > field_width {
+            format!("{}…", &state.pattern[..field_width - 1])
+        } else {
+            state.pattern.clone()
+        };
+        vec![Span::styled(display, Style::default().fg(Color::White))]
+    };
+
+    // Buttons
+    let allow_focused = state.focus == ToolAllowField::AllowButton;
+    let cancel_focused = state.focus == ToolAllowField::CancelButton;
+    let allow_style = if allow_focused {
+        Style::default().fg(Color::Black).bg(Color::Green)
+    } else {
+        Style::default().fg(Color::Green)
+    };
+    let cancel_style = if cancel_focused {
+        Style::default().fg(Color::Black).bg(Color::Red)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let mut content: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(vec![Span::raw("  "), Span::styled("Pattern", label_style)]),
+        Line::from(
+            std::iter::once(Span::raw("  "))
+                .chain(pattern_spans)
+                .collect::<Vec<_>>(),
+        ),
+    ];
+
+    // Error line
+    if let Some(ref error) = state.error {
+        content.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(error.clone(), Style::default().fg(Color::Red)),
+        ]));
+    } else {
+        content.push(Line::from(""));
+    }
+
+    // Hint
+    content.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "Tip: use * for wildcards, e.g. Bash(git:*)",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    content.push(Line::from(""));
+
+    // Buttons row
+    content.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(" Allow ", allow_style),
+        Span::raw("  "),
+        Span::styled(" Cancel ", cancel_style),
+    ]));
+
+    let title = format!(" Allow {} ", state.tool_name);
+    let modal = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .title_alignment(Alignment::Center)
+            .style(Style::default().fg(Color::White)),
+    );
+
+    f.render_widget(modal, modal_area);
+}
+
+/// Render a text field with cursor for the tool allow modal.
+fn render_text_field(value: &str, cursor_pos: usize, field_width: usize) -> Vec<Span<'static>> {
+    let display_value: String = if value.len() > field_width {
+        let start = cursor_pos.saturating_sub(field_width / 2);
+        let end = (start + field_width).min(value.len());
+        let start = end.saturating_sub(field_width);
+        value[start..end].to_string()
+    } else {
+        value.to_string()
+    };
+
+    let visible_cursor = if value.len() > field_width {
+        let start = cursor_pos.saturating_sub(field_width / 2);
+        let end = (start + field_width).min(value.len());
+        let start = end.saturating_sub(field_width);
+        cursor_pos - start
+    } else {
+        cursor_pos
+    };
+
+    let char_indices: Vec<_> = display_value.char_indices().collect();
+    let (before, cursor_char, rest) = if visible_cursor < char_indices.len() {
+        let (idx, _) = char_indices[visible_cursor];
+        let before = display_value[..idx].to_string();
+        let cc = display_value[idx..]
+            .chars()
+            .next()
+            .unwrap_or(' ')
+            .to_string();
+        let rest_start = idx + cc.len();
+        let rest = if rest_start < display_value.len() {
+            display_value[rest_start..].to_string()
+        } else {
+            String::new()
+        };
+        (before, cc, rest)
+    } else {
+        (display_value.clone(), " ".to_string(), String::new())
+    };
+
+    vec![
+        Span::styled(before, Style::default().fg(Color::White)),
+        Span::styled(
+            cursor_char,
+            Style::default().fg(Color::Black).bg(Color::White),
+        ),
+        Span::styled(rest, Style::default().fg(Color::White)),
+    ]
 }

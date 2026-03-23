@@ -30,8 +30,9 @@ use crate::events::{
     ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
 };
 use crate::modals::{
-    ConfigModalState, InitModalState, SpecsPanelState, handle_config_modal_input,
-    handle_init_modal_input, handle_specs_panel_input,
+    ConfigModalState, InitModalState, SpecsPanelState, ToolAllowModalState,
+    handle_config_modal_input, handle_init_modal_input, handle_specs_panel_input,
+    handle_tool_allow_modal_input,
 };
 use crate::ui::{
     ExchangeType, draw_ui, extract_text_from_task_result, extract_tool_summary,
@@ -714,6 +715,14 @@ fn run_app(
                 continue;
             }
 
+            // Handle tool allow modal input
+            if app.show_tool_allow_modal {
+                if let Event::Key(key) = event {
+                    handle_tool_allow_modal_input(&mut app, key.code, key.modifiers);
+                }
+                continue;
+            }
+
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
@@ -787,9 +796,25 @@ fn run_app(
                     }
                     KeyCode::Tab => {
                         app.selected_panel.toggle();
+                        if app.selected_panel == SelectedPanel::Tools
+                            && app.tool_panel_selected.is_none()
+                            && !app.tool_call_entries.is_empty()
+                        {
+                            app.tool_panel_selected =
+                                Some(app.tool_call_entries.len().saturating_sub(1));
+                        }
                     }
                     KeyCode::Char('t') => {
                         app.tool_panel_collapsed = !app.tool_panel_collapsed;
+                    }
+                    KeyCode::Char('A') if app.selected_panel == SelectedPanel::Tools => {
+                        if let Some(idx) = app.tool_panel_selected
+                            && let Some(entry) = app.tool_call_entries.get(idx)
+                        {
+                            app.show_tool_allow_modal = true;
+                            app.tool_allow_modal_state =
+                                Some(ToolAllowModalState::new(&entry.tool_name, &entry.summary));
+                        }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         scroll_panel(&mut app, ScrollDirection::Up, 1);
