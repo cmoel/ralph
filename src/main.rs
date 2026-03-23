@@ -715,7 +715,6 @@ fn run_app(
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             app.kill_child();
                             app.cleanup_agent();
-                            app.stop_dolt_on_quit();
                             return Ok(());
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {

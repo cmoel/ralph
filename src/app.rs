@@ -568,9 +568,19 @@ impl App {
         }
         info!("manual_stop");
         self.kill_child();
+        self.release_hooked_bead();
         self.status = AppStatus::Stopped;
         self.current_spec = None;
         self.run_start_time = None;
+    }
+
+    /// Release the currently hooked bead (clear hook, reset to open).
+    /// Used during stop between iterations. Does not touch agent, worktree, or heartbeat.
+    pub fn release_hooked_bead(&mut self) {
+        if let (Some(agent_id), Some(bead_id)) = (&self.agent_bead_id, self.hooked_bead_id.take())
+        {
+            crate::agent::release_bead(&self.config.behavior.bd_path, agent_id, &bead_id);
+        }
     }
 
     pub fn poll_spec(&mut self) {
@@ -1053,7 +1063,11 @@ impl App {
     }
 
     /// Clean up agent resources on quit (beads mode only).
+    /// Full teardown: release bead, stop heartbeat, remove worktree, close agent.
     pub fn cleanup_agent(&mut self) {
+        // Release hooked bead first (clear hook + reset to open)
+        self.release_hooked_bead();
+
         // Signal heartbeat thread to stop
         if let Some(stop) = &self.heartbeat_stop {
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1069,20 +1083,6 @@ impl App {
         self.heartbeat_stop = None;
     }
 
-    /// Stop Dolt server synchronously (for quit cleanup).
-    pub fn stop_dolt_on_quit(&self) {
-        if self.config.behavior.mode != "beads" {
-            return;
-        }
-        if self.dolt_server_state == DoltServerState::On
-            || self.dolt_server_state == DoltServerState::Starting
-        {
-            info!("dolt_server_quit_cleanup");
-            let _ = std::process::Command::new(&self.config.behavior.bd_path)
-                .args(["dolt", "stop"])
-                .output();
-        }
-    }
 }
 
 /// Check if the Dolt server is running by calling `bd dolt status`.

@@ -259,6 +259,36 @@ pub fn release_hook(bd_path: &str, agent_bead_id: &str) {
     }
 }
 
+/// Release the currently hooked bead: clear the hook and reset the bead to open.
+/// Used during both stop (between iterations) and quit (full teardown).
+pub fn release_bead(bd_path: &str, agent_bead_id: &str, bead_id: &str) {
+    release_hook(bd_path, agent_bead_id);
+    reset_bead_to_open(bd_path, bead_id);
+}
+
+/// Reset a bead's status to open so other agents can pick it up.
+fn reset_bead_to_open(bd_path: &str, bead_id: &str) {
+    let result = Command::new(bd_path)
+        .args(["update", bead_id, "--status=open"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    match result {
+        Ok(o) if o.status.success() => {
+            info!(bead_id = %bead_id, "bead_reset_to_open");
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(stderr = %stderr.trim(), "bead_reset_failed");
+        }
+        Err(e) => {
+            warn!(error = %e, "bead_reset_failed");
+        }
+    }
+}
+
 /// Clean up agent resources: release hook, close agent bead, remove worktree.
 pub fn cleanup(bd_path: &str, agent_bead_id: &str, worktree_name: &str) {
     info!(agent_bead_id = %agent_bead_id, "agent_cleanup_start");
