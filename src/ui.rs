@@ -417,8 +417,8 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),                   // Content area
-            Constraint::Length(command_height),    // Command panel
+            Constraint::Min(5),                 // Content area
+            Constraint::Length(command_height), // Command panel
         ])
         .split(f.area());
 
@@ -434,7 +434,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         .split(outer[0]);
 
     let stream_area = content[0];
-    let tools_area = if show_tools_column { Some(content[1]) } else { None };
+    let tools_area = if show_tools_column {
+        Some(content[1])
+    } else {
+        None
+    };
     let command_area = outer[1];
 
     // Update pane dimensions for scroll calculations
@@ -476,7 +480,14 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         .borders(Borders::ALL)
         .border_type(app.status.border_type())
         .border_style(Style::default().fg(output_border_color))
-        .title(Line::from(format!(" {} ", app.session_id)).left_aligned());
+        .title(
+            Line::from(if let Some(wt) = &app.worktree_name {
+                format!(" {} | {} ", app.session_id, wt)
+            } else {
+                format!(" {} ", app.session_id)
+            })
+            .left_aligned(),
+        );
 
     if let Some(spec) = &app.current_spec {
         output_block = output_block.title(Line::from(format!(" {} ", spec)).right_aligned());

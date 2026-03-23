@@ -89,6 +89,10 @@ pub struct BehaviorConfig {
     pub mode: String,
     /// Path to the `bd` CLI binary (for beads mode). Default: "bd".
     pub bd_path: String,
+    /// How often to send agent heartbeats (seconds). Default: 30.
+    pub heartbeat_interval: u64,
+    /// How long before an agent is considered stale (seconds). Default: 180.
+    pub stale_threshold: u64,
     /// Legacy field - converted to iterations on load.
     /// `true` becomes `-1` (infinite), `false` becomes `0` (stopped).
     #[serde(skip_serializing, default)]
@@ -102,6 +106,8 @@ impl Default for BehaviorConfig {
             keep_awake: true, // Prevent system sleep by default
             mode: "specs".to_string(),
             bd_path: "bd".to_string(),
+            heartbeat_interval: 30,
+            stale_threshold: 180,
             auto_continue: None,
         }
     }
@@ -206,6 +212,10 @@ pub struct PartialBehaviorConfig {
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bd_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heartbeat_interval: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale_threshold: Option<u64>,
 }
 
 /// Project-specific configuration where every field is optional.
@@ -240,6 +250,8 @@ fn is_partial_behavior_empty(b: &PartialBehaviorConfig) -> bool {
         && b.keep_awake.is_none()
         && b.mode.is_none()
         && b.bd_path.is_none()
+        && b.heartbeat_interval.is_none()
+        && b.stale_threshold.is_none()
 }
 
 /// Merge a global config with a project-level partial config.
@@ -292,6 +304,14 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .bd_path
                 .clone()
                 .unwrap_or_else(|| global.behavior.bd_path.clone()),
+            heartbeat_interval: project
+                .behavior
+                .heartbeat_interval
+                .unwrap_or(global.behavior.heartbeat_interval),
+            stale_threshold: project
+                .behavior
+                .stale_threshold
+                .unwrap_or(global.behavior.stale_threshold),
             auto_continue: None,
         },
     }
@@ -914,6 +934,8 @@ foo = "bar"
                 keep_awake: Some(false),
                 mode: None,
                 bd_path: None,
+                heartbeat_interval: None,
+                stale_threshold: None,
             },
         };
         let merged = merge_config(&global, &partial);
@@ -999,6 +1021,8 @@ iterations = 3
                 keep_awake: None,
                 mode: None,
                 bd_path: None,
+                heartbeat_interval: None,
+                stale_threshold: None,
             },
         };
         let toml_str = toml::to_string_pretty(&partial).unwrap();

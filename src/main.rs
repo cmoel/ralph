@@ -1,5 +1,6 @@
 //! Ralph - TUI wrapper for claude CLI that displays formatted streaming output.
 
+mod agent;
 mod app;
 mod config;
 mod db;
@@ -613,6 +614,23 @@ fn run_app(
         }
     }
 
+    // Register agent and create worktree (beads mode only)
+    if app.config.behavior.mode == "beads" {
+        let bd_path = app.config.behavior.bd_path.clone();
+        let sid = app.session_id.clone();
+        if let Some(setup) = agent::register(&bd_path, &sid) {
+            let heartbeat_interval = app.config.behavior.heartbeat_interval;
+            let stop =
+                agent::start_heartbeat(bd_path, setup.agent_bead_id.clone(), heartbeat_interval);
+            app.agent_bead_id = Some(setup.agent_bead_id);
+            app.worktree_name = Some(setup.worktree_name);
+            app.worktree_path = Some(setup.worktree_path);
+            app.heartbeat_stop = Some(stop);
+        } else {
+            app.add_text_line("[Agent registration failed — running without worktree]".to_string());
+        }
+    }
+
     loop {
         // Poll for output from child process
         poll_output(&mut app);
@@ -700,6 +718,7 @@ fn run_app(
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
                         app.kill_child();
+                        app.cleanup_agent();
                         app.stop_dolt_on_quit();
                         return Ok(());
                     }

@@ -255,6 +255,14 @@ pub struct App {
     pub tool_panel_collapsed: bool,
     /// Cached height of the tool panel (set during draw).
     pub tool_panel_height: u16,
+    /// Agent bead ID for this ralph instance (beads mode only).
+    pub agent_bead_id: Option<String>,
+    /// Git worktree name for this ralph instance (beads mode only).
+    pub worktree_name: Option<String>,
+    /// Git worktree path for this ralph instance (beads mode only).
+    pub worktree_path: Option<PathBuf>,
+    /// Handle to the heartbeat thread (so we can signal it to stop).
+    pub heartbeat_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl App {
@@ -340,6 +348,10 @@ impl App {
             selected_panel: SelectedPanel::Main,
             tool_panel_collapsed: false,
             tool_panel_height: 0,
+            agent_bead_id: None,
+            worktree_name: None,
+            worktree_path: None,
+            heartbeat_stop: None,
         }
     }
 
@@ -488,7 +500,8 @@ impl App {
         self.kill_child();
         self.status = AppStatus::Stopped;
         self.current_spec = None;
-        self.run_start_time = None;    }
+        self.run_start_time = None;
+    }
 
     pub fn poll_spec(&mut self) {
         // Check for completed background detect_current
@@ -634,7 +647,6 @@ impl App {
                 {
                     self.reset_iteration_state();
                     self.status = AppStatus::Stopped;
-
                 } else {
                     // Kick off background check_remaining (non-blocking)
                     let complete_msg = self.work_source.complete_message();
@@ -651,7 +663,6 @@ impl App {
                 // Countdown exhausted or iterations = 0, just stop
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-
             }
             Some(code) => {
                 // Non-zero exit code → Error state
@@ -659,13 +670,11 @@ impl App {
                 self.add_text_line(format!("[Error: process exited with code {}]", code));
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
-
             }
             None => {
                 // Killed by signal (manual stop) → Stopped state
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-
             }
         }
     }
@@ -720,7 +729,6 @@ impl App {
                 ));
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-
             }
             WorkRemaining::NeedsShaping(count) => {
                 info!(count, "all_ready_beads_need_shaping");
@@ -730,7 +738,6 @@ impl App {
                 );
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
-
             }
             WorkRemaining::Missing => {
                 warn!("work_source_missing");
@@ -738,7 +745,6 @@ impl App {
                 self.reset_iteration_state();
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
-
             }
             WorkRemaining::ReadError(e) => {
                 warn!(error = %e, "work_source_read_error");
@@ -746,7 +752,6 @@ impl App {
                 self.reset_iteration_state();
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
-
             }
         }
     }
@@ -975,6 +980,23 @@ impl App {
                 self.dolt_toggle_rx = Some(rx);
             }
         }
+    }
+
+    /// Clean up agent resources on quit (beads mode only).
+    pub fn cleanup_agent(&mut self) {
+        // Signal heartbeat thread to stop
+        if let Some(stop) = &self.heartbeat_stop {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        if let (Some(agent_id), Some(wt_name)) = (&self.agent_bead_id, &self.worktree_name) {
+            crate::agent::cleanup(&self.config.behavior.bd_path, agent_id, wt_name);
+        }
+
+        self.agent_bead_id = None;
+        self.worktree_name = None;
+        self.worktree_path = None;
+        self.heartbeat_stop = None;
     }
 
     /// Stop Dolt server synchronously (for quit cleanup).

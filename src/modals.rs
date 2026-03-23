@@ -529,6 +529,8 @@ impl TabFormState {
                     None
                 },
                 bd_path: None,
+                heartbeat_interval: None,
+                stale_threshold: None,
             },
         }
     }
