@@ -464,10 +464,8 @@ mod tests {
     fn existing_rows_get_unknown_repo_path() {
         let conn = Connection::open_in_memory().unwrap();
         // Run only v1 and v2 migrations
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
-        )
-        .unwrap();
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);")
+            .unwrap();
         migrate_v1(&conn).unwrap();
         migrate_v2(&conn).unwrap();
 

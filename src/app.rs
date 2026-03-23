@@ -269,6 +269,8 @@ pub struct App {
     pub worktree_path: Option<PathBuf>,
     /// Handle to the heartbeat thread (so we can signal it to stop).
     pub heartbeat_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Currently hooked bead ID (the bead this agent is working on).
+    pub hooked_bead_id: Option<String>,
     /// Resolved repository path for tool history tracking.
     pub repo_path: String,
 }
@@ -363,6 +365,7 @@ impl App {
             worktree_name: None,
             worktree_path: None,
             heartbeat_stop: None,
+            hooked_bead_id: None,
             repo_path: crate::db::detect_repo_path(),
         }
     }
@@ -872,7 +875,7 @@ impl App {
     }
 
     /// Reset iteration state when stopping (error, manual stop, or run complete).
-    fn reset_iteration_state(&mut self) {
+    pub fn reset_iteration_state(&mut self) {
         self.current_iteration = 0;
         self.total_iterations = 0;
     }

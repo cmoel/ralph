@@ -148,9 +148,123 @@ pub fn start_heartbeat(
     stop
 }
 
-/// Clean up agent resources: stop heartbeat, close agent bead, remove worktree.
+/// Pick the next ready bead and claim it for this agent.
+///
+/// Iterates through `bd ready --json` results, skipping beads with shaping labels.
+/// Uses `bd update --claim` for atomic claiming (fails if already claimed).
+/// On success, records the hook on the agent bead via `bd set-state`.
+///
+/// Returns `(bead_id, title)` on success, `None` if no claimable work.
+pub fn claim_next_bead(bd_path: &str, agent_bead_id: &str) -> Option<(String, String)> {
+    let output = Command::new(bd_path)
+        .args(["ready", "--json"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(stderr = %stderr.trim(), "claim_ready_list_failed");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: serde_json::Value = serde_json::from_str(stdout.as_ref()).ok()?;
+    let arr = items.as_array()?;
+
+    for item in arr {
+        // Skip beads that need shaping
+        let has_shaping = item
+            .get("labels")
+            .and_then(|l| l.as_array())
+            .is_some_and(|ls| {
+                ls.iter().any(|l| {
+                    l.as_str()
+                        .is_some_and(|s| matches!(s, "needs-shaping" | "shaping-required"))
+                })
+            });
+        if has_shaping {
+            continue;
+        }
+
+        let id = match item.get("id").and_then(|i| i.as_str()) {
+            Some(id) => id,
+            None => continue,
+        };
+        let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("");
+
+        // Atomic claim — fails if already claimed by another agent
+        let claim = Command::new(bd_path)
+            .args(["update", id, "--claim"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output();
+
+        match claim {
+            Ok(o) if o.status.success() => {
+                // Record hook on agent bead
+                let hook_arg = format!("hook={}", id);
+                let _ = Command::new(bd_path)
+                    .args(["set-state", agent_bead_id, &hook_arg])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output();
+
+                info!(bead_id = %id, title = %title, "bead_claimed");
+                return Some((id.to_string(), title.to_string()));
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                info!(bead_id = %id, stderr = %stderr.trim(), "claim_failed_trying_next");
+            }
+            Err(e) => {
+                warn!(bead_id = %id, error = %e, "claim_command_failed");
+            }
+        }
+    }
+
+    info!("no_claimable_beads");
+    None
+}
+
+/// Release the hook on this agent (clear the hook state dimension).
+pub fn release_hook(bd_path: &str, agent_bead_id: &str) {
+    let result = Command::new(bd_path)
+        .args([
+            "set-state",
+            agent_bead_id,
+            "hook=none",
+            "--reason=work complete",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    match result {
+        Ok(o) if o.status.success() => {
+            info!(agent_bead_id = %agent_bead_id, "hook_released");
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(stderr = %stderr.trim(), "hook_release_failed");
+        }
+        Err(e) => {
+            warn!(error = %e, "hook_release_failed");
+        }
+    }
+}
+
+/// Clean up agent resources: release hook, close agent bead, remove worktree.
 pub fn cleanup(bd_path: &str, agent_bead_id: &str, worktree_name: &str) {
     info!(agent_bead_id = %agent_bead_id, "agent_cleanup_start");
+
+    // Release any hooked bead
+    release_hook(bd_path, agent_bead_id);
 
     // Close the agent bead
     cleanup_agent_bead(bd_path, agent_bead_id);

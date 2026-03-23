@@ -637,7 +637,13 @@ fn run_app(
         if app.auto_continue_pending {
             app.auto_continue_pending = false;
             app.increment_iteration();
-            start_command(&mut app)?;
+            // In beads mode, claim next bead before continuing
+            if claim_before_start(&mut app) {
+                start_command(&mut app)?;
+            } else {
+                app.reset_iteration_state();
+                app.status = AppStatus::Stopped;
+            }
         }
 
         // Poll for background work source operations
@@ -732,7 +738,12 @@ fn run_app(
                         AppStatus::Stopped | AppStatus::Error => {
                             // Start new iteration run (reads config, sets up tracking)
                             if app.start_iteration_run() {
-                                start_command(&mut app)?;
+                                // In beads mode, claim a bead before starting
+                                if !claim_before_start(&mut app) {
+                                    app.reset_iteration_state();
+                                } else {
+                                    start_command(&mut app)?;
+                                }
                             }
                             // If start_iteration_run returns false, iterations = 0, no-op
                         }
@@ -894,6 +905,31 @@ fn assemble_prompt(config: &crate::config::Config) -> Result<String> {
     Ok(command)
 }
 
+/// In beads mode, claim the next available bead before starting claude.
+/// Returns true if we should proceed with start_command (claimed or non-beads mode).
+/// Returns false if claiming failed (no work available).
+fn claim_before_start(app: &mut App) -> bool {
+    if app.config.behavior.mode != "beads" {
+        return true;
+    }
+    let agent_id = match &app.agent_bead_id {
+        Some(id) => id.clone(),
+        None => return true, // no agent registered, skip claiming
+    };
+
+    match agent::claim_next_bead(&app.config.behavior.bd_path, &agent_id) {
+        Some((bead_id, title)) => {
+            app.add_text_line(format!("[Claimed: {} {}]", bead_id, title));
+            app.hooked_bead_id = Some(bead_id);
+            true
+        }
+        None => {
+            app.add_text_line("[No beads available to claim]".to_string());
+            false
+        }
+    }
+}
+
 /// Start the command.
 fn start_command(app: &mut App) -> Result<()> {
     if app.status == AppStatus::Running {
@@ -924,12 +960,18 @@ fn start_command(app: &mut App) -> Result<()> {
     app.current_line.clear();
 
     let command = assemble_prompt(&app.config)?;
-    let child = Command::new("sh")
-        .arg("-c")
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(&command)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+        .stderr(Stdio::piped());
+
+    // In beads mode, run claude in the worktree directory
+    if let Some(ref wt_path) = app.worktree_path {
+        cmd.current_dir(wt_path);
+    }
+
+    let child = cmd.spawn();
 
     match child {
         Ok(mut child) => {
