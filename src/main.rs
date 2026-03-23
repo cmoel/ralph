@@ -108,6 +108,12 @@ enum ToolCommands {
         /// Filter to rejected/errored tool calls only
         #[arg(long)]
         rejected: bool,
+        /// Filter by repo (basename match if no slash, substring match if has slash)
+        #[arg(long)]
+        repo: Option<String>,
+        /// Show tool calls from all repos (overrides default current-repo filter)
+        #[arg(long)]
+        all: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -204,9 +210,21 @@ fn main() -> Result<()> {
                     since,
                     until,
                     rejected,
+                    repo,
+                    all,
                     json,
                     db_path,
-                } => tool_history::run(session, tool, since, until, rejected, json, db_path),
+                } => tool_history::run(tool_history::HistoryOptions {
+                    session,
+                    tool,
+                    since,
+                    until,
+                    rejected,
+                    json,
+                    show_db_path: db_path,
+                    repo,
+                    all,
+                }),
                 ToolCommands::Allow { pattern, project } => {
                     tool_settings::allow_pattern(&pattern, project)
                 }

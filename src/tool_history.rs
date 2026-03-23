@@ -14,6 +14,15 @@ pub struct ToolCallRecord {
     pub result_content: Option<String>,
     pub timestamp: String,
     pub sequence_number: u32,
+    pub repo_path: String,
+}
+
+/// Repo filter for tool history queries.
+pub enum RepoFilter {
+    /// Exact path match (auto-detected current repo).
+    Exact(String),
+    /// Smart match: basename if no slash, substring if has slash.
+    Smart(String),
 }
 
 /// Query filter for tool history.
@@ -161,8 +170,9 @@ pub fn query_tool_calls(
     conn: &Connection,
     filter: &QueryFilter,
     rejected_only: bool,
+    repo_filter: Option<&RepoFilter>,
 ) -> Result<Vec<ToolCallRecord>> {
-    let (sql, params) = build_query(filter, rejected_only);
+    let (sql, params) = build_query(filter, rejected_only, repo_filter);
 
     let mut stmt = conn.prepare(&sql).context("Failed to prepare query")?;
 
@@ -182,6 +192,7 @@ pub fn query_tool_calls(
                 result_content: row.get(5)?,
                 timestamp: row.get(6)?,
                 sequence_number: row.get(7)?,
+                repo_path: row.get(8)?,
             })
         })
         .context("Failed to execute query")?;
@@ -195,7 +206,11 @@ pub fn query_tool_calls(
 }
 
 /// Build the SQL query and parameters for a given filter.
-fn build_query(filter: &QueryFilter, rejected_only: bool) -> (String, Vec<String>) {
+fn build_query(
+    filter: &QueryFilter,
+    rejected_only: bool,
+    repo_filter: Option<&RepoFilter>,
+) -> (String, Vec<String>) {
     let mut conditions = Vec::new();
     let mut params = Vec::new();
 
@@ -228,6 +243,29 @@ fn build_query(filter: &QueryFilter, rejected_only: bool) -> (String, Vec<String
         conditions.push("is_error = 1".to_string());
     }
 
+    match repo_filter {
+        Some(RepoFilter::Exact(path)) => {
+            conditions.push(format!("repo_path = ?{}", params.len() + 1));
+            params.push(path.clone());
+        }
+        Some(RepoFilter::Smart(value)) => {
+            if value.contains('/') {
+                conditions.push(format!(
+                    "repo_path LIKE '%' || ?{} || '%'",
+                    params.len() + 1
+                ));
+                params.push(value.clone());
+            } else {
+                let n = params.len() + 1;
+                conditions.push(format!(
+                    "(repo_path LIKE '%/' || ?{n} OR repo_path = ?{n})"
+                ));
+                params.push(value.clone());
+            }
+        }
+        None => {}
+    }
+
     let where_clause = if conditions.is_empty() {
         String::new()
     } else {
@@ -235,12 +273,18 @@ fn build_query(filter: &QueryFilter, rejected_only: bool) -> (String, Vec<String
     };
 
     let sql = format!(
-        "SELECT id, session_id, tool_name, tool_arguments, is_error, result_content, timestamp, sequence_number \
+        "SELECT id, session_id, tool_name, tool_arguments, is_error, result_content, \
+         timestamp, sequence_number, repo_path \
          FROM tool_calls{} ORDER BY timestamp ASC, sequence_number ASC",
         where_clause
     );
 
     (sql, params)
+}
+
+/// Extract the basename (last path component) from a path string.
+fn repo_basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 /// Format tool call records as a human-readable table.
@@ -253,10 +297,10 @@ pub fn format_table(records: &[ToolCallRecord]) -> String {
 
     // Header
     lines.push(format!(
-        "{:<4} {:<20} {:<15} {:<8} {:<10}",
-        "#", "TIMESTAMP", "TOOL", "STATUS", "SESSION"
+        "{:<4} {:<20} {:<15} {:<8} {:<10} {:<15}",
+        "#", "TIMESTAMP", "TOOL", "STATUS", "SESSION", "REPO"
     ));
-    lines.push("─".repeat(60));
+    lines.push("─".repeat(75));
 
     for record in records {
         let status = if record.is_error { "error" } else { "ok" };
@@ -268,8 +312,13 @@ pub fn format_table(records: &[ToolCallRecord]) -> String {
         };
 
         lines.push(format!(
-            "{:<4} {:<20} {:<15} {:<8} {:<10}",
-            record.sequence_number, record.timestamp, record.tool_name, status, session_short,
+            "{:<4} {:<20} {:<15} {:<8} {:<10} {:<15}",
+            record.sequence_number,
+            record.timestamp,
+            record.tool_name,
+            status,
+            session_short,
+            repo_basename(&record.repo_path),
         ));
     }
 
@@ -293,6 +342,7 @@ pub fn format_json(records: &[ToolCallRecord]) -> Result<String> {
                 "result_content": r.result_content,
                 "timestamp": r.timestamp,
                 "sequence_number": r.sequence_number,
+                "repo_path": r.repo_path,
             })
         })
         .collect();
@@ -300,30 +350,35 @@ pub fn format_json(records: &[ToolCallRecord]) -> Result<String> {
     serde_json::to_string_pretty(&json_records).context("Failed to serialize to JSON")
 }
 
+/// Options for the tool-history subcommand.
+pub struct HistoryOptions {
+    pub session: Option<String>,
+    pub tool: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub rejected: bool,
+    pub json: bool,
+    pub show_db_path: bool,
+    pub repo: Option<String>,
+    pub all: bool,
+}
+
 /// Run the tool-history subcommand.
-pub fn run(
-    session: Option<String>,
-    tool: Option<String>,
-    since: Option<String>,
-    until: Option<String>,
-    rejected: bool,
-    json: bool,
-    show_db_path: bool,
-) -> Result<()> {
+pub fn run(opts: HistoryOptions) -> Result<()> {
     use crate::db;
 
-    if show_db_path {
+    if opts.show_db_path {
         println!("{}", db::db_path()?.display());
         return Ok(());
     }
 
-    let filter = if let Some(session_id) = session {
+    let filter = if let Some(session_id) = opts.session {
         QueryFilter::Session(session_id)
-    } else if let Some(tool_name) = tool {
+    } else if let Some(tool_name) = opts.tool {
         QueryFilter::Tool(tool_name)
-    } else if let Some(since_spec) = since {
+    } else if let Some(since_spec) = opts.since {
         let since_ts = parse_time_spec(&since_spec)?;
-        let until_ts = until.map(|u| parse_time_spec(&u)).transpose()?;
+        let until_ts = opts.until.map(|u| parse_time_spec(&u)).transpose()?;
         QueryFilter::TimeRange {
             since: since_ts,
             until: until_ts,
@@ -332,10 +387,18 @@ pub fn run(
         QueryFilter::LatestSession
     };
 
-    let conn = db::open().context("Failed to open tool history database")?;
-    let records = query_tool_calls(&conn, &filter, rejected)?;
+    let repo_filter = if opts.all {
+        None
+    } else if let Some(value) = opts.repo {
+        Some(RepoFilter::Smart(value))
+    } else {
+        Some(RepoFilter::Exact(db::detect_repo_path()))
+    };
 
-    if json {
+    let conn = db::open().context("Failed to open tool history database")?;
+    let records = query_tool_calls(&conn, &filter, opts.rejected, repo_filter.as_ref())?;
+
+    if opts.json {
         println!("{}", format_json(&records)?);
     } else {
         println!("{}", format_table(&records));
@@ -402,7 +465,7 @@ mod tests {
     fn query_by_session() {
         let conn = setup_test_db();
         let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.session_id == "sess-aaa111"));
     }
@@ -410,7 +473,7 @@ mod tests {
     #[test]
     fn query_by_tool_case_insensitive() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::Tool("bash".into()), false).unwrap();
+        let records = query_tool_calls(&conn, &QueryFilter::Tool("bash".into()), false, None).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.tool_name == "Bash"));
     }
@@ -418,7 +481,7 @@ mod tests {
     #[test]
     fn query_rejected_only() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::Tool("Bash".into()), true).unwrap();
+        let records = query_tool_calls(&conn, &QueryFilter::Tool("Bash".into()), true, None).unwrap();
         assert_eq!(records.len(), 1);
         assert!(records[0].is_error);
         assert_eq!(records[0].session_id, "sess-bbb222");
@@ -427,7 +490,7 @@ mod tests {
     #[test]
     fn query_latest_session() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::LatestSession, false).unwrap();
+        let records = query_tool_calls(&conn, &QueryFilter::LatestSession, false, None).unwrap();
         // Latest session should be the last one inserted
         assert!(!records.is_empty());
         let session = &records[0].session_id;
@@ -445,6 +508,7 @@ mod tests {
                 until: None,
             },
             false,
+            None,
         )
         .unwrap();
         assert_eq!(records.len(), 4);
@@ -461,6 +525,7 @@ mod tests {
                 until: Some("2000-12-31T23:59:59Z".into()),
             },
             false,
+            None,
         )
         .unwrap();
         assert_eq!(records.len(), 0);
@@ -469,7 +534,7 @@ mod tests {
     #[test]
     fn query_empty_db() {
         let conn = db::open_memory().unwrap();
-        let records = query_tool_calls(&conn, &QueryFilter::LatestSession, false).unwrap();
+        let records = query_tool_calls(&conn, &QueryFilter::LatestSession, false, None).unwrap();
         assert!(records.is_empty());
     }
 
@@ -483,7 +548,7 @@ mod tests {
     fn format_table_with_records() {
         let conn = setup_test_db();
         let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None).unwrap();
         let output = format_table(&records);
         assert!(output.contains("TOOL"));
         assert!(output.contains("Read"));
@@ -495,7 +560,7 @@ mod tests {
     fn format_json_output() {
         let conn = setup_test_db();
         let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false).unwrap();
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None).unwrap();
         let output = format_json(&records).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed.len(), 2);
@@ -564,5 +629,106 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unrecognized time format"));
         assert!(err.contains("Accepted formats"));
+    }
+
+    #[test]
+    fn query_repo_exact_match() {
+        let conn = setup_test_db();
+        let filter = RepoFilter::Exact("/home/user/project".into());
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::TimeRange {
+                since: "2000-01-01T00:00:00Z".into(),
+                until: None,
+            },
+            false,
+            Some(&filter),
+        )
+        .unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.repo_path == "/home/user/project"));
+    }
+
+    #[test]
+    fn query_repo_basename_match() {
+        let conn = setup_test_db();
+        // "project" has no slash -> basename match
+        let filter = RepoFilter::Smart("project".into());
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::TimeRange {
+                since: "2000-01-01T00:00:00Z".into(),
+                until: None,
+            },
+            false,
+            Some(&filter),
+        )
+        .unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.repo_path == "/home/user/project"));
+    }
+
+    #[test]
+    fn query_repo_substring_match() {
+        let conn = setup_test_db();
+        // "/user/" contains slash -> substring match (matches both repos)
+        let filter = RepoFilter::Smart("/user/".into());
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::TimeRange {
+                since: "2000-01-01T00:00:00Z".into(),
+                until: None,
+            },
+            false,
+            Some(&filter),
+        )
+        .unwrap();
+        assert_eq!(records.len(), 4);
+    }
+
+    #[test]
+    fn query_repo_none_shows_all() {
+        let conn = setup_test_db();
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::TimeRange {
+                since: "2000-01-01T00:00:00Z".into(),
+                until: None,
+            },
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(records.len(), 4);
+    }
+
+    #[test]
+    fn format_table_shows_repo_column() {
+        let conn = setup_test_db();
+        let records =
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None)
+                .unwrap();
+        let output = format_table(&records);
+        assert!(output.contains("REPO"));
+        assert!(output.contains("project"));
+    }
+
+    #[test]
+    fn format_json_includes_repo_path() {
+        let conn = setup_test_db();
+        let records =
+            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None)
+                .unwrap();
+        let output = format_json(&records).unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed[0]["repo_path"], "/home/user/project");
+    }
+
+    #[test]
+    fn repo_basename_extraction() {
+        assert_eq!(repo_basename("/home/user/project"), "project");
+        assert_eq!(repo_basename("project"), "project");
+        assert_eq!(repo_basename("/a/b/c"), "c");
+        assert_eq!(repo_basename(""), "");
     }
 }
