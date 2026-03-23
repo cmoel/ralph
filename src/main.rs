@@ -1341,6 +1341,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                         tool_use_id.as_deref(),
                         &input_json,
                         app.tool_call_sequence,
+                        &app.repo_path,
                     )
                     .is_none()
                     {

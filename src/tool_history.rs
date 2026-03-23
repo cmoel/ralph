@@ -360,6 +360,7 @@ mod tests {
             Some("tu_1"),
             r#"{"path":"/tmp"}"#,
             1,
+            "/home/user/project",
         );
         db::insert_tool_call(
             &conn,
@@ -368,6 +369,7 @@ mod tests {
             Some("tu_2"),
             r#"{"command":"ls"}"#,
             2,
+            "/home/user/project",
         );
         db::insert_tool_call(
             &conn,
@@ -376,6 +378,7 @@ mod tests {
             Some("tu_3"),
             r#"{"path":"/out"}"#,
             1,
+            "/home/user/other",
         );
         db::insert_tool_call(
             &conn,
@@ -384,6 +387,7 @@ mod tests {
             Some("tu_4"),
             r#"{"command":"rm"}"#,
             2,
+            "/home/user/other",
         );
 
         // Mark one as an error

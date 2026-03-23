@@ -269,6 +269,8 @@ pub struct App {
     pub worktree_path: Option<PathBuf>,
     /// Handle to the heartbeat thread (so we can signal it to stop).
     pub heartbeat_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Resolved repository path for tool history tracking.
+    pub repo_path: String,
 }
 
 impl App {
@@ -361,6 +363,7 @@ impl App {
             worktree_name: None,
             worktree_path: None,
             heartbeat_stop: None,
+            repo_path: crate::db::detect_repo_path(),
         }
     }
 

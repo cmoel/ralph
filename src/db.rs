@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use tracing::warn;
 
 #[cfg(test)]
-const CURRENT_SCHEMA_VERSION: i32 = 2;
+const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 /// Returns the platform-appropriate database directory.
 ///
@@ -75,6 +75,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     if current < 2 {
         migrate_v2(conn)?;
     }
+    if current < 3 {
+        migrate_v3(conn)?;
+    }
 
     Ok(())
 }
@@ -116,6 +119,35 @@ fn migrate_v2(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_v3(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT NOT NULL DEFAULT 'unknown';
+
+        CREATE INDEX IF NOT EXISTS idx_tool_calls_repo_path
+            ON tool_calls(repo_path);
+
+        INSERT INTO schema_version (version) VALUES (3);",
+    )?;
+    Ok(())
+}
+
+/// Detects the git repository root, falling back to the current working directory.
+pub fn detect_repo_path() -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Inserts a tool call record at ContentBlockStop time.
 /// Returns the row ID on success, or logs a warning and returns None on failure.
 pub fn insert_tool_call(
@@ -125,12 +157,13 @@ pub fn insert_tool_call(
     tool_use_id: Option<&str>,
     tool_arguments: &str,
     sequence_number: u32,
+    repo_path: &str,
 ) -> Option<i64> {
     let timestamp = iso8601_now();
     match conn.execute(
-        "INSERT INTO tool_calls (session_id, tool_name, tool_use_id, tool_arguments, timestamp, sequence_number)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![session_id, tool_name, tool_use_id, tool_arguments, timestamp, sequence_number],
+        "INSERT INTO tool_calls (session_id, tool_name, tool_use_id, tool_arguments, timestamp, sequence_number, repo_path)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![session_id, tool_name, tool_use_id, tool_arguments, timestamp, sequence_number, repo_path],
     ) {
         Ok(_) => Some(conn.last_insert_rowid()),
         Err(e) => {
@@ -226,11 +259,11 @@ mod tests {
     fn tool_calls_table_has_all_columns() {
         let conn = open_memory().unwrap();
 
-        // Insert a row including the v2 tool_use_id column.
+        // Insert a row including v2 tool_use_id and v3 repo_path columns.
         conn.execute(
-            "INSERT INTO tool_calls (session_id, tool_name, tool_use_id, tool_arguments, is_error, result_content, timestamp, sequence_number)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params!["sess-1", "Read", "toolu_abc123", r#"{"path":"/tmp"}"#, 0, "ok", "2026-03-17T12:00:00Z", 1],
+            "INSERT INTO tool_calls (session_id, tool_name, tool_use_id, tool_arguments, is_error, result_content, timestamp, sequence_number, repo_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params!["sess-1", "Read", "toolu_abc123", r#"{"path":"/tmp"}"#, 0, "ok", "2026-03-17T12:00:00Z", 1, "/home/user/project"],
         )
         .unwrap();
 
@@ -283,6 +316,7 @@ mod tests {
         assert!(indexes.contains(&"idx_tool_calls_tool_name".to_string()));
         assert!(indexes.contains(&"idx_tool_calls_timestamp".to_string()));
         assert!(indexes.contains(&"idx_tool_calls_tool_use_id".to_string()));
+        assert!(indexes.contains(&"idx_tool_calls_repo_path".to_string()));
     }
 
     #[test]
@@ -296,14 +330,15 @@ mod tests {
             Some("toolu_abc"),
             r#"{"path":"/tmp"}"#,
             1,
+            "/home/user/project",
         );
         assert!(id.is_some());
 
-        let (name, use_id, args, seq): (String, Option<String>, String, u32) = conn
+        let (name, use_id, args, seq, repo): (String, Option<String>, String, u32, String) = conn
             .query_row(
-                "SELECT tool_name, tool_use_id, tool_arguments, sequence_number FROM tool_calls WHERE id = ?1",
+                "SELECT tool_name, tool_use_id, tool_arguments, sequence_number, repo_path FROM tool_calls WHERE id = ?1",
                 [id.unwrap()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .unwrap();
 
@@ -311,13 +346,14 @@ mod tests {
         assert_eq!(use_id.as_deref(), Some("toolu_abc"));
         assert_eq!(args, r#"{"path":"/tmp"}"#);
         assert_eq!(seq, 1);
+        assert_eq!(repo, "/home/user/project");
     }
 
     #[test]
     fn insert_without_tool_use_id() {
         let conn = open_memory().unwrap();
 
-        let id = insert_tool_call(&conn, "sess-1", "Read", None, "{}", 1);
+        let id = insert_tool_call(&conn, "sess-1", "Read", None, "{}", 1, "/tmp");
         assert!(id.is_some());
 
         let use_id: Option<String> = conn
@@ -341,6 +377,7 @@ mod tests {
             Some("toolu_xyz"),
             r#"{"command":"ls"}"#,
             1,
+            "/tmp",
         );
 
         let updated = update_tool_result(&conn, "toolu_xyz", "sess-1", false, "file1\nfile2");
@@ -369,6 +406,7 @@ mod tests {
             Some("toolu_err"),
             r#"{"command":"false"}"#,
             1,
+            "/tmp",
         );
 
         let updated = update_tool_result(&conn, "toolu_err", "sess-1", true, "command failed");
@@ -404,6 +442,7 @@ mod tests {
             Some("toolu_crash"),
             r#"{"command":"hang"}"#,
             1,
+            "/tmp",
         );
 
         // Simulate crash: no update_tool_result call
@@ -419,6 +458,45 @@ mod tests {
             result.is_none(),
             "result_content should be NULL for incomplete calls"
         );
+    }
+
+    #[test]
+    fn existing_rows_get_unknown_repo_path() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Run only v1 and v2 migrations
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
+        )
+        .unwrap();
+        migrate_v1(&conn).unwrap();
+        migrate_v2(&conn).unwrap();
+
+        // Insert a row without repo_path (pre-v3 schema)
+        conn.execute(
+            "INSERT INTO tool_calls (session_id, tool_name, tool_arguments, timestamp, sequence_number)
+             VALUES ('sess-old', 'Read', '{}', '2026-01-01T00:00:00Z', 1)",
+            [],
+        )
+        .unwrap();
+
+        // Run v3 migration
+        migrate_v3(&conn).unwrap();
+
+        // Old row should have 'unknown' as repo_path
+        let repo: String = conn
+            .query_row(
+                "SELECT repo_path FROM tool_calls WHERE session_id = 'sess-old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(repo, "unknown");
+    }
+
+    #[test]
+    fn detect_repo_path_returns_something() {
+        let path = detect_repo_path();
+        assert!(!path.is_empty());
     }
 
     #[test]
