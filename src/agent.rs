@@ -36,6 +36,7 @@ pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
             "--ephemeral",
             "--no-history",
             "--json",
+            "--description=Ephemeral ralph agent bead",
             &format!("--title=ralph agent {}", session_id),
         ])
         .stdin(std::process::Stdio::null())
