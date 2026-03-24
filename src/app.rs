@@ -185,6 +185,8 @@ pub struct App {
     pub kanban_board_state: Option<KanbanBoardState>,
     /// Receiver for background bd list --json result (kanban board).
     pub kanban_items_rx: Option<Receiver<Result<Vec<serde_json::Value>, String>>>,
+    /// Receiver for background bd show --json result (bead detail drill-down).
+    pub bead_detail_rx: Option<Receiver<Result<serde_json::Value, String>>>,
     /// Whether the stale recovery modal is visible.
     pub show_stale_modal: bool,
     /// State for the stale recovery modal (when open).
@@ -281,6 +283,7 @@ impl App {
             show_kanban_board: false,
             kanban_board_state: None,
             kanban_items_rx: None,
+            bead_detail_rx: None,
             show_stale_modal: false,
             stale_modal_state: None,
             pending_stale_check: None,
@@ -568,7 +571,6 @@ impl App {
         }
     }
 
-
     /// Poll for background list_items result (work panel modal).
     pub fn poll_work_items(&mut self) {
         let rx = match self.work_items_rx.take() {
@@ -616,6 +618,36 @@ impl App {
                 self.dirty = true;
                 if let Some(ref mut board) = self.kanban_board_state {
                     board.populate(Err("Background fetch failed".to_string()));
+                }
+            }
+        }
+    }
+
+    /// Poll for background bead detail data (drill-down from kanban board).
+    pub fn poll_bead_detail(&mut self) {
+        let rx = match self.bead_detail_rx.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                self.dirty = true;
+                if let Some(ref mut board) = self.kanban_board_state
+                    && let Some(ref mut detail) = board.detail_view
+                {
+                    detail.populate(result);
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.bead_detail_rx = Some(rx); // still running
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.dirty = true;
+                if let Some(ref mut board) = self.kanban_board_state
+                    && let Some(ref mut detail) = board.detail_view
+                {
+                    detail.populate(Err("Background fetch failed".to_string()));
                 }
             }
         }

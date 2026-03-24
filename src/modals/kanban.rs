@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::app::App;
 use crate::ui::centered_rect;
@@ -15,6 +15,137 @@ use crate::ui::centered_rect;
 pub struct KanbanCard {
     pub id: String,
     pub title: String,
+}
+
+/// Parsed detail data for a single bead.
+#[derive(Debug)]
+pub struct BeadDetailState {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub priority: String,
+    pub issue_type: String,
+    pub labels: Vec<String>,
+    pub notes: String,
+    pub design: String,
+    pub dependencies: Vec<BeadDependency>,
+    pub scroll_offset: u16,
+    pub is_loading: bool,
+    pub error: Option<String>,
+}
+
+/// A dependency entry in a bead detail.
+#[derive(Debug)]
+pub struct BeadDependency {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub dep_type: String,
+}
+
+impl BeadDetailState {
+    pub fn new_loading(id: String) -> Self {
+        Self {
+            id,
+            title: String::new(),
+            description: String::new(),
+            status: String::new(),
+            priority: String::new(),
+            issue_type: String::new(),
+            labels: Vec::new(),
+            notes: String::new(),
+            design: String::new(),
+            dependencies: Vec::new(),
+            scroll_offset: 0,
+            is_loading: true,
+            error: None,
+        }
+    }
+
+    pub fn populate(&mut self, result: Result<serde_json::Value, String>) {
+        self.is_loading = false;
+        match result {
+            Ok(item) => {
+                self.title = item
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.description = item
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.status = item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.priority = match item.get("priority").and_then(|v| v.as_u64()) {
+                    Some(p) => format!("P{p}"),
+                    None => String::new(),
+                };
+                self.issue_type = item
+                    .get("issue_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.labels = item
+                    .get("labels")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|l| l.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.notes = item
+                    .get("notes")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.design = item
+                    .get("design")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.dependencies = item
+                    .get("dependencies")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|dep| BeadDependency {
+                                id: dep
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                title: dep
+                                    .get("title")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                status: dep
+                                    .get("status")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                dep_type: dep
+                                    .get("dependency_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
+            Err(e) => {
+                self.error = Some(e);
+            }
+        }
+    }
 }
 
 /// Kanban board columns.
@@ -60,6 +191,8 @@ pub struct KanbanBoardState {
     pub is_loading: bool,
     /// Error message if loading failed.
     pub error: Option<String>,
+    /// Detail drill-down view (when Some, renders detail instead of board).
+    pub detail_view: Option<BeadDetailState>,
 }
 
 impl KanbanBoardState {
@@ -70,7 +203,15 @@ impl KanbanBoardState {
             selected_row: vec![0; 5],
             is_loading: true,
             error: None,
+            detail_view: None,
         }
+    }
+
+    /// Returns the currently selected card, if any.
+    pub fn selected_card(&self) -> Option<&KanbanCard> {
+        let col = self.selected_column;
+        let row = self.selected_row[col];
+        self.columns[col].get(row)
     }
 
     pub fn populate(&mut self, result: Result<Vec<serde_json::Value>, String>) {
@@ -165,10 +306,62 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
         return;
     };
 
+    // If detail view is open, handle detail input
+    if let Some(detail) = &mut state.detail_view {
+        match key_code {
+            KeyCode::Esc => {
+                state.detail_view = None;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                detail.scroll_offset = detail.scroll_offset.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                detail.scroll_offset = detail.scroll_offset.saturating_sub(1);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     match key_code {
         KeyCode::Esc => {
             app.show_kanban_board = false;
             app.kanban_board_state = None;
+        }
+        KeyCode::Enter => {
+            if let Some(card) = state.selected_card() {
+                let bead_id = card.id.clone();
+                state.detail_view = Some(BeadDetailState::new_loading(bead_id.clone()));
+                let bd_path = app.config.behavior.bd_path.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let output = std::process::Command::new(&bd_path)
+                        .args(["show", &bead_id, "--json"])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .output();
+                    let result = match output {
+                        Ok(out) if out.status.success() => {
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            serde_json::from_str::<serde_json::Value>(&stdout)
+                                .map(|val| {
+                                    // bd show --json returns an array; take the first element
+                                    if let Some(arr) = val.as_array() {
+                                        arr.first().cloned().unwrap_or(val)
+                                    } else {
+                                        val
+                                    }
+                                })
+                                .map_err(|e| e.to_string())
+                        }
+                        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).to_string()),
+                        Err(e) => Err(e.to_string()),
+                    };
+                    let _ = tx.send(result);
+                });
+                app.bead_detail_rx = Some(rx);
+            }
         }
         KeyCode::Char('h') | KeyCode::Left => {
             state.move_left();
@@ -191,6 +384,12 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
     let Some(state) = &app.kanban_board_state else {
         return;
     };
+
+    // If detail view is active, draw that instead
+    if let Some(detail) = &state.detail_view {
+        draw_bead_detail(f, detail);
+        return;
+    }
 
     // Use most of the screen
     let area = f.area();
@@ -340,6 +539,200 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             .title_alignment(Alignment::Center)
             .style(Style::default().fg(Color::White)),
     );
+
+    f.render_widget(modal, modal_area);
+}
+
+/// Draw the bead detail drill-down view.
+fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
+    let area = f.area();
+    let modal_width = area.width.saturating_sub(4).min(100);
+    let modal_height = area.height.saturating_sub(2);
+    let modal_area = centered_rect(modal_width, modal_height, area);
+
+    f.render_widget(Clear, modal_area);
+
+    let mut content: Vec<Line> = Vec::new();
+
+    if detail.is_loading {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "  Loading...",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if let Some(error) = &detail.error {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            format!("  Error: {error}"),
+            Style::default().fg(Color::Red),
+        )));
+    } else {
+        // Title
+        content.push(Line::from(vec![Span::styled(
+            &detail.title,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )]));
+        content.push(Line::from(""));
+
+        // Metadata line: ID · status · priority · type
+        let mut meta: Vec<Span> = vec![Span::styled(&detail.id, Style::default().fg(Color::Cyan))];
+        if !detail.status.is_empty() {
+            meta.push(Span::styled(
+                " \u{b7} ",
+                Style::default().fg(Color::DarkGray),
+            ));
+            let status_color = match detail.status.as_str() {
+                "open" => Color::Green,
+                "in_progress" => Color::Yellow,
+                "closed" => Color::DarkGray,
+                "blocked" => Color::Red,
+                "deferred" => Color::DarkGray,
+                _ => Color::White,
+            };
+            meta.push(Span::styled(
+                &detail.status,
+                Style::default().fg(status_color),
+            ));
+        }
+        if !detail.priority.is_empty() {
+            meta.push(Span::styled(
+                " \u{b7} ",
+                Style::default().fg(Color::DarkGray),
+            ));
+            meta.push(Span::styled(
+                &detail.priority,
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+        if !detail.issue_type.is_empty() {
+            meta.push(Span::styled(
+                " \u{b7} ",
+                Style::default().fg(Color::DarkGray),
+            ));
+            meta.push(Span::styled(
+                &detail.issue_type,
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        content.push(Line::from(meta));
+
+        // Labels
+        if !detail.labels.is_empty() {
+            let mut label_spans: Vec<Span> = vec![Span::styled(
+                "Labels: ",
+                Style::default().fg(Color::DarkGray),
+            )];
+            for (i, label) in detail.labels.iter().enumerate() {
+                if i > 0 {
+                    label_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
+                }
+                label_spans.push(Span::styled(label, Style::default().fg(Color::Yellow)));
+            }
+            content.push(Line::from(label_spans));
+        }
+
+        // Dependencies
+        if !detail.dependencies.is_empty() {
+            content.push(Line::from(""));
+            content.push(Line::from(Span::styled(
+                "Dependencies",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for dep in &detail.dependencies {
+                let status_icon = match dep.status.as_str() {
+                    "closed" => "\u{2713}",
+                    "in_progress" => "\u{25d0}",
+                    "blocked" => "\u{25cf}",
+                    _ => "\u{25cb}",
+                };
+                let arrow = if dep.dep_type == "blocks" {
+                    "\u{2190}" // ←  this issue is blocked by dep
+                } else {
+                    "\u{2192}" // →  this issue blocks dep
+                };
+                let status_color = match dep.status.as_str() {
+                    "closed" => Color::DarkGray,
+                    "blocked" => Color::Red,
+                    _ => Color::White,
+                };
+                content.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {arrow} {status_icon} "),
+                        Style::default().fg(status_color),
+                    ),
+                    Span::styled(&dep.id, Style::default().fg(Color::Cyan)),
+                    Span::styled(" ", Style::default()),
+                    Span::styled(&dep.title, Style::default().fg(status_color)),
+                ]));
+            }
+        }
+
+        // Description
+        if !detail.description.is_empty() {
+            content.push(Line::from(""));
+            content.push(Line::from(Span::styled(
+                "Description",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in detail.description.lines() {
+                content.push(Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(Color::Gray),
+                )));
+            }
+        }
+
+        // Design
+        if !detail.design.is_empty() {
+            content.push(Line::from(""));
+            content.push(Line::from(Span::styled(
+                "Design",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in detail.design.lines() {
+                content.push(Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(Color::Gray),
+                )));
+            }
+        }
+
+        // Notes
+        if !detail.notes.is_empty() {
+            content.push(Line::from(""));
+            content.push(Line::from(Span::styled(
+                "Notes",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in detail.notes.lines() {
+                content.push(Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(Color::Gray),
+                )));
+            }
+        }
+    }
+
+    let modal = Paragraph::new(content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", detail.id))
+                .title_alignment(Alignment::Center)
+                .style(Style::default().fg(Color::White)),
+        )
+        .wrap(Wrap { trim: false })
+        .scroll((detail.scroll_offset, 0));
 
     f.render_widget(modal, modal_area);
 }

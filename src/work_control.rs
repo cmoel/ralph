@@ -1,7 +1,7 @@
 //! Auto-continue and iteration control logic.
 
-use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::Instant;
 
 use tracing::{info, warn};

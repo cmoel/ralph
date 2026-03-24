@@ -289,6 +289,7 @@ fn run_app(
         app.poll_work_check();
         app.poll_work_items();
         app.poll_kanban_items();
+        app.poll_bead_detail();
 
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
