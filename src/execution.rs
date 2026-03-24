@@ -59,6 +59,11 @@ pub fn claim_before_start(app: &mut App) -> bool {
     if app.config.behavior.mode != "beads" {
         return true;
     }
+    // Release any previously hooked bead before claiming a new one.
+    // Without this, auto-continue overwrites hooked_bead_id and orphans
+    // the old bead in in_progress status forever.
+    app.release_hooked_bead();
+
     let agent_id = match &app.agent_bead_id {
         Some(id) => id.clone(),
         None => return true, // no agent registered, skip claiming
