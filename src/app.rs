@@ -22,7 +22,8 @@ use crate::modals::{
 };
 use crate::wake_lock::WakeLock;
 use crate::work_source::{WorkItem, WorkRemaining, WorkSource, create_work_source};
-use crate::{OutputMessage, get_file_mtime, logging};
+use crate::output::OutputMessage;
+use crate::{get_file_mtime, logging};
 
 /// Application status states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
