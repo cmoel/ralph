@@ -10,11 +10,12 @@ use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::app::{App, AppStatus, DoltServerState, SelectedPanel, ToolCallStatus};
+use crate::app::{App, AppStatus, DoltServerState};
 use crate::modals::{
     draw_config_modal, draw_help_modal, draw_init_modal, draw_kanban_board, draw_quit_modal,
     draw_specs_panel, draw_stale_modal, draw_tool_allow_modal,
 };
+use crate::tool_panel::{SelectedPanel, ToolCallStatus};
 
 /// Maximum length for truncated tool input display.
 pub const TOOL_INPUT_MAX_LEN: usize = 60;
@@ -411,7 +412,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     use ratatui::widgets::Wrap;
 
     let command_height = 3u16; // Fixed: border + 1 content + border
-    let show_tools_column = !app.tool_panel_collapsed && !app.tool_call_entries.is_empty();
+    let show_tools_column = !app.tool_panel.collapsed && !app.tool_panel.entries.is_empty();
 
     // Two-level layout: content area (flexible) + command bar (fixed)
     let outer = Layout::default()
@@ -475,7 +476,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     };
 
     // Top title: session ID (left), spec name (right)
-    let output_border_color = if app.selected_panel == SelectedPanel::Main {
+    let output_border_color = if app.tool_panel.selected_panel == SelectedPanel::Main {
         Color::White
     } else {
         app.status.status_color()
@@ -531,10 +532,10 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
     // === Tools Panel ===
     if let Some(tools_area) = tools_area {
-        app.tool_panel_height = tools_area.height;
+        app.tool_panel.height = tools_area.height;
         draw_tool_panel(f, app, tools_area);
     } else {
-        app.tool_panel_height = 0;
+        app.tool_panel.height = 0;
     }
 
     // === Command Panel ===
@@ -718,7 +719,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
 /// Draw the tools panel (right column).
 fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
-    let is_selected = app.selected_panel == SelectedPanel::Tools;
+    let is_selected = app.tool_panel.selected_panel == SelectedPanel::Tools;
     let border_color = if is_selected {
         Color::White
     } else {
@@ -726,10 +727,10 @@ fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
     };
     let border_type = app.status.border_type();
 
-    let entry_count = app.tool_call_entries.len();
+    let entry_count = app.tool_panel.entries.len();
 
     // Collapsed state: single line with count
-    if entry_count == 0 || app.tool_panel_collapsed {
+    if entry_count == 0 || app.tool_panel.collapsed {
         let title = if entry_count == 0 {
             " Tools ".to_string()
         } else {
@@ -753,13 +754,14 @@ fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
         .add_modifier(Modifier::BOLD);
 
     let selected_idx = if is_selected {
-        app.tool_panel_selected
+        app.tool_panel.selected
     } else {
         None
     };
 
     let lines: Vec<Line> = app
-        .tool_call_entries
+        .tool_panel
+        .entries
         .iter()
         .enumerate()
         .map(|(i, entry)| {
@@ -810,7 +812,7 @@ fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
     let scroll_offset = if !is_selected {
         entry_count.saturating_sub(inner_height as usize) as u16
     } else {
-        app.tool_panel_scroll_offset
+        app.tool_panel.scroll_offset
     };
 
     let panel = Paragraph::new(lines)

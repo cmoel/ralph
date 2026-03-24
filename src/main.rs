@@ -16,6 +16,7 @@ mod prompt_sniff;
 mod specs;
 mod templates;
 mod tool_history;
+mod tool_panel;
 mod tool_settings;
 mod ui;
 mod validators;
@@ -24,14 +25,15 @@ mod work_source;
 
 use clap::Parser;
 
+use crate::app::{App, AppStatus};
 use crate::cli::{Cli, Commands, ToolCommands};
-use crate::app::{App, AppStatus, SelectedPanel};
 use crate::config::{LoadedConfig, load_global_config, load_project_config};
 use crate::modals::{
     ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
     handle_config_modal_input, handle_init_modal_input, handle_kanban_input,
     handle_specs_panel_input, handle_tool_allow_modal_input,
 };
+use crate::tool_panel::SelectedPanel;
 use crate::ui::draw_ui;
 
 use std::io;
@@ -53,7 +55,6 @@ use crossterm::terminal::{
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, info, warn};
 
-
 /// Direction for scroll operations.
 enum ScrollDirection {
     Up,
@@ -62,14 +63,14 @@ enum ScrollDirection {
 
 /// Scroll the focused panel.
 fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
-    match app.selected_panel {
+    match app.tool_panel.selected_panel {
         SelectedPanel::Main => match direction {
             ScrollDirection::Up => app.scroll_up(amount),
             ScrollDirection::Down => app.scroll_down(amount),
         },
         SelectedPanel::Tools => match direction {
-            ScrollDirection::Up => app.scroll_tools_up(amount),
-            ScrollDirection::Down => app.scroll_tools_down(amount),
+            ScrollDirection::Up => app.tool_panel.scroll_up(amount),
+            ScrollDirection::Down => app.tool_panel.scroll_down(amount),
         },
     }
 }
@@ -524,21 +525,21 @@ fn run_app(
                         app.toggle_dolt_server();
                     }
                     KeyCode::Tab => {
-                        app.selected_panel.toggle();
-                        if app.selected_panel == SelectedPanel::Tools
-                            && app.tool_panel_selected.is_none()
-                            && !app.tool_call_entries.is_empty()
+                        app.tool_panel.selected_panel.toggle();
+                        if app.tool_panel.selected_panel == SelectedPanel::Tools
+                            && app.tool_panel.selected.is_none()
+                            && !app.tool_panel.entries.is_empty()
                         {
-                            app.tool_panel_selected =
-                                Some(app.tool_call_entries.len().saturating_sub(1));
+                            app.tool_panel.selected =
+                                Some(app.tool_panel.entries.len().saturating_sub(1));
                         }
                     }
                     KeyCode::Char('t') => {
-                        app.tool_panel_collapsed = !app.tool_panel_collapsed;
+                        app.tool_panel.collapsed = !app.tool_panel.collapsed;
                     }
-                    KeyCode::Char('A') if app.selected_panel == SelectedPanel::Tools => {
-                        if let Some(idx) = app.tool_panel_selected
-                            && let Some(entry) = app.tool_call_entries.get(idx)
+                    KeyCode::Char('A') if app.tool_panel.selected_panel == SelectedPanel::Tools => {
+                        if let Some(idx) = app.tool_panel.selected
+                            && let Some(entry) = app.tool_panel.entries.get(idx)
                         {
                             app.show_tool_allow_modal = true;
                             app.tool_allow_modal_state =

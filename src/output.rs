@@ -1,10 +1,11 @@
 //! Output processing pipeline — drains the mpsc channel and processes Claude NDJSON events.
 
-use crate::app::{App, ContentBlockState, PendingToolCall, ToolCallEntry, ToolCallStatus};
+use crate::app::App;
 use crate::db;
 use crate::events::{
     ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
 };
+use crate::tool_panel::{ContentBlockState, PendingToolCall, ToolCallEntry, ToolCallStatus};
 use crate::ui::{
     ExchangeType, extract_text_from_task_result, extract_tool_summary,
     format_assistant_header_styled, format_no_result_warning_styled, format_tool_result_styled,
@@ -171,7 +172,8 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
                         } => {
                             // Look up tool name from our mapping
                             let tool_name = app
-                                .tool_id_to_name
+                                .tool_panel
+                                .id_to_name
                                 .get(&tool_use_id)
                                 .cloned()
                                 .unwrap_or_else(|| {
@@ -216,10 +218,11 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
                             } else {
                                 ToolCallStatus::Success
                             };
-                            app.update_tool_call_status(&tool_use_id, panel_status);
+                            app.tool_panel.update_status(&tool_use_id, panel_status);
 
                             // Check for pending tool call to correlate with
-                            if let Some(pending) = app.pending_tool_calls.remove(&tool_use_id) {
+                            if let Some(pending) = app.tool_panel.pending_calls.remove(&tool_use_id)
+                            {
                                 // Display tool call first
                                 app.add_line(pending.styled_line);
                                 // Display result indented under call
@@ -253,7 +256,7 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
         ClaudeEvent::Result(result) => {
             debug!(?result, "Result event");
             // Flush any pending tool calls that never received results
-            let pending_calls: Vec<_> = app.pending_tool_calls.drain().collect();
+            let pending_calls: Vec<_> = app.tool_panel.pending_calls.drain().collect();
             for (_id, pending) in pending_calls {
                 app.add_line(pending.styled_line);
                 app.add_line(indent_line(format_no_result_warning_styled()));
@@ -291,7 +294,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             // Clear content blocks for new message
             app.content_blocks.clear();
             // Clear pending tool calls (new assistant turn)
-            app.pending_tool_calls.clear();
+            app.tool_panel.pending_calls.clear();
         }
         StreamInnerEvent::ContentBlockStart(block_start) => {
             let index = block_start.index;
@@ -360,7 +363,9 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             if let Some((tool_name, tool_use_id, input_json)) = block_data {
                 // Register tool_use_id → tool_name mapping for result correlation
                 if let Some(ref id) = tool_use_id {
-                    app.tool_id_to_name.insert(id.clone(), tool_name.clone());
+                    app.tool_panel
+                        .id_to_name
+                        .insert(id.clone(), tool_name.clone());
                 }
                 // Record tool call to history DB
                 if let Some(ref conn) = app.tool_history_db {
@@ -383,7 +388,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                 app.last_tool_used = Some(tool_name.clone());
                 // Add entry to tool panel
                 let summary = extract_tool_summary(&tool_name, &input_json);
-                app.add_tool_call_entry(ToolCallEntry {
+                app.tool_panel.add_entry(ToolCallEntry {
                     tool_name: tool_name.clone(),
                     summary,
                     status: ToolCallStatus::Pending,
@@ -392,7 +397,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                 let styled_line = format_tool_summary_styled(&tool_name, &input_json);
                 // Buffer tool call if it has an ID (for correlation with result)
                 if let Some(ref id) = tool_use_id {
-                    app.pending_tool_calls.insert(
+                    app.tool_panel.pending_calls.insert(
                         id.clone(),
                         PendingToolCall {
                             tool_name: tool_name.clone(),

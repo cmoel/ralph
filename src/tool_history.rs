@@ -257,9 +257,7 @@ fn build_query(
                 params.push(value.clone());
             } else {
                 let n = params.len() + 1;
-                conditions.push(format!(
-                    "(repo_path LIKE '%/' || ?{n} OR repo_path = ?{n})"
-                ));
+                conditions.push(format!("(repo_path LIKE '%/' || ?{n} OR repo_path = ?{n})"));
                 params.push(value.clone());
             }
         }
@@ -464,8 +462,13 @@ mod tests {
     #[test]
     fn query_by_session() {
         let conn = setup_test_db();
-        let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None).unwrap();
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::Session("sess-aaa111".into()),
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.session_id == "sess-aaa111"));
     }
@@ -473,7 +476,8 @@ mod tests {
     #[test]
     fn query_by_tool_case_insensitive() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::Tool("bash".into()), false, None).unwrap();
+        let records =
+            query_tool_calls(&conn, &QueryFilter::Tool("bash".into()), false, None).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|r| r.tool_name == "Bash"));
     }
@@ -481,7 +485,8 @@ mod tests {
     #[test]
     fn query_rejected_only() {
         let conn = setup_test_db();
-        let records = query_tool_calls(&conn, &QueryFilter::Tool("Bash".into()), true, None).unwrap();
+        let records =
+            query_tool_calls(&conn, &QueryFilter::Tool("Bash".into()), true, None).unwrap();
         assert_eq!(records.len(), 1);
         assert!(records[0].is_error);
         assert_eq!(records[0].session_id, "sess-bbb222");
@@ -547,8 +552,13 @@ mod tests {
     #[test]
     fn format_table_with_records() {
         let conn = setup_test_db();
-        let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None).unwrap();
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::Session("sess-aaa111".into()),
+            false,
+            None,
+        )
+        .unwrap();
         let output = format_table(&records);
         assert!(output.contains("TOOL"));
         assert!(output.contains("Read"));
@@ -559,8 +569,13 @@ mod tests {
     #[test]
     fn format_json_output() {
         let conn = setup_test_db();
-        let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None).unwrap();
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::Session("sess-aaa111".into()),
+            false,
+            None,
+        )
+        .unwrap();
         let output = format_json(&records).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed.len(), 2);
@@ -705,9 +720,13 @@ mod tests {
     #[test]
     fn format_table_shows_repo_column() {
         let conn = setup_test_db();
-        let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None)
-                .unwrap();
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::Session("sess-aaa111".into()),
+            false,
+            None,
+        )
+        .unwrap();
         let output = format_table(&records);
         assert!(output.contains("REPO"));
         assert!(output.contains("project"));
@@ -716,9 +735,13 @@ mod tests {
     #[test]
     fn format_json_includes_repo_path() {
         let conn = setup_test_db();
-        let records =
-            query_tool_calls(&conn, &QueryFilter::Session("sess-aaa111".into()), false, None)
-                .unwrap();
+        let records = query_tool_calls(
+            &conn,
+            &QueryFilter::Session("sess-aaa111".into()),
+            false,
+            None,
+        )
+        .unwrap();
         let output = format_json(&records).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
         assert_eq!(parsed[0]["repo_path"], "/home/user/project");

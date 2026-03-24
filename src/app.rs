@@ -20,9 +20,9 @@ use crate::logging::ReloadHandle;
 use crate::modals::{
     ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
 };
+use crate::output::OutputMessage;
 use crate::wake_lock::WakeLock;
 use crate::work_source::{WorkItem, WorkRemaining, WorkSource, create_work_source};
-use crate::output::OutputMessage;
 use crate::{get_file_mtime, logging};
 
 /// Application status states.
@@ -33,8 +33,8 @@ pub enum AppStatus {
     Error,
 }
 
-pub use crate::dolt::DoltServerState;
 use crate::dolt::DoltManager;
+pub use crate::dolt::DoltServerState;
 
 impl AppStatus {
     pub fn border_type(&self) -> BorderType {
@@ -54,69 +54,7 @@ impl AppStatus {
     }
 }
 
-/// Tracks accumulated state for a content block being streamed.
-#[derive(Debug, Default)]
-pub struct ContentBlockState {
-    /// For text blocks: accumulated text content.
-    pub text: String,
-    /// For tool_use blocks: the tool name.
-    pub tool_name: Option<String>,
-    /// For tool_use blocks: the tool use ID (for correlating with results).
-    pub tool_use_id: Option<String>,
-    /// For tool_use blocks: accumulated JSON input string.
-    pub input_json: String,
-    /// Whether we've shown the assistant header for this text block.
-    pub header_shown: bool,
-}
-
-/// A pending tool call waiting for its result.
-#[derive(Debug, Clone)]
-pub struct PendingToolCall {
-    /// The tool name (e.g., "Read", "Bash").
-    pub tool_name: String,
-    /// The styled line to display.
-    pub styled_line: Line<'static>,
-}
-
-/// Status of a tool call in the panel display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolCallStatus {
-    /// Tool call sent, waiting for result.
-    Pending,
-    /// Tool call completed successfully.
-    Success,
-    /// Tool call returned an error.
-    Error,
-}
-
-/// A tool call entry for the panel display.
-#[derive(Debug, Clone)]
-pub struct ToolCallEntry {
-    /// The tool name (e.g., "Read", "Bash").
-    pub tool_name: String,
-    /// Summary of the key argument (e.g., "git status", "/path/to/file.rs").
-    pub summary: String,
-    /// Current status.
-    pub status: ToolCallStatus,
-    /// Tool use ID for correlating with results.
-    pub tool_use_id: Option<String>,
-}
-
-/// Which panel is currently focused for scrolling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectedPanel {
-    Main,
-    Tools,
-}
-
-impl SelectedPanel {
-    pub fn toggle(&mut self) {
-        *self = match self {
-            SelectedPanel::Main => SelectedPanel::Tools,
-            SelectedPanel::Tools => SelectedPanel::Main,
-        }
-    }
-}
+use crate::tool_panel::{ContentBlockState, ToolPanel};
 
 /// Main application state.
 pub struct App {
@@ -203,10 +141,8 @@ pub struct App {
     pub last_tool_used: Option<String>,
     /// Wake lock to prevent system idle sleep while running.
     pub wake_lock: Option<WakeLock>,
-    /// Maps tool_use_id to tool name for correlating results with calls.
-    pub tool_id_to_name: HashMap<String, String>,
-    /// Pending tool calls waiting for their results (keyed by tool_use_id).
-    pub pending_tool_calls: HashMap<String, PendingToolCall>,
+    /// Tool call tracking and panel display state.
+    pub tool_panel: ToolPanel,
     /// Whether we're currently in an indented text block (for flush).
     pub in_indented_text: bool,
     /// Pluggable work source (specs, beads, etc.).
@@ -227,18 +163,6 @@ pub struct App {
     pub tool_history_db: Option<Connection>,
     /// Sequence counter for tool calls within this session.
     pub tool_call_sequence: u32,
-    /// Tool call entries for the panel display.
-    pub tool_call_entries: Vec<ToolCallEntry>,
-    /// Scroll offset for the tool panel.
-    pub tool_panel_scroll_offset: u16,
-    /// Which panel is currently focused for scrolling.
-    pub selected_panel: SelectedPanel,
-    /// Whether the tool panel is collapsed.
-    pub tool_panel_collapsed: bool,
-    /// Cached height of the tool panel (set during draw).
-    pub tool_panel_height: u16,
-    /// Selected tool index when tools panel is focused (None = no selection).
-    pub tool_panel_selected: Option<usize>,
     /// Whether the tool allow modal is visible.
     pub show_tool_allow_modal: bool,
     /// State for the tool allow modal (when open).
@@ -335,8 +259,7 @@ impl App {
             exchange_count: 0,
             last_tool_used: None,
             wake_lock: None,
-            tool_id_to_name: HashMap::new(),
-            pending_tool_calls: HashMap::new(),
+            tool_panel: ToolPanel::new(),
             in_indented_text: false,
             work_source,
             spec_poll_rx: None,
@@ -347,12 +270,6 @@ impl App {
             doctor_rx: None,
             tool_history_db: None,
             tool_call_sequence: 0,
-            tool_call_entries: Vec::new(),
-            tool_panel_scroll_offset: 0,
-            selected_panel: SelectedPanel::Main,
-            tool_panel_collapsed: false,
-            tool_panel_height: 0,
-            tool_panel_selected: None,
             show_tool_allow_modal: false,
             tool_allow_modal_state: None,
             agent_bead_id: None,
@@ -472,88 +389,6 @@ impl App {
             info!(pid, "process_killed");
         }
         self.output_receiver = None;
-    }
-
-    /// Add a tool call entry to the panel.
-    pub fn add_tool_call_entry(&mut self, entry: ToolCallEntry) {
-        self.tool_call_entries.push(entry);
-    }
-
-    /// Update the status of a tool call entry by tool_use_id.
-    pub fn update_tool_call_status(&mut self, tool_use_id: &str, status: ToolCallStatus) {
-        if let Some(entry) = self
-            .tool_call_entries
-            .iter_mut()
-            .rev()
-            .find(|e| e.tool_use_id.as_deref() == Some(tool_use_id))
-        {
-            entry.status = status;
-        }
-    }
-
-    pub fn scroll_tools_up(&mut self, amount: u16) {
-        if amount == 1 {
-            // Single-step: move selection
-            self.select_tool_prev();
-        } else {
-            // Page scroll
-            self.tool_panel_scroll_offset = self.tool_panel_scroll_offset.saturating_sub(amount);
-        }
-    }
-
-    pub fn scroll_tools_down(&mut self, amount: u16) {
-        if amount == 1 {
-            // Single-step: move selection
-            self.select_tool_next();
-        } else {
-            // Page scroll
-            let max = self
-                .tool_call_entries
-                .len()
-                .saturating_sub(self.tool_panel_height.saturating_sub(2) as usize)
-                as u16;
-            self.tool_panel_scroll_offset = (self.tool_panel_scroll_offset + amount).min(max);
-        }
-    }
-
-    /// Move tool panel selection up.
-    fn select_tool_prev(&mut self) {
-        if self.tool_call_entries.is_empty() {
-            return;
-        }
-        let current = self.tool_panel_selected.unwrap_or(0);
-        let new = current.saturating_sub(1);
-        self.tool_panel_selected = Some(new);
-        self.ensure_tool_selection_visible();
-    }
-
-    /// Move tool panel selection down.
-    fn select_tool_next(&mut self) {
-        if self.tool_call_entries.is_empty() {
-            return;
-        }
-        let max = self.tool_call_entries.len().saturating_sub(1);
-        let current = self.tool_panel_selected.unwrap_or(0);
-        let new = (current + 1).min(max);
-        self.tool_panel_selected = Some(new);
-        self.ensure_tool_selection_visible();
-    }
-
-    /// Ensure the selected tool is visible in the scroll viewport.
-    fn ensure_tool_selection_visible(&mut self) {
-        let Some(selected) = self.tool_panel_selected else {
-            return;
-        };
-        let inner_height = self.tool_panel_height.saturating_sub(2) as usize;
-        if inner_height == 0 {
-            return;
-        }
-        let offset = self.tool_panel_scroll_offset as usize;
-        if selected < offset {
-            self.tool_panel_scroll_offset = selected as u16;
-        } else if selected >= offset + inner_height {
-            self.tool_panel_scroll_offset = (selected - inner_height + 1) as u16;
-        }
     }
 
     /// Auto-revert from Error to Stopped after a timeout.
@@ -746,9 +581,7 @@ impl App {
         match exit_code {
             Some(0) if self.should_auto_continue() => {
                 // In beads mode, skip work check if dolt server is not running
-                if self.config.behavior.mode == "beads"
-                    && self.dolt.state != DoltServerState::On
-                {
+                if self.config.behavior.mode == "beads" && self.dolt.state != DoltServerState::On {
                     self.reset_iteration_state();
                     self.status = AppStatus::Stopped;
                 } else {
@@ -1028,7 +861,10 @@ impl App {
 
     /// Poll for Dolt server status (beads mode only, throttled).
     pub fn poll_dolt_status(&mut self) {
-        if self.dolt.poll_status(&self.config.behavior.bd_path, &self.config.behavior.mode) {
+        if self
+            .dolt
+            .poll_status(&self.config.behavior.bd_path, &self.config.behavior.mode)
+        {
             self.dirty = true;
         }
     }
@@ -1065,7 +901,8 @@ impl App {
 
     /// Toggle Dolt server on/off (beads mode only).
     pub fn toggle_dolt_server(&mut self) {
-        self.dolt.toggle(&self.config.behavior.bd_path, &self.config.behavior.mode);
+        self.dolt
+            .toggle(&self.config.behavior.bd_path, &self.config.behavior.mode);
     }
 
     /// Clean up agent resources on quit (beads mode only).
@@ -1089,4 +926,3 @@ impl App {
         self.heartbeat_stop = None;
     }
 }
-
