@@ -275,6 +275,12 @@ pub struct App {
     pub hooked_bead_id: Option<String>,
     /// Resolved repository path for tool history tracking.
     pub repo_path: String,
+    /// Whether the stale recovery modal is visible.
+    pub show_stale_modal: bool,
+    /// State for the stale recovery modal (when open).
+    pub stale_modal_state: Option<crate::modals::StaleModalState>,
+    /// Receiver for background stale agent detection.
+    pub pending_stale_check: Option<Receiver<Vec<crate::agent::StaleAgent>>>,
 }
 
 impl App {
@@ -370,6 +376,9 @@ impl App {
             heartbeat_stop: None,
             hooked_bead_id: None,
             repo_path: crate::db::detect_repo_path(),
+            show_stale_modal: false,
+            stale_modal_state: None,
+            pending_stale_check: None,
         }
     }
 
@@ -577,8 +586,7 @@ impl App {
     /// Release the currently hooked bead (clear hook, reset to open).
     /// Used during stop between iterations. Does not touch agent, worktree, or heartbeat.
     pub fn release_hooked_bead(&mut self) {
-        if let (Some(agent_id), Some(bead_id)) = (&self.agent_bead_id, self.hooked_bead_id.take())
-        {
+        if let (Some(agent_id), Some(bead_id)) = (&self.agent_bead_id, self.hooked_bead_id.take()) {
             crate::agent::release_bead(&self.config.behavior.bd_path, agent_id, &bead_id);
         }
     }
@@ -802,13 +810,24 @@ impl App {
                 // Don't clear tasks during auto-continue
             }
             WorkRemaining::No => {
-                info!("all_work_complete");
-                self.add_text_line(format!(
-                    "══════════════════ {} ══════════════════",
-                    complete_msg
-                ));
-                self.reset_iteration_state();
-                self.status = AppStatus::Stopped;
+                // Before declaring all work complete, check for stale hooks
+                if self.config.behavior.mode == "beads"
+                    && self.pending_stale_check.is_none()
+                    && !self.show_stale_modal
+                {
+                    info!("no_work_checking_stale");
+                    self.start_stale_check();
+                    self.reset_iteration_state();
+                    self.status = AppStatus::Stopped;
+                } else {
+                    info!("all_work_complete");
+                    self.add_text_line(format!(
+                        "══════════════════ {} ══════════════════",
+                        complete_msg
+                    ));
+                    self.reset_iteration_state();
+                    self.status = AppStatus::Stopped;
+                }
             }
             WorkRemaining::NeedsShaping(count) => {
                 info!(count, "all_ready_beads_need_shaping");
@@ -816,6 +835,16 @@ impl App {
                     "══════════════════ ALL READY BEADS NEED SHAPING ══════════════════"
                         .to_string(),
                 );
+                self.reset_iteration_state();
+                self.status = AppStatus::Stopped;
+            }
+            WorkRemaining::HumanOnly(count) => {
+                info!(count, "all_ready_beads_human_only");
+                self.add_text_line(format!(
+                    "══════════════════ no work for Ralph — {} {} available for humans ══════════════════",
+                    count,
+                    if count == 1 { "bead" } else { "beads" }
+                ));
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
@@ -858,6 +887,46 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Poll for background stale agent detection result.
+    pub fn poll_stale_check(&mut self) {
+        let rx = match self.pending_stale_check.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(stale_agents) if !stale_agents.is_empty() => {
+                info!(count = stale_agents.len(), "stale_modal_showing");
+                self.show_stale_modal = true;
+                self.stale_modal_state = Some(crate::modals::StaleModalState::new(stale_agents));
+            }
+            Ok(_) => {} // No stale agents
+            Err(TryRecvError::Empty) => {
+                self.pending_stale_check = Some(rx); // still running
+            }
+            Err(TryRecvError::Disconnected) => {}
+        }
+    }
+
+    /// Kick off a background stale agent check (beads mode only).
+    pub fn start_stale_check(&mut self) {
+        if self.config.behavior.mode != "beads" {
+            return;
+        }
+        let bd_path = self.config.behavior.bd_path.clone();
+        let threshold = self.config.behavior.stale_threshold;
+        let exclude = self.agent_bead_id.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::agent::find_stale_agents(
+                &bd_path,
+                threshold,
+                exclude.as_deref(),
+            ));
+        });
+        self.pending_stale_check = Some(rx);
     }
 
     /// Clear all pending background work source operations.
@@ -1082,7 +1151,6 @@ impl App {
         self.worktree_path = None;
         self.heartbeat_stop = None;
     }
-
 }
 
 /// Check if the Dolt server is running by calling `bd dolt status`.

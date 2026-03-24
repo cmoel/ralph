@@ -645,6 +645,9 @@ fn run_app(
         } else {
             app.add_text_line("[Agent registration failed — running without worktree]".to_string());
         }
+
+        // Check for stale agents (background, non-blocking)
+        app.start_stale_check();
     }
 
     loop {
@@ -681,6 +684,9 @@ fn run_app(
 
         // Poll for background doctor check results
         app.poll_doctor();
+
+        // Poll for stale agent detection results
+        app.poll_stale_check();
 
         // Auto-clear error flash after timeout
         app.check_error_timeout();
@@ -722,6 +728,14 @@ fn run_app(
             if app.show_init_modal {
                 if let Event::Key(key) = event {
                     handle_init_modal_input(&mut app, key.code);
+                }
+                continue;
+            }
+
+            // Handle stale recovery modal input
+            if app.show_stale_modal {
+                if let Event::Key(key) = event {
+                    handle_stale_modal_input(&mut app, key.code);
                 }
                 continue;
             }
@@ -960,6 +974,89 @@ fn claim_before_start(app: &mut App) -> bool {
             app.add_text_line("[No beads available to claim]".to_string());
             false
         }
+    }
+}
+
+/// Handle input for the stale agent recovery modal.
+fn handle_stale_modal_input(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            // Resume: claim the stale bead on our agent
+            let stale = match app
+                .stale_modal_state
+                .as_ref()
+                .and_then(|s| s.current().cloned())
+            {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match &app.agent_bead_id {
+                Some(id) => id.clone(),
+                None => {
+                    app.add_text_line("[Cannot resume — no agent registered]".to_string());
+                    app.show_stale_modal = false;
+                    app.stale_modal_state = None;
+                    return;
+                }
+            };
+            let bd_path = app.config.behavior.bd_path.clone();
+            if agent::resume_stale_bead(&bd_path, &agent_id, &stale) {
+                app.add_text_line(format!(
+                    "[Resumed: {} \"{}\"]",
+                    stale.hooked_bead_id, stale.hooked_bead_title
+                ));
+                app.hooked_bead_id = Some(stale.hooked_bead_id.clone());
+            } else {
+                app.add_text_line("[Resume failed]".to_string());
+            }
+            if let Some(ref mut state) = app.stale_modal_state {
+                state.advance();
+                if state.is_empty() {
+                    app.show_stale_modal = false;
+                    app.stale_modal_state = None;
+                }
+            }
+        }
+        KeyCode::Char('x') | KeyCode::Char('X') => {
+            // Release: clear hook, reset bead to open
+            let stale = match app
+                .stale_modal_state
+                .as_ref()
+                .and_then(|s| s.current().cloned())
+            {
+                Some(s) => s,
+                None => return,
+            };
+            let bd_path = app.config.behavior.bd_path.clone();
+            agent::release_stale_bead(&bd_path, &stale);
+            app.add_text_line(format!(
+                "[Released: {} \"{}\"]",
+                stale.hooked_bead_id, stale.hooked_bead_title
+            ));
+            if let Some(ref mut state) = app.stale_modal_state {
+                state.advance();
+                if state.is_empty() {
+                    app.show_stale_modal = false;
+                    app.stale_modal_state = None;
+                }
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            // Skip this stale agent
+            if let Some(ref mut state) = app.stale_modal_state {
+                state.advance();
+                if state.is_empty() {
+                    app.show_stale_modal = false;
+                    app.stale_modal_state = None;
+                }
+            }
+        }
+        KeyCode::Esc => {
+            // Close modal entirely
+            app.show_stale_modal = false;
+            app.stale_modal_state = None;
+        }
+        _ => {}
     }
 }
 

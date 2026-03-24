@@ -1648,3 +1648,44 @@ mod tests {
         assert_eq!(state.files.len(), 4);
     }
 }
+
+// ── Stale recovery modal ──
+
+use crate::agent::StaleAgent;
+
+/// State for the stale agent recovery modal.
+pub struct StaleModalState {
+    /// List of stale agents with hooked beads.
+    pub agents: Vec<StaleAgent>,
+    /// Currently selected agent index.
+    pub selected: usize,
+    /// Status message after an action.
+    pub message: Option<String>,
+}
+
+impl StaleModalState {
+    pub fn new(agents: Vec<StaleAgent>) -> Self {
+        Self {
+            agents,
+            selected: 0,
+            message: None,
+        }
+    }
+
+    /// Advance to next stale agent (or close if none left).
+    pub fn advance(&mut self) {
+        self.agents.remove(self.selected);
+        if !self.agents.is_empty() && self.selected >= self.agents.len() {
+            self.selected = self.agents.len() - 1;
+        }
+        self.message = None;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty()
+    }
+
+    pub fn current(&self) -> Option<&StaleAgent> {
+        self.agents.get(self.selected)
+    }
+}

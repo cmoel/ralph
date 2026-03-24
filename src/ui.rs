@@ -13,7 +13,7 @@ use ratatui::widgets::{
 use crate::app::{App, AppStatus, DoltServerState, SelectedPanel, ToolCallStatus};
 use crate::modal_ui::{
     draw_config_modal, draw_help_modal, draw_init_modal, draw_quit_modal, draw_specs_panel,
-    draw_tool_allow_modal,
+    draw_stale_modal, draw_tool_allow_modal,
 };
 
 /// Maximum length for truncated tool input display.
@@ -683,6 +683,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Tool allow modal
     if app.show_tool_allow_modal {
         draw_tool_allow_modal(f, app);
+    }
+
+    // Stale recovery modal
+    if app.show_stale_modal {
+        draw_stale_modal(f, app);
     }
 
     // Quit confirmation modal

@@ -22,6 +22,8 @@ pub enum WorkRemaining {
     No,
     /// All ready beads need shaping (not implementable).
     NeedsShaping(usize),
+    /// All ready beads are for humans only (no-ralph label).
+    HumanOnly(usize),
     /// Work source is missing (e.g., README not found).
     Missing,
     /// Error reading the work source.
@@ -311,24 +313,35 @@ pub fn is_shaping_label(label: &str, extra: &[String]) -> bool {
     matches!(label, "needs-shaping" | "shaping-required") || extra.iter().any(|e| e == label)
 }
 
+pub fn is_no_ralph_label(label: &str) -> bool {
+    label == "no-ralph"
+}
+
+fn has_label(item: &serde_json::Value, check: fn(&str) -> bool) -> bool {
+    item.get("labels")
+        .and_then(|l| l.as_array())
+        .is_some_and(|ls| ls.iter().any(|l| l.as_str().is_some_and(check)))
+}
+
 fn parse_ready_output(stdout: &str) -> WorkRemaining {
     match serde_json::from_str::<serde_json::Value>(stdout) {
         Ok(serde_json::Value::Array(arr)) => {
             if arr.is_empty() {
                 WorkRemaining::No
             } else {
-                let implementable: Vec<_> = arr
+                let non_shaping: Vec<_> = arr
                     .iter()
-                    .filter(|item| {
-                        let labels = item.get("labels").and_then(|l| l.as_array());
-                        !labels.is_some_and(|ls| {
-                            ls.iter()
-                                .any(|l| l.as_str().is_some_and(|s| is_shaping_label(s, &[])))
-                        })
-                    })
+                    .filter(|item| !has_label(item, |s| is_shaping_label(s, &[])))
+                    .collect();
+                if non_shaping.is_empty() {
+                    return WorkRemaining::NeedsShaping(arr.len());
+                }
+                let implementable: Vec<_> = non_shaping
+                    .iter()
+                    .filter(|item| !has_label(item, is_no_ralph_label))
                     .collect();
                 if implementable.is_empty() {
-                    WorkRemaining::NeedsShaping(arr.len())
+                    WorkRemaining::HumanOnly(non_shaping.len())
                 } else {
                     WorkRemaining::Yes
                 }
@@ -418,6 +431,49 @@ mod tests {
 
     #[test]
     fn both_shaping_labels_filter_beads() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["needs-shaping"]},
+            {"id": "ralph-2", "labels": ["shaping-required"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::NeedsShaping(2));
+    }
+
+    #[test]
+    fn is_no_ralph_label_matches() {
+        assert!(is_no_ralph_label("no-ralph"));
+        assert!(!is_no_ralph_label("ready"));
+        assert!(!is_no_ralph_label("needs-shaping"));
+    }
+
+    #[test]
+    fn all_no_ralph_returns_human_only() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["no-ralph"]},
+            {"id": "ralph-2", "labels": ["no-ralph", "other"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::HumanOnly(2));
+    }
+
+    #[test]
+    fn mix_of_no_ralph_and_implementable_returns_yes() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["no-ralph"]},
+            {"id": "ralph-2", "labels": ["ready"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::Yes);
+    }
+
+    #[test]
+    fn shaping_and_no_ralph_with_none_implementable_returns_human_only() {
+        let input = r#"[
+            {"id": "ralph-1", "labels": ["needs-shaping"]},
+            {"id": "ralph-2", "labels": ["no-ralph"]}
+        ]"#;
+        assert_eq!(parse_ready_output(input), WorkRemaining::HumanOnly(1));
+    }
+
+    #[test]
+    fn all_shaping_no_no_ralph_still_returns_needs_shaping() {
         let input = r#"[
             {"id": "ralph-1", "labels": ["needs-shaping"]},
             {"id": "ralph-2", "labels": ["shaping-required"]}
