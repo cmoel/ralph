@@ -373,16 +373,43 @@ fn parse_bead_id(json_output: &str) -> Option<String> {
     None
 }
 
-/// Get current time as ISO 8601 string (without pulling in chrono crate).
+/// Get current time as ISO 8601 string using pure Rust.
 fn chrono_now_iso() -> String {
-    // Use system command for simplicity since we don't have chrono
-    Command::new("date")
-        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+    epoch_secs_to_iso8601(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    )
+}
+
+/// Convert epoch seconds to an ISO 8601 UTC string.
+fn epoch_secs_to_iso8601(secs: u64) -> String {
+    let days = secs / 86400;
+    let time_secs = secs % 86400;
+    let hours = time_secs / 3600;
+    let minutes = (time_secs % 3600) / 60;
+    let seconds = time_secs % 60;
+    let (year, month, day) = days_to_ymd(days);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
+}
+
+/// Converts days since Unix epoch to (year, month, day) — Hinnant algorithm.
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 /// Find stale agent beads that have hooked beads but stopped heartbeating.
@@ -613,23 +640,11 @@ fn get_bead_title(bd_path: &str, bead_id: &str) -> String {
 
 /// Calculate a cutoff time (now - threshold_secs) as ISO 8601 UTC string.
 fn cutoff_time_iso(threshold_secs: u64) -> Option<String> {
-    let output = Command::new("date")
-        .args([
-            "-u",
-            "-v",
-            &format!("-{}S", threshold_secs),
-            "+%Y-%m-%dT%H:%M:%SZ",
-        ])
-        .output()
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    String::from_utf8(output.stdout)
-        .ok()
-        .map(|s| s.trim().to_string())
+    let cutoff = now.as_secs().checked_sub(threshold_secs)?;
+    Some(epoch_secs_to_iso8601(cutoff))
 }
 
 /// Resolve the worktree path by asking git.
