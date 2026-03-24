@@ -843,7 +843,12 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
         Line::from(vec![
             Span::raw("    "),
             Span::styled("l", key_style),
-            Span::styled("  Specs list", desc_style),
+            Span::styled("  Specs list (specs)", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("B", key_style),
+            Span::styled("  Work board (beads)", desc_style),
         ]),
         Line::from(vec![
             Span::raw("    "),

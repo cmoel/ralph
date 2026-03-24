@@ -833,8 +833,8 @@ fn run_app(
                             Some(ConfigModalState::from_config(&app.config))
                         };
                     }
-                    KeyCode::Char('l') => {
-                        // Open work panel (available in all states)
+                    KeyCode::Char('l') if app.config.behavior.mode == "specs" => {
+                        // Open specs panel (specs mode only)
                         app.show_specs_panel = true;
                         app.specs_panel_state = Some(SpecsPanelState::new_loading(
                             app.work_source.label(),
@@ -847,6 +847,9 @@ fn run_app(
                             let _ = tx.send(ws.list_items());
                         });
                         app.work_items_rx = Some(rx);
+                    }
+                    KeyCode::Char('B') if app.config.behavior.mode == "beads" => {
+                        // Work board (beads mode only) — wired in next slice
                     }
                     KeyCode::Char('i') => {
                         // Open init modal
