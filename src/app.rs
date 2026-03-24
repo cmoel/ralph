@@ -55,19 +55,12 @@ impl AppStatus {
         }
     }
 
-    /// Returns the color for this status, with pulsing effect for Error state.
-    /// The pulse alternates between red and dark red at ~2Hz (every 15 frames at 30fps).
-    pub fn pulsing_color(&self, frame_count: u64) -> Color {
+    /// Returns the static color for this status.
+    pub fn status_color(&self) -> Color {
         match self {
             AppStatus::Stopped => Color::Cyan,
             AppStatus::Running => Color::Green,
-            AppStatus::Error => {
-                if (frame_count / 15).is_multiple_of(2) {
-                    Color::Red
-                } else {
-                    Color::Rgb(128, 0, 0)
-                }
-            }
+            AppStatus::Error => Color::Red,
         }
     }
 }
@@ -186,8 +179,8 @@ pub struct App {
     pub current_log_level: String,
     /// When the current run started (for elapsed time display).
     pub run_start_time: Option<Instant>,
-    /// Frame counter for animations (incremented each render cycle).
-    pub frame_count: u64,
+    /// Whether the UI needs to be redrawn.
+    pub dirty: bool,
     /// State for the config modal form (when open).
     pub config_modal_state: Option<ConfigModalState>,
     /// Flag indicating auto-continue should be triggered on next loop iteration.
@@ -341,7 +334,7 @@ impl App {
             log_level_handle,
             current_log_level,
             run_start_time: None,
-            frame_count: 0,
+            dirty: true,
             config_modal_state: None,
             auto_continue_pending: false,
             show_specs_panel: false,
@@ -574,13 +567,14 @@ impl App {
         }
     }
 
-    /// Auto-revert from Error to Stopped after a timeout so pulsing doesn't last forever.
+    /// Auto-revert from Error to Stopped after a timeout.
     pub fn check_error_timeout(&mut self) {
         if let Some(at) = self.error_at
             && at.elapsed() >= Duration::from_secs(5)
         {
             self.status = AppStatus::Stopped;
             self.error_at = None;
+            self.dirty = true;
         }
     }
 
@@ -595,6 +589,7 @@ impl App {
             && at.elapsed() >= Duration::from_secs(3)
         {
             self.hint = None;
+            self.dirty = true;
         }
     }
 
@@ -625,6 +620,7 @@ impl App {
             match rx.try_recv() {
                 Ok(result) => {
                     self.current_spec = result;
+                    self.dirty = true;
                 }
                 Err(TryRecvError::Empty) => {
                     self.spec_poll_rx = Some(rx); // still running
@@ -695,6 +691,8 @@ impl App {
             return;
         }
 
+        self.dirty = true;
+
         // Update mtimes
         if let Some(mtime) = global_mtime {
             self.config_mtime = Some(mtime);
@@ -748,6 +746,7 @@ impl App {
 
     /// Handle poll_output logic, returning whether auto-continue should be pending.
     pub fn handle_channel_disconnected(&mut self, exit_code: Option<i32>) {
+        self.dirty = true;
         self.output_receiver = None;
         self.current_spec = None;
         self.run_start_time = None;
@@ -808,6 +807,7 @@ impl App {
                 if self.status != AppStatus::Stopped {
                     return;
                 }
+                self.dirty = true;
                 self.handle_work_remaining(result, complete_msg);
             }
             Err(TryRecvError::Empty) => {
@@ -902,6 +902,7 @@ impl App {
 
         match rx.try_recv() {
             Ok(result) => {
+                self.dirty = true;
                 if let Some(ref mut panel) = self.specs_panel_state {
                     panel.populate(result);
                 }
@@ -910,6 +911,7 @@ impl App {
                 self.work_items_rx = Some(rx); // still running
             }
             Err(TryRecvError::Disconnected) => {
+                self.dirty = true;
                 if let Some(ref mut panel) = self.specs_panel_state {
                     panel.populate(Err("Background fetch failed".to_string()));
                 }
@@ -926,6 +928,7 @@ impl App {
 
         match rx.try_recv() {
             Ok(result) => {
+                self.dirty = true;
                 if let Some(ref mut board) = self.kanban_board_state {
                     board.populate(result);
                 }
@@ -934,6 +937,7 @@ impl App {
                 self.kanban_items_rx = Some(rx); // still running
             }
             Err(TryRecvError::Disconnected) => {
+                self.dirty = true;
                 if let Some(ref mut board) = self.kanban_board_state {
                     board.populate(Err("Background fetch failed".to_string()));
                 }
@@ -953,6 +957,7 @@ impl App {
                 info!(count = stale_agents.len(), "stale_modal_showing");
                 self.show_stale_modal = true;
                 self.stale_modal_state = Some(crate::modals::StaleModalState::new(stale_agents));
+                self.dirty = true;
             }
             Ok(_) => {} // No stale agents
             Err(TryRecvError::Empty) => {
@@ -1048,11 +1053,15 @@ impl App {
                     if self.dolt_server_state != DoltServerState::Starting
                         && self.dolt_server_state != DoltServerState::Stopping
                     {
-                        self.dolt_server_state = if running {
+                        let new_state = if running {
                             DoltServerState::On
                         } else {
                             DoltServerState::Off
                         };
+                        if self.dolt_server_state != new_state {
+                            self.dolt_server_state = new_state;
+                            self.dirty = true;
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => {
@@ -1095,6 +1104,7 @@ impl App {
 
         match rx.try_recv() {
             Ok(success) => {
+                self.dirty = true;
                 match self.dolt_server_state {
                     DoltServerState::Starting => {
                         self.dolt_server_state = if success {
@@ -1118,11 +1128,14 @@ impl App {
             Err(TryRecvError::Empty) => {
                 self.dolt_toggle_rx = Some(rx);
             }
-            Err(TryRecvError::Disconnected) => match self.dolt_server_state {
-                DoltServerState::Starting => self.dolt_server_state = DoltServerState::Off,
-                DoltServerState::Stopping => self.dolt_server_state = DoltServerState::On,
-                _ => {}
-            },
+            Err(TryRecvError::Disconnected) => {
+                self.dirty = true;
+                match self.dolt_server_state {
+                    DoltServerState::Starting => self.dolt_server_state = DoltServerState::Off,
+                    DoltServerState::Stopping => self.dolt_server_state = DoltServerState::On,
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -1137,6 +1150,7 @@ impl App {
             Ok(checks) => {
                 for check in &checks {
                     if !check.passed {
+                        self.dirty = true;
                         self.add_text_line(format!("\u{2717} {}", check.message));
                     }
                 }

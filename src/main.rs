@@ -656,6 +656,7 @@ fn run_app(
 
         // Handle auto-continue if pending
         if app.auto_continue_pending {
+            app.dirty = true;
             app.auto_continue_pending = false;
             app.increment_iteration();
             // In beads mode, claim next bead before continuing
@@ -695,12 +696,21 @@ fn run_app(
         // Auto-clear hint after timeout
         app.check_hint_timeout();
 
-        // Draw UI
-        terminal.draw(|f| draw_ui(f, &mut app))?;
+        // Draw UI only when state changed
+        if app.dirty {
+            terminal.draw(|f| draw_ui(f, &mut app))?;
+            app.dirty = false;
+        }
 
-        // Poll for events with a short timeout to allow process output polling
-        if crossterm::event::poll(Duration::from_millis(50))? {
+        // State-dependent poll timeout: fast when running, slow when idle
+        let poll_timeout = if app.status == AppStatus::Running {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_millis(250)
+        };
+        if crossterm::event::poll(poll_timeout)? {
             let event = crossterm::event::read()?;
+            app.dirty = true;
 
             // Clear hint on any keypress
             if matches!(event, Event::Key(_)) {
@@ -1241,6 +1251,9 @@ fn poll_output(app: &mut App) {
     }
 
     // Process collected messages
+    if !messages.is_empty() {
+        app.dirty = true;
+    }
     for msg in messages {
         let OutputMessage::Line(line) = msg;
         process_line(app, &line);

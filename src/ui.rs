@@ -410,9 +410,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Wrap;
 
-    // Increment frame counter for animations
-    app.frame_count = app.frame_count.wrapping_add(1);
-
     let command_height = 3u16; // Fixed: border + 1 content + border
     let show_tools_column = !app.tool_panel_collapsed && !app.tool_call_entries.is_empty();
 
@@ -477,7 +474,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let output_border_color = if app.selected_panel == SelectedPanel::Main {
         Color::White
     } else {
-        app.status.pulsing_color(app.frame_count)
+        app.status.status_color()
     };
     let mut output_block = Block::default()
         .borders(Borders::ALL)
@@ -563,7 +560,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
             }
         }
     };
-    let status_color = app.status.pulsing_color(app.frame_count);
+    let status_color = app.status.status_color();
 
     // Build command spans: "s Start  q Quit  ? Help"
     let command_spans = vec![
@@ -641,7 +638,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(app.status.border_type())
-        .border_style(Style::default().fg(app.status.pulsing_color(app.frame_count)));
+        .border_style(Style::default().fg(app.status.status_color()));
 
     if let Some(error) = config_error {
         let warning_style = Style::default().fg(Color::Yellow);
@@ -721,7 +718,7 @@ fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
     let border_color = if is_selected {
         Color::White
     } else {
-        app.status.pulsing_color(app.frame_count)
+        app.status.status_color()
     };
     let border_type = app.status.border_type();
 
