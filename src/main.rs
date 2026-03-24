@@ -21,6 +21,7 @@ mod tool_settings;
 mod ui;
 mod validators;
 mod wake_lock;
+mod work_control;
 mod work_source;
 
 use clap::Parser;
