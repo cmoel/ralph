@@ -284,6 +284,8 @@ pub struct App {
     pub stale_modal_state: Option<crate::modals::StaleModalState>,
     /// Receiver for background stale agent detection.
     pub pending_stale_check: Option<Receiver<Vec<crate::agent::StaleAgent>>>,
+    /// Cached visual line count (invalidated on content or width changes).
+    pub cached_visual_line_count: Option<u16>,
 }
 
 impl App {
@@ -386,12 +388,16 @@ impl App {
             show_stale_modal: false,
             stale_modal_state: None,
             pending_stale_check: None,
+            cached_visual_line_count: None,
         }
     }
 
-    pub fn visual_line_count(&self) -> u16 {
+    pub fn visual_line_count(&mut self) -> u16 {
         if self.main_pane_width == 0 {
             return 0;
+        }
+        if let Some(cached) = self.cached_visual_line_count {
+            return cached;
         }
         // Include both completed lines and the current partial line
         let mut content: Vec<Line> = self.output_lines.to_vec();
@@ -401,10 +407,12 @@ impl App {
         let paragraph = Paragraph::new(content)
             .block(Block::default().borders(Borders::ALL))
             .wrap(Wrap { trim: false });
-        paragraph.line_count(self.main_pane_width) as u16
+        let count = paragraph.line_count(self.main_pane_width) as u16;
+        self.cached_visual_line_count = Some(count);
+        count
     }
 
-    pub fn max_scroll(&self) -> u16 {
+    pub fn max_scroll(&mut self) -> u16 {
         self.visual_line_count()
             .saturating_sub(self.main_pane_height)
     }
@@ -432,6 +440,7 @@ impl App {
     /// Adds a styled line to the output.
     pub fn add_line(&mut self, line: Line<'static>) {
         self.output_lines.push(line);
+        self.cached_visual_line_count = None;
         if self.is_auto_following {
             self.scroll_to_bottom();
         }
@@ -466,6 +475,7 @@ impl App {
     pub fn flush_current_line(&mut self) {
         if !self.current_line.is_empty() {
             let line = std::mem::take(&mut self.current_line);
+            self.cached_visual_line_count = None;
             if self.in_indented_text {
                 self.add_text_line(format!("  {}", line));
             } else {

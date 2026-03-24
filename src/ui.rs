@@ -443,7 +443,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
 
     // Update pane dimensions for scroll calculations
     app.main_pane_height = stream_area.height.saturating_sub(2); // Account for borders
-    app.main_pane_width = stream_area.width;
+    let new_width = stream_area.width;
+    if new_width != app.main_pane_width {
+        app.main_pane_width = new_width;
+        app.cached_visual_line_count = None;
+    }
 
     // === Stream Panel ===
     let mut content: Vec<Line> = app.output_lines.to_vec();
