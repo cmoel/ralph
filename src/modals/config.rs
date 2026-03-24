@@ -1,295 +1,22 @@
-//! Modal dialog state and input handling.
+//! Configuration modal — settings editor with project/global tabs.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::Frame;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tracing::debug;
 
 use crate::app::App;
 use crate::config::{Config, PartialConfig, save_config, save_partial_config};
 use crate::get_file_mtime;
-use crate::prompt_sniff;
-use crate::templates;
-use crate::tool_settings;
+use crate::ui::centered_rect;
 use crate::validators::{
     validate_directory_exists, validate_executable_path, validate_file_exists,
 };
-use crate::work_source::{WorkItem, WorkItemStatus};
-
-/// Status of a file for the init modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InitFileStatus {
-    /// File will be created (doesn't exist).
-    WillCreate,
-    /// File already exists (will be skipped).
-    Exists,
-    /// File exists but contains stale content (will be regenerated with backup).
-    Stale,
-    /// File exists and will be force-regenerated (reinit mode).
-    WillRegenerate,
-}
-
-/// A file entry for the init modal.
-#[derive(Debug, Clone)]
-pub struct InitFileEntry {
-    /// Display path (relative for readability).
-    pub display_path: String,
-    /// Full path for file operations.
-    pub full_path: PathBuf,
-    /// Current status.
-    pub status: InitFileStatus,
-}
-
-/// Which field is focused in the init modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InitModalField {
-    InitializeButton,
-    CancelButton,
-}
-
-impl InitModalField {
-    pub fn next(self) -> Self {
-        match self {
-            Self::InitializeButton => Self::CancelButton,
-            Self::CancelButton => Self::InitializeButton,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        self.next() // Only two options, so prev == next
-    }
-}
-
-/// State for the init modal.
-#[derive(Debug, Clone)]
-pub struct InitModalState {
-    /// Files to be initialized with their status.
-    pub files: Vec<InitFileEntry>,
-    /// Current focused field.
-    pub focus: InitModalField,
-    /// Error message to display.
-    pub error: Option<String>,
-    /// Success message to display (briefly before closing).
-    pub success: Option<String>,
-}
-
-impl InitModalState {
-    /// Create a new init modal state by checking file existence.
-    pub fn new(config: &Config) -> Self {
-        let prompt_path = config.prompt_path();
-        let specs_path = config.specs_path();
-
-        // Build list of files to check — mode-agnostic files always,
-        // specs-specific files only in specs mode
-        let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
-
-        if config.behavior.mode == "specs" {
-            files_to_check.push((
-                format!("{}/README.md", config.paths.specs),
-                specs_path.join("README.md"),
-            ));
-            files_to_check.push((
-                format!("{}/TEMPLATE.md", config.paths.specs),
-                specs_path.join("TEMPLATE.md"),
-            ));
-        }
-
-        files_to_check.push((
-            ".claude/skills/brain-dump/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
-        ));
-        files_to_check.push((
-            ".claude/skills/shape/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/shape/SKILL.md"),
-        ));
-        files_to_check.push((".ralph".to_string(), PathBuf::from(".ralph")));
-
-        let mode = &config.behavior.mode;
-        let files = files_to_check
-            .into_iter()
-            .map(|(display, full)| {
-                let status = if !full.exists() {
-                    InitFileStatus::WillCreate
-                } else if display.ends_with("PROMPT.md") {
-                    // Check if PROMPT.md contains stale mode-specific content
-                    if let Ok(content) = std::fs::read_to_string(&full) {
-                        if !prompt_sniff::sniff_prompt(&content, mode).is_empty() {
-                            InitFileStatus::Stale
-                        } else {
-                            InitFileStatus::Exists
-                        }
-                    } else {
-                        InitFileStatus::Exists
-                    }
-                } else {
-                    InitFileStatus::Exists
-                };
-                InitFileEntry {
-                    display_path: display,
-                    full_path: full,
-                    status,
-                }
-            })
-            .collect();
-
-        Self {
-            files,
-            focus: InitModalField::InitializeButton,
-            error: None,
-            success: None,
-        }
-    }
-
-    /// Check if all files are up to date (nothing to create or regenerate).
-    pub fn all_exist(&self) -> bool {
-        self.files
-            .iter()
-            .all(|f| f.status == InitFileStatus::Exists)
-    }
-
-    /// Count files that will be created.
-    pub fn create_count(&self) -> usize {
-        self.files
-            .iter()
-            .filter(|f| f.status == InitFileStatus::WillCreate)
-            .count()
-    }
-
-    /// Count files that already exist (will be skipped).
-    pub fn skip_count(&self) -> usize {
-        self.files
-            .iter()
-            .filter(|f| f.status == InitFileStatus::Exists)
-            .count()
-    }
-
-    /// Move focus to next field.
-    pub fn focus_next(&mut self) {
-        self.focus = self.focus.next();
-    }
-
-    /// Move focus to previous field.
-    pub fn focus_prev(&mut self) {
-        self.focus = self.focus.prev();
-    }
-
-    /// Count files that will be regenerated.
-    pub fn regenerate_count(&self) -> usize {
-        self.files
-            .iter()
-            .filter(|f| f.status == InitFileStatus::WillRegenerate)
-            .count()
-    }
-
-    /// Create a reinit state: same files as init but excludes `.ralph` config
-    /// and marks existing files as `WillRegenerate` instead of `Exists`.
-    pub fn new_reinit(config: &Config) -> Self {
-        let prompt_path = config.prompt_path();
-        let specs_path = config.specs_path();
-
-        let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
-
-        if config.behavior.mode == "specs" {
-            files_to_check.push((
-                format!("{}/README.md", config.paths.specs),
-                specs_path.join("README.md"),
-            ));
-            files_to_check.push((
-                format!("{}/TEMPLATE.md", config.paths.specs),
-                specs_path.join("TEMPLATE.md"),
-            ));
-        }
-
-        files_to_check.push((
-            ".claude/skills/brain-dump/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
-        ));
-        files_to_check.push((
-            ".claude/skills/shape/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/shape/SKILL.md"),
-        ));
-
-        let files = files_to_check
-            .into_iter()
-            .map(|(display, full)| {
-                let status = if full.exists() {
-                    InitFileStatus::WillRegenerate
-                } else {
-                    InitFileStatus::WillCreate
-                };
-                InitFileEntry {
-                    display_path: display,
-                    full_path: full,
-                    status,
-                }
-            })
-            .collect();
-
-        Self {
-            files,
-            focus: InitModalField::InitializeButton,
-            error: None,
-            success: None,
-        }
-    }
-
-    /// Create all files. Returns Ok(()) on success, Err(message) on failure.
-    pub fn create_files(&self) -> Result<(), String> {
-        for file in &self.files {
-            // Skip files that already exist and are up to date
-            if file.status == InitFileStatus::Exists {
-                continue;
-            }
-
-            // Backup stale or regenerated files before overwriting
-            if file.status == InitFileStatus::Stale || file.status == InitFileStatus::WillRegenerate
-            {
-                let backup_ext = if file.display_path.ends_with(".md") {
-                    "md.bak"
-                } else {
-                    "bak"
-                };
-                let backup_path = file.full_path.with_extension(backup_ext);
-                std::fs::rename(&file.full_path, &backup_path)
-                    .map_err(|e| format!("Failed to backup {}: {}", file.display_path, e))?;
-            }
-
-            // Determine template content based on file path
-            let content =
-                if file.display_path.ends_with("PROMPT.md") || file.display_path == "./PROMPT.md" {
-                    templates::PROMPT_MD
-                } else if file.display_path.ends_with("README.md") {
-                    templates::SPECS_README_MD
-                } else if file.display_path.ends_with("TEMPLATE.md") {
-                    templates::SPECS_TEMPLATE_MD
-                } else if file.display_path.contains("brain-dump") {
-                    templates::BRAIN_DUMP_SKILL_MD
-                } else if file.display_path.contains("shape") {
-                    templates::SHAPE_SKILL_MD
-                } else if file.display_path == ".ralph" {
-                    templates::RALPH_CONFIG
-                } else {
-                    return Err(format!("Unknown template for: {}", file.display_path));
-                };
-
-            // Create parent directories if needed
-            if let Some(parent) = file.full_path.parent()
-                && !parent.exists()
-            {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    format!("Failed to create directory {}: {}", parent.display(), e)
-                })?;
-            }
-
-            // Write the file
-            std::fs::write(&file.full_path, content)
-                .map_err(|e| format!("Failed to write {}: {}", file.display_path, e))?;
-        }
-
-        Ok(())
-    }
-}
 
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
@@ -955,126 +682,6 @@ impl ConfigModalState {
     }
 }
 
-/// State for the specs/work panel modal.
-#[derive(Debug)]
-pub struct SpecsPanelState {
-    /// List of work items.
-    pub specs: Vec<WorkItem>,
-    /// Currently selected index.
-    pub selected: usize,
-    /// Scroll offset for the list.
-    pub scroll_offset: usize,
-    /// Error message if parsing failed.
-    pub error: Option<String>,
-    /// Directory where spec files are located.
-    pub specs_dir: PathBuf,
-    /// Label for the panel title (e.g., "Specs", "Beads").
-    pub panel_label: String,
-    /// Whether data is still loading from a background thread.
-    pub is_loading: bool,
-}
-
-impl SpecsPanelState {
-    /// Create a panel in loading state (data will arrive via populate()).
-    pub fn new_loading(label: &str, specs_dir: &std::path::Path) -> Self {
-        Self {
-            specs: Vec::new(),
-            selected: 0,
-            scroll_offset: 0,
-            error: None,
-            specs_dir: specs_dir.to_path_buf(),
-            panel_label: label.to_string(),
-            is_loading: true,
-        }
-    }
-
-    /// Populate the panel with results from a background list_items call.
-    pub fn populate(&mut self, result: Result<Vec<WorkItem>, String>) {
-        self.is_loading = false;
-        match result {
-            Ok(mut items) => {
-                Self::sort_items(&mut items);
-                self.specs = items;
-            }
-            Err(e) => {
-                self.error = Some(e);
-            }
-        }
-    }
-
-    /// Sort work items by status then timestamp.
-    fn sort_items(items: &mut [WorkItem]) {
-        items.sort_by(|a, b| match a.status.cmp(&b.status) {
-            std::cmp::Ordering::Equal => {
-                // Within same status, sort by timestamp descending (newest first)
-                // None values go to the end
-                match (&b.timestamp, &a.timestamp) {
-                    (Some(b_ts), Some(a_ts)) => b_ts.cmp(a_ts),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                }
-            }
-            other => other,
-        });
-    }
-
-    /// Get the path to the currently selected spec file.
-    pub fn selected_spec_path(&self) -> Option<PathBuf> {
-        self.specs
-            .get(self.selected)
-            .map(|spec| self.specs_dir.join(format!("{}.md", spec.name)))
-    }
-
-    /// Read the head of the selected spec file.
-    pub fn read_selected_spec_head(&self, max_lines: usize) -> Result<Vec<String>, String> {
-        let path = self.selected_spec_path().ok_or("No spec selected")?;
-
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err("File not found".to_string());
-            }
-            Err(e) => {
-                return Err(format!("Error reading file: {}", e));
-            }
-        };
-
-        Ok(contents.lines().take(max_lines).map(String::from).collect())
-    }
-
-    /// Move selection up.
-    pub fn select_prev(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    /// Move selection down.
-    pub fn select_next(&mut self) {
-        if !self.specs.is_empty() && self.selected < self.specs.len() - 1 {
-            self.selected += 1;
-        }
-    }
-
-    /// Count of blocked items.
-    pub fn blocked_count(&self) -> usize {
-        self.specs
-            .iter()
-            .filter(|s| s.status == WorkItemStatus::Blocked)
-            .count()
-    }
-
-    /// Ensure selected item is visible, adjusting scroll_offset if needed.
-    pub fn ensure_visible(&mut self, visible_height: usize) {
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + visible_height {
-            self.scroll_offset = self.selected - visible_height + 1;
-        }
-    }
-}
-
 /// Handle keyboard input for the config modal.
 pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: KeyModifiers) {
     let Some(state) = &mut app.config_modal_state else {
@@ -1232,267 +839,496 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
     }
 }
 
-/// Handle keyboard input for the specs panel.
-pub fn handle_specs_panel_input(app: &mut App, key_code: KeyCode) {
-    let Some(state) = &mut app.specs_panel_state else {
-        return;
+/// Draw the configuration modal.
+pub fn draw_config_modal(f: &mut Frame, app: &App) {
+    let modal_width = 70;
+    let modal_height = 28;
+    let modal_area = centered_rect(modal_width, modal_height, f.area());
+
+    // Clear the area behind the modal
+    f.render_widget(Clear, modal_area);
+
+    // Get form state (fall back to read-only view if no state)
+    let state = app.config_modal_state.as_ref();
+
+    // Build the modal content
+    let log_dir_display = app
+        .log_directory
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(not configured)".to_string());
+
+    let separator = "─".repeat(modal_width.saturating_sub(4) as usize);
+    let field_width = 40;
+
+    // Determine if we're on the project tab and which fields are inherited
+    let on_project_tab = state
+        .map(|s| s.active_tab() == ConfigTab::Project)
+        .unwrap_or(false);
+    let explicit_fields = if on_project_tab {
+        state.and_then(|s| s.project_form.as_ref().map(|f| &f.explicit_fields))
+    } else {
+        None
     };
 
-    match key_code {
-        KeyCode::Esc => {
-            app.show_specs_panel = false;
-            app.specs_panel_state = None;
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            state.select_prev();
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            state.select_next();
-        }
-        _ => {}
-    }
-}
-
-/// Handle keyboard input for the init modal.
-pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
-    let Some(state) = &mut app.init_modal_state else {
-        return;
-    };
-
-    // Clear any previous error when user takes action
-    if state.error.is_some() && key_code != KeyCode::Esc {
-        state.error = None;
-    }
-
-    match key_code {
-        // Navigation between buttons
-        KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
-            state.focus_next();
-        }
-        KeyCode::BackTab => {
-            state.focus_prev();
-        }
-
-        // Cancel / close
-        KeyCode::Esc => {
-            app.show_init_modal = false;
-            app.init_modal_state = None;
-        }
-
-        // Enter - context-dependent
-        KeyCode::Enter => match state.focus {
-            InitModalField::InitializeButton => {
-                // Disabled when all files already exist
-                if !state.all_exist() {
-                    let created = state.create_count();
-                    let skipped = state.skip_count();
-                    match state.create_files() {
-                        Ok(()) => {
-                            debug!("Project initialized: created {created}, skipped {skipped}");
-                            state.success = Some(format!(
-                                "Created {created} files, skipped {skipped} existing"
-                            ));
-                            // Close modal after showing success
-                            app.show_init_modal = false;
-                            app.init_modal_state = None;
-                        }
-                        Err(e) => {
-                            state.error = Some(e);
-                        }
-                    }
-                }
-            }
-            InitModalField::CancelButton => {
-                app.show_init_modal = false;
-                app.init_modal_state = None;
-            }
-        },
-
-        _ => {}
-    }
-}
-
-// === Tool Allow Modal ===
-
-/// Which field is focused in the tool allow modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolAllowField {
-    Pattern,
-    AllowButton,
-    CancelButton,
-}
-
-impl ToolAllowField {
-    pub fn next(self) -> Self {
-        match self {
-            Self::Pattern => Self::AllowButton,
-            Self::AllowButton => Self::CancelButton,
-            Self::CancelButton => Self::Pattern,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::Pattern => Self::CancelButton,
-            Self::AllowButton => Self::Pattern,
-            Self::CancelButton => Self::AllowButton,
-        }
-    }
-}
-
-/// State for the tool allow modal.
-#[derive(Debug, Clone)]
-pub struct ToolAllowModalState {
-    /// The tool name (e.g., "Bash").
-    pub tool_name: String,
-    /// The editable pattern (e.g., "Bash(git status)").
-    pub pattern: String,
-    /// Cursor position within the pattern string.
-    pub cursor_pos: usize,
-    /// Currently focused field.
-    pub focus: ToolAllowField,
-    /// Error message from a failed allow attempt.
-    pub error: Option<String>,
-}
-
-impl ToolAllowModalState {
-    /// Create a new state pre-filled with the tool name and summary.
-    pub fn new(tool_name: &str, summary: &str) -> Self {
-        let pattern = if summary.is_empty() {
-            tool_name.to_string()
+    // Check if a field is inherited (not explicitly set in project config)
+    let is_inherited = |field: ConfigModalField| -> bool {
+        if let Some(fields) = explicit_fields {
+            !fields.contains(&field)
         } else {
-            format!("{}({})", tool_name, summary)
-        };
-        let cursor_pos = pattern.len();
-        Self {
-            tool_name: tool_name.to_string(),
-            pattern,
-            cursor_pos,
-            focus: ToolAllowField::Pattern,
-            error: None,
+            false
         }
-    }
-
-    pub fn insert_char(&mut self, c: char) {
-        self.pattern.insert(self.cursor_pos, c);
-        self.cursor_pos += c.len_utf8();
-    }
-
-    pub fn delete_char_before(&mut self) {
-        if self.cursor_pos > 0 {
-            let prev = self.pattern[..self.cursor_pos]
-                .chars()
-                .last()
-                .map(|c| c.len_utf8())
-                .unwrap_or(0);
-            self.cursor_pos -= prev;
-            self.pattern.remove(self.cursor_pos);
-        }
-    }
-
-    pub fn cursor_left(&mut self) {
-        if self.cursor_pos > 0 {
-            let prev = self.pattern[..self.cursor_pos]
-                .chars()
-                .last()
-                .map(|c| c.len_utf8())
-                .unwrap_or(0);
-            self.cursor_pos -= prev;
-        }
-    }
-
-    pub fn cursor_right(&mut self) {
-        if self.cursor_pos < self.pattern.len() {
-            let next = self.pattern[self.cursor_pos..]
-                .chars()
-                .next()
-                .map(|c| c.len_utf8())
-                .unwrap_or(0);
-            self.cursor_pos += next;
-        }
-    }
-
-    pub fn cursor_home(&mut self) {
-        self.cursor_pos = 0;
-    }
-
-    pub fn cursor_end(&mut self) {
-        self.cursor_pos = self.pattern.len();
-    }
-}
-
-/// Handle input for the tool allow modal.
-pub fn handle_tool_allow_modal_input(app: &mut App, key_code: KeyCode, _modifiers: KeyModifiers) {
-    let Some(state) = &mut app.tool_allow_modal_state else {
-        return;
     };
 
-    match key_code {
-        KeyCode::Esc => {
-            app.show_tool_allow_modal = false;
-            app.tool_allow_modal_state = None;
-        }
-        KeyCode::Tab => {
-            let next = state.focus.next();
-            state.focus = next;
-        }
-        KeyCode::BackTab => {
-            let prev = state.focus.prev();
-            state.focus = prev;
-        }
-        KeyCode::Enter => match state.focus {
-            ToolAllowField::Pattern | ToolAllowField::AllowButton => {
-                let pattern = state.pattern.clone();
-                if pattern.is_empty() {
-                    state.error = Some("Pattern cannot be empty".to_string());
-                    return;
-                }
-                match tool_settings::allow_pattern(&pattern, false) {
-                    Ok(()) => {
-                        debug!("Allowed tool pattern: {}", pattern);
-                        app.show_tool_allow_modal = false;
-                        app.tool_allow_modal_state = None;
-                    }
-                    Err(e) => {
-                        state.error = Some(format!("Failed: {e}"));
-                    }
-                }
+    // Helper to render a text input field - returns owned Spans
+    let render_field =
+        |value: &str, focused: bool, cursor_pos: usize, inherited: bool| -> Vec<Span<'static>> {
+            let display_value: String = if value.len() > field_width {
+                let start = cursor_pos.saturating_sub(field_width / 2);
+                let end = (start + field_width).min(value.len());
+                let start = end.saturating_sub(field_width);
+                value[start..end].to_string()
+            } else {
+                value.to_string()
+            };
+
+            let visible_cursor = if value.len() > field_width {
+                let start = cursor_pos.saturating_sub(field_width / 2);
+                let end = (start + field_width).min(value.len());
+                let start = end.saturating_sub(field_width);
+                cursor_pos - start
+            } else {
+                cursor_pos
+            };
+
+            if focused {
+                let char_indices: Vec<_> = display_value.char_indices().collect();
+                let (before, cursor_char, rest) = if visible_cursor < char_indices.len() {
+                    let (idx, _) = char_indices[visible_cursor];
+                    let before = display_value[..idx].to_string();
+                    let cursor_char = display_value[idx..]
+                        .chars()
+                        .next()
+                        .unwrap_or(' ')
+                        .to_string();
+                    let rest_start = idx + cursor_char.len();
+                    let rest = if rest_start < display_value.len() {
+                        display_value[rest_start..].to_string()
+                    } else {
+                        String::new()
+                    };
+                    (before, cursor_char, rest)
+                } else {
+                    (display_value.clone(), " ".to_string(), String::new())
+                };
+
+                vec![
+                    Span::styled(before, Style::default().fg(Color::White)),
+                    Span::styled(
+                        cursor_char,
+                        Style::default().fg(Color::Black).bg(Color::White),
+                    ),
+                    Span::styled(rest, Style::default().fg(Color::White)),
+                ]
+            } else {
+                let fg = if inherited {
+                    Color::DarkGray
+                } else {
+                    Color::White
+                };
+                vec![Span::styled(display_value, Style::default().fg(fg))]
             }
-            ToolAllowField::CancelButton => {
-                app.show_tool_allow_modal = false;
-                app.tool_allow_modal_state = None;
-            }
-        },
-        _ => match state.focus {
-            ToolAllowField::Pattern => match key_code {
-                KeyCode::Char(c) => state.insert_char(c),
-                KeyCode::Backspace => state.delete_char_before(),
-                KeyCode::Left => state.cursor_left(),
-                KeyCode::Right => state.cursor_right(),
-                KeyCode::Home => state.cursor_home(),
-                KeyCode::End => state.cursor_end(),
-                _ => {}
-            },
-            ToolAllowField::AllowButton | ToolAllowField::CancelButton => match key_code {
-                KeyCode::Left => {
-                    let prev = state.focus.prev();
-                    state.focus = prev;
-                }
-                KeyCode::Right => {
-                    let next = state.focus.next();
-                    state.focus = next;
-                }
-                _ => {}
-            },
-        },
+        };
+
+    // Helper for label styling
+    let label_style = Style::default().fg(Color::DarkGray);
+    let focused_label_style = Style::default().fg(Color::Cyan);
+
+    // Get active form values
+    let form = state.map(|s| s.active_form());
+    let mode: &str = if let Some(f) = form {
+        f.selected_mode()
+    } else {
+        app.config.behavior.mode.as_str()
+    };
+    let (
+        claude_path,
+        prompt_file,
+        specs_dir,
+        log_level,
+        iterations,
+        keep_awake,
+        cursor_pos,
+        focus,
+        has_errors,
+    ): (
+        &str,
+        &str,
+        &str,
+        &str,
+        i32,
+        bool,
+        usize,
+        Option<ConfigModalField>,
+        bool,
+    ) = if let Some(s) = state {
+        let f = s.active_form();
+        (
+            f.claude_path.as_str(),
+            f.prompt_file.as_str(),
+            f.specs_dir.as_str(),
+            f.selected_log_level(),
+            f.iterations,
+            f.keep_awake,
+            f.cursor_pos,
+            Some(s.focus),
+            s.has_validation_errors(),
+        )
+    } else {
+        (
+            app.config.claude.path.as_str(),
+            app.config.paths.prompt.as_str(),
+            app.config.paths.specs.as_str(),
+            app.config.logging.level.as_str(),
+            app.config.behavior.iterations,
+            app.config.behavior.keep_awake,
+            0,
+            None,
+            false,
+        )
+    };
+
+    // Helper to get validation error for a field
+    let get_field_error = |field: ConfigModalField| -> Option<&str> {
+        form.and_then(|f| f.validation_errors.get(&field).map(|e| e.as_str()))
+    };
+
+    // Style for validation error messages
+    let error_style = Style::default().fg(Color::Yellow);
+
+    // Build content lines
+    let mut content: Vec<Line> = Vec::new();
+
+    // Tab bar (only when .ralph exists)
+    if let Some(s) = state
+        && s.has_tabs()
+    {
+        let active = s.active_tab();
+        let project_style = if active == ConfigTab::Project {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let global_style = if active == ConfigTab::Global {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        content.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(" Project ", project_style),
+            Span::raw(" "),
+            Span::styled(" Global ", global_style),
+            Span::styled("                  [ / ] switch tabs", label_style),
+        ]));
+        content.push(Line::from(format!("  {separator}")));
     }
+
+    // Config file path display
+    let config_path_display = if on_project_tab {
+        state
+            .and_then(|s| s.project_config_path.as_ref())
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| ".ralph".to_string())
+    } else {
+        app.config_path.display().to_string()
+    };
+    content.push(Line::from(vec![
+        Span::styled("  Config file: ", label_style),
+        Span::raw(config_path_display),
+    ]));
+    content.push(Line::from(vec![
+        Span::styled("  Log directory: ", label_style),
+        Span::raw(&log_dir_display),
+    ]));
+    content.push(Line::from(format!("  {separator}")));
+
+    // Claude CLI path field
+    let path_focused = focus == Some(ConfigModalField::ClaudePath);
+    let path_inherited = is_inherited(ConfigModalField::ClaudePath);
+    let path_label_style = if path_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mut path_line = vec![Span::styled("  Claude CLI path: ", path_label_style)];
+    path_line.extend(render_field(
+        claude_path,
+        path_focused,
+        cursor_pos,
+        path_inherited,
+    ));
+    if path_inherited && !path_focused {
+        path_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(path_line));
+    if let Some(error) = get_field_error(ConfigModalField::ClaudePath) {
+        content.push(Line::from(Span::styled(
+            format!("                     \u{26a0} {}", error),
+            error_style,
+        )));
+    }
+
+    // Prompt file field
+    let prompt_focused = focus == Some(ConfigModalField::PromptFile);
+    let prompt_inherited = is_inherited(ConfigModalField::PromptFile);
+    let prompt_label_style = if prompt_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mut prompt_line = vec![Span::styled("  Prompt file:     ", prompt_label_style)];
+    prompt_line.extend(render_field(
+        prompt_file,
+        prompt_focused,
+        cursor_pos,
+        prompt_inherited,
+    ));
+    if prompt_inherited && !prompt_focused {
+        prompt_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(prompt_line));
+    if let Some(error) = get_field_error(ConfigModalField::PromptFile) {
+        content.push(Line::from(Span::styled(
+            format!("                     \u{26a0} {}", error),
+            error_style,
+        )));
+    }
+
+    // Specs directory field (only relevant in specs mode)
+    if mode != "beads" {
+        let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
+        let specs_inherited = is_inherited(ConfigModalField::SpecsDirectory);
+        let specs_label_style = if specs_focused {
+            focused_label_style
+        } else {
+            label_style
+        };
+        let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
+        specs_line.extend(render_field(
+            specs_dir,
+            specs_focused,
+            cursor_pos,
+            specs_inherited,
+        ));
+        if specs_inherited && !specs_focused {
+            specs_line.push(Span::styled(" (inherited)", label_style));
+        }
+        content.push(Line::from(specs_line));
+        if let Some(error) = get_field_error(ConfigModalField::SpecsDirectory) {
+            content.push(Line::from(Span::styled(
+                format!("                     \u{26a0} {}", error),
+                error_style,
+            )));
+        }
+    }
+
+    // Log level dropdown
+    let level_focused = focus == Some(ConfigModalField::LogLevel);
+    let level_inherited = is_inherited(ConfigModalField::LogLevel);
+    let level_label_style = if level_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let level_display = if level_focused {
+        format!("< {} >", log_level)
+    } else {
+        log_level.to_string()
+    };
+    let level_value_style = if level_focused {
+        Style::default().fg(Color::Cyan)
+    } else if level_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut level_line = vec![
+        Span::styled("  Log level:       ", level_label_style),
+        Span::styled(level_display, level_value_style),
+    ];
+    if level_inherited && !level_focused {
+        level_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(level_line));
+
+    // Iterations field
+    let iter_focused = focus == Some(ConfigModalField::Iterations);
+    let iter_inherited = is_inherited(ConfigModalField::Iterations);
+    let iter_label_style = if iter_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let iter_value = if iterations < 0 {
+        "\u{221e}".to_string()
+    } else {
+        iterations.to_string()
+    };
+    let iter_display = if iter_focused {
+        format!("< {} >", iter_value)
+    } else {
+        iter_value
+    };
+    let iter_value_style = if iter_focused {
+        Style::default().fg(Color::Cyan)
+    } else if iter_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut iter_line = vec![
+        Span::styled("  Iterations:      ", iter_label_style),
+        Span::styled(iter_display, iter_value_style),
+    ];
+    if iter_inherited && !iter_focused {
+        iter_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(iter_line));
+
+    // Keep awake toggle
+    let keep_awake_focused = focus == Some(ConfigModalField::KeepAwake);
+    let keep_awake_inherited = is_inherited(ConfigModalField::KeepAwake);
+    let keep_awake_label_style = if keep_awake_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let keep_awake_value = if keep_awake { "ON" } else { "OFF" };
+    let keep_awake_display = if keep_awake_focused {
+        format!("< {} >", keep_awake_value)
+    } else {
+        keep_awake_value.to_string()
+    };
+    let keep_awake_value_style = if keep_awake_focused {
+        Style::default().fg(Color::Cyan)
+    } else if keep_awake_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut keep_awake_line = vec![
+        Span::styled("  Keep awake:        ", keep_awake_label_style),
+        Span::styled(keep_awake_display, keep_awake_value_style),
+    ];
+    if keep_awake_inherited && !keep_awake_focused {
+        keep_awake_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(keep_awake_line));
+
+    // Mode dropdown
+    let mode_focused = focus == Some(ConfigModalField::Mode);
+    let mode_inherited = is_inherited(ConfigModalField::Mode);
+    let mode_label_style = if mode_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mode_display = if mode_focused {
+        format!("< {} >", mode)
+    } else {
+        mode.to_string()
+    };
+    let mode_value_style = if mode_focused {
+        Style::default().fg(Color::Cyan)
+    } else if mode_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut mode_line = vec![
+        Span::styled("  Mode:              ", mode_label_style),
+        Span::styled(mode_display, mode_value_style),
+    ];
+    if mode_inherited && !mode_focused {
+        mode_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(mode_line));
+
+    // Inline warning when selected mode differs from active mode
+    if mode != app.config.behavior.mode {
+        content.push(Line::from(Span::styled(
+            "                     \u{26a0} Changing mode will reset your work panel",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+
+    content.push(Line::from(""));
+
+    // Error message if any
+    if let Some(s) = state {
+        if let Some(error) = s.error() {
+            content.push(Line::from(Span::styled(
+                format!("  Error: {}", error),
+                Style::default().fg(Color::Red),
+            )));
+        } else {
+            content.push(Line::from(""));
+        }
+    } else {
+        content.push(Line::from(""));
+    }
+
+    // Buttons
+    let save_focused = focus == Some(ConfigModalField::SaveButton);
+    let cancel_focused = focus == Some(ConfigModalField::CancelButton);
+
+    let save_style = if has_errors {
+        Style::default().fg(Color::DarkGray)
+    } else if save_focused {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
+    let cancel_style = if cancel_focused {
+        Style::default().fg(Color::Black).bg(Color::White)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    content.push(Line::from(vec![
+        Span::raw("                    "),
+        Span::styled(" Save ", save_style),
+        Span::raw("    "),
+        Span::styled(" Cancel ", cancel_style),
+    ]));
+
+    content.push(Line::from(""));
+
+    // Title shows which config we're editing
+    let title = if on_project_tab {
+        " Configuration (Project) "
+    } else if state.map(|s| s.has_tabs()).unwrap_or(false) {
+        " Configuration (Global) "
+    } else {
+        " Configuration "
+    };
+
+    let modal = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .title_alignment(ratatui::layout::Alignment::Center)
+            .style(Style::default().fg(Color::White)),
+    );
+
+    f.render_widget(modal, modal_area);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ConfigModalField::next tests
 
     #[test]
     fn test_config_modal_field_next_full_cycle() {
@@ -1525,8 +1361,6 @@ mod tests {
             ConfigModalField::ClaudePath
         );
     }
-
-    // ConfigModalField::prev tests
 
     #[test]
     fn test_config_modal_field_prev_full_cycle() {
@@ -1578,290 +1412,5 @@ mod tests {
             assert_eq!(field.next().prev(), field);
             assert_eq!(field.prev().next(), field);
         }
-    }
-
-    // InitModalState mode-aware file list tests
-
-    fn config_with_mode(mode: &str) -> Config {
-        let mut config = Config::default();
-        config.behavior.mode = mode.to_string();
-        config
-    }
-
-    #[test]
-    fn test_init_specs_mode_includes_specs_files() {
-        let config = config_with_mode("specs");
-        let state = InitModalState::new(&config);
-
-        let paths: Vec<&str> = state
-            .files
-            .iter()
-            .map(|f| f.display_path.as_str())
-            .collect();
-        assert!(paths.iter().any(|p| p.ends_with("README.md")));
-        assert!(paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
-    }
-
-    #[test]
-    fn test_init_beads_mode_excludes_specs_files() {
-        let config = config_with_mode("beads");
-        let state = InitModalState::new(&config);
-
-        let paths: Vec<&str> = state
-            .files
-            .iter()
-            .map(|f| f.display_path.as_str())
-            .collect();
-        assert!(!paths.iter().any(|p| p.ends_with("README.md")));
-        assert!(!paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
-    }
-
-    #[test]
-    fn test_init_both_modes_include_prompt_and_ralph() {
-        for mode in &["specs", "beads"] {
-            let config = config_with_mode(mode);
-            let state = InitModalState::new(&config);
-
-            let paths: Vec<&str> = state
-                .files
-                .iter()
-                .map(|f| f.display_path.as_str())
-                .collect();
-            assert!(paths.iter().any(|p| p.ends_with("PROMPT.md")));
-            assert!(paths.iter().any(|p| *p == ".ralph"));
-            assert!(paths.iter().any(|p| p.contains("brain-dump")));
-            assert!(paths.iter().any(|p| p.contains("shape")));
-        }
-    }
-
-    #[test]
-    fn test_init_specs_mode_has_six_files() {
-        let config = config_with_mode("specs");
-        let state = InitModalState::new(&config);
-        assert_eq!(state.files.len(), 6);
-    }
-
-    #[test]
-    fn test_init_beads_mode_has_four_files() {
-        let config = config_with_mode("beads");
-        let state = InitModalState::new(&config);
-        assert_eq!(state.files.len(), 4);
-    }
-}
-
-// ── Stale recovery modal ──
-
-use crate::agent::StaleAgent;
-
-/// State for the stale agent recovery modal.
-pub struct StaleModalState {
-    /// List of stale agents with hooked beads.
-    pub agents: Vec<StaleAgent>,
-    /// Currently selected agent index.
-    pub selected: usize,
-    /// Status message after an action.
-    pub message: Option<String>,
-}
-
-impl StaleModalState {
-    pub fn new(agents: Vec<StaleAgent>) -> Self {
-        Self {
-            agents,
-            selected: 0,
-            message: None,
-        }
-    }
-
-    /// Advance to next stale agent (or close if none left).
-    pub fn advance(&mut self) {
-        self.agents.remove(self.selected);
-        if !self.agents.is_empty() && self.selected >= self.agents.len() {
-            self.selected = self.agents.len() - 1;
-        }
-        self.message = None;
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.agents.is_empty()
-    }
-
-    pub fn current(&self) -> Option<&StaleAgent> {
-        self.agents.get(self.selected)
-    }
-}
-
-/// A bead item for the kanban board.
-#[derive(Debug, Clone)]
-pub struct KanbanCard {
-    pub id: String,
-    pub title: String,
-}
-
-/// Kanban board columns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KanbanColumn {
-    Blocked,
-    NeedsBrainDump,
-    NeedsShaping,
-    Ready,
-    InProgress,
-}
-
-impl KanbanColumn {
-    pub const ALL: [KanbanColumn; 5] = [
-        KanbanColumn::Blocked,
-        KanbanColumn::NeedsBrainDump,
-        KanbanColumn::NeedsShaping,
-        KanbanColumn::Ready,
-        KanbanColumn::InProgress,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            KanbanColumn::Blocked => "Blocked",
-            KanbanColumn::NeedsBrainDump => "Brain Dump",
-            KanbanColumn::NeedsShaping => "Shaping",
-            KanbanColumn::Ready => "Ready",
-            KanbanColumn::InProgress => "In Progress",
-        }
-    }
-}
-
-/// State for the kanban board modal.
-#[derive(Debug)]
-pub struct KanbanBoardState {
-    /// Cards grouped by column.
-    pub columns: Vec<Vec<KanbanCard>>,
-    /// Currently focused column index.
-    pub selected_column: usize,
-    /// Currently selected card index within each column.
-    pub selected_row: Vec<usize>,
-    /// Whether data is still loading.
-    pub is_loading: bool,
-    /// Error message if loading failed.
-    pub error: Option<String>,
-}
-
-impl KanbanBoardState {
-    pub fn new_loading() -> Self {
-        Self {
-            columns: vec![Vec::new(); 5],
-            selected_column: 3, // Start on Ready column
-            selected_row: vec![0; 5],
-            is_loading: true,
-            error: None,
-        }
-    }
-
-    pub fn populate(&mut self, result: Result<Vec<serde_json::Value>, String>) {
-        self.is_loading = false;
-        match result {
-            Ok(items) => {
-                let mut cols: Vec<Vec<KanbanCard>> = vec![Vec::new(); 5];
-                for item in &items {
-                    let id = item
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let title = item
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let status = item
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("open");
-                    let labels: Vec<&str> = item
-                        .get("labels")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|l| l.as_str()).collect())
-                        .unwrap_or_default();
-
-                    // Skip closed/deferred items
-                    if status == "closed" || status == "deferred" {
-                        continue;
-                    }
-
-                    let card = KanbanCard { id, title };
-
-                    // Priority: labels first, then status
-                    if labels.contains(&"needs-brain-dump") {
-                        cols[1].push(card);
-                    } else if labels.contains(&"needs-shaping")
-                        || labels.contains(&"shaping-required")
-                    {
-                        cols[2].push(card);
-                    } else if status == "blocked" {
-                        cols[0].push(card);
-                    } else if status == "in_progress" {
-                        cols[4].push(card);
-                    } else {
-                        // open with no special labels → Ready
-                        cols[3].push(card);
-                    }
-                }
-                self.columns = cols;
-                self.selected_row = vec![0; 5];
-            }
-            Err(e) => {
-                self.error = Some(e);
-            }
-        }
-    }
-
-    pub fn move_left(&mut self) {
-        if self.selected_column > 0 {
-            self.selected_column -= 1;
-        }
-    }
-
-    pub fn move_right(&mut self) {
-        if self.selected_column < 4 {
-            self.selected_column += 1;
-        }
-    }
-
-    pub fn move_up(&mut self) {
-        let col = self.selected_column;
-        if self.selected_row[col] > 0 {
-            self.selected_row[col] -= 1;
-        }
-    }
-
-    pub fn move_down(&mut self) {
-        let col = self.selected_column;
-        let len = self.columns[col].len();
-        if len > 0 && self.selected_row[col] < len - 1 {
-            self.selected_row[col] += 1;
-        }
-    }
-}
-
-/// Handle keyboard input for the kanban board modal.
-pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
-    let Some(state) = &mut app.kanban_board_state else {
-        return;
-    };
-
-    match key_code {
-        KeyCode::Esc => {
-            app.show_kanban_board = false;
-            app.kanban_board_state = None;
-        }
-        KeyCode::Char('h') | KeyCode::Left => {
-            state.move_left();
-        }
-        KeyCode::Char('l') | KeyCode::Right => {
-            state.move_right();
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            state.move_up();
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            state.move_down();
-        }
-        _ => {}
     }
 }

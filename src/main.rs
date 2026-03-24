@@ -7,7 +7,6 @@ mod db;
 mod doctor;
 mod events;
 mod logging;
-mod modal_ui;
 mod modals;
 mod prompt_sniff;
 mod specs;

@@ -11,7 +11,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, AppStatus, DoltServerState, SelectedPanel, ToolCallStatus};
-use crate::modal_ui::{
+use crate::modals::{
     draw_config_modal, draw_help_modal, draw_init_modal, draw_kanban_board, draw_quit_modal,
     draw_specs_panel, draw_stale_modal, draw_tool_allow_modal,
 };
