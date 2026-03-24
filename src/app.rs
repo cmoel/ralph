@@ -33,20 +33,8 @@ pub enum AppStatus {
     Error,
 }
 
-/// State of the Dolt SQL server (beads mode only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DoltServerState {
-    /// Haven't checked yet.
-    Unknown,
-    /// Server is not running.
-    Off,
-    /// Server is starting up (~5s).
-    Starting,
-    /// Server is running.
-    On,
-    /// Server is shutting down.
-    Stopping,
-}
+pub use crate::dolt::DoltServerState;
+use crate::dolt::DoltManager;
 
 impl AppStatus {
     pub fn border_type(&self) -> BorderType {
@@ -229,14 +217,8 @@ pub struct App {
     pub pending_work_check: Option<Receiver<(WorkRemaining, &'static str)>>,
     /// Receiver for background list_items() result (work panel modal).
     pub work_items_rx: Option<Receiver<Result<Vec<WorkItem>, String>>>,
-    /// Current Dolt server state (beads mode only).
-    pub dolt_server_state: DoltServerState,
-    /// Receiver for background dolt status check.
-    pub dolt_status_rx: Option<Receiver<bool>>,
-    /// Receiver for background dolt start/stop operation.
-    pub dolt_toggle_rx: Option<Receiver<bool>>,
-    /// Last time we polled dolt server status.
-    pub last_dolt_poll: Instant,
+    /// Dolt SQL server manager (beads mode only).
+    pub dolt: DoltManager,
     /// When the app entered Error state (for auto-clearing the pulsing flash).
     pub error_at: Option<Instant>,
     /// Receiver for background doctor checks (run once on TUI open).
@@ -360,11 +342,7 @@ impl App {
             spec_poll_rx: None,
             pending_work_check: None,
             work_items_rx: None,
-            dolt_server_state: DoltServerState::Unknown,
-            dolt_status_rx: None,
-            dolt_toggle_rx: None,
-            // Initialize to "long ago" so we poll immediately on start
-            last_dolt_poll: Instant::now() - Duration::from_secs(10),
+            dolt: DoltManager::new(),
             error_at: None,
             doctor_rx: None,
             tool_history_db: None,
@@ -649,7 +627,7 @@ impl App {
         }
 
         // In beads mode, skip if dolt server is not confirmed running
-        if self.config.behavior.mode == "beads" && self.dolt_server_state != DoltServerState::On {
+        if self.config.behavior.mode == "beads" && self.dolt.state != DoltServerState::On {
             return;
         }
 
@@ -769,7 +747,7 @@ impl App {
             Some(0) if self.should_auto_continue() => {
                 // In beads mode, skip work check if dolt server is not running
                 if self.config.behavior.mode == "beads"
-                    && self.dolt_server_state != DoltServerState::On
+                    && self.dolt.state != DoltServerState::On
                 {
                     self.reset_iteration_state();
                     self.status = AppStatus::Stopped;
@@ -1002,9 +980,7 @@ impl App {
         self.spec_poll_rx = None;
         self.pending_work_check = None;
         self.work_items_rx = None;
-        self.dolt_status_rx = None;
-        self.dolt_toggle_rx = None;
-        self.dolt_server_state = DoltServerState::Unknown;
+        self.dolt.clear();
     }
 
     /// Determine if we should auto-continue based on iteration state.
@@ -1052,101 +1028,15 @@ impl App {
 
     /// Poll for Dolt server status (beads mode only, throttled).
     pub fn poll_dolt_status(&mut self) {
-        if self.config.behavior.mode != "beads" {
-            return;
+        if self.dolt.poll_status(&self.config.behavior.bd_path, &self.config.behavior.mode) {
+            self.dirty = true;
         }
-
-        // Check for completed background status check
-        if let Some(rx) = self.dolt_status_rx.take() {
-            match rx.try_recv() {
-                Ok(running) => {
-                    // Only update if not in a transitional state
-                    if self.dolt_server_state != DoltServerState::Starting
-                        && self.dolt_server_state != DoltServerState::Stopping
-                    {
-                        let new_state = if running {
-                            DoltServerState::On
-                        } else {
-                            DoltServerState::Off
-                        };
-                        if self.dolt_server_state != new_state {
-                            self.dolt_server_state = new_state;
-                            self.dirty = true;
-                        }
-                    }
-                }
-                Err(TryRecvError::Empty) => {
-                    self.dolt_status_rx = Some(rx);
-                    return;
-                }
-                Err(TryRecvError::Disconnected) => {}
-            }
-        }
-
-        // Don't poll during transitional states
-        if self.dolt_server_state == DoltServerState::Starting
-            || self.dolt_server_state == DoltServerState::Stopping
-        {
-            return;
-        }
-
-        // Throttle: poll every 5 seconds
-        if self.last_dolt_poll.elapsed() < Duration::from_secs(5) {
-            return;
-        }
-
-        self.last_dolt_poll = Instant::now();
-
-        // Kick off background status check
-        let (tx, rx) = mpsc::channel();
-        let bd_path = self.config.behavior.bd_path.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(check_dolt_running(&bd_path));
-        });
-        self.dolt_status_rx = Some(rx);
     }
 
     /// Poll for Dolt toggle (start/stop) completion.
     pub fn poll_dolt_toggle(&mut self) {
-        let rx = match self.dolt_toggle_rx.take() {
-            Some(rx) => rx,
-            None => return,
-        };
-
-        match rx.try_recv() {
-            Ok(success) => {
-                self.dirty = true;
-                match self.dolt_server_state {
-                    DoltServerState::Starting => {
-                        self.dolt_server_state = if success {
-                            DoltServerState::On
-                        } else {
-                            DoltServerState::Off
-                        };
-                    }
-                    DoltServerState::Stopping => {
-                        self.dolt_server_state = if success {
-                            DoltServerState::Off
-                        } else {
-                            DoltServerState::On
-                        };
-                    }
-                    _ => {}
-                }
-                // Reset poll timer so we verify state soon
-                self.last_dolt_poll = Instant::now() - Duration::from_secs(10);
-            }
-            Err(TryRecvError::Empty) => {
-                self.dolt_toggle_rx = Some(rx);
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.dirty = true;
-                match self.dolt_server_state {
-                    DoltServerState::Starting => self.dolt_server_state = DoltServerState::Off,
-                    DoltServerState::Stopping => self.dolt_server_state = DoltServerState::On,
-                    _ => {}
-                }
-            }
+        if self.dolt.poll_toggle() {
+            self.dirty = true;
         }
     }
 
@@ -1175,37 +1065,7 @@ impl App {
 
     /// Toggle Dolt server on/off (beads mode only).
     pub fn toggle_dolt_server(&mut self) {
-        if self.config.behavior.mode != "beads" {
-            return;
-        }
-
-        match self.dolt_server_state {
-            DoltServerState::Starting | DoltServerState::Stopping => (),
-            DoltServerState::On => {
-                info!("dolt_server_stopping");
-                self.dolt_server_state = DoltServerState::Stopping;
-                // Discard any in-flight status poll so stale results don't override
-                self.dolt_status_rx = None;
-                let (tx, rx) = mpsc::channel();
-                let bd_path = self.config.behavior.bd_path.clone();
-                std::thread::spawn(move || {
-                    let _ = tx.send(run_dolt_command(&bd_path, "stop"));
-                });
-                self.dolt_toggle_rx = Some(rx);
-            }
-            DoltServerState::Off | DoltServerState::Unknown => {
-                info!("dolt_server_starting");
-                self.dolt_server_state = DoltServerState::Starting;
-                // Discard any in-flight status poll so stale results don't override
-                self.dolt_status_rx = None;
-                let (tx, rx) = mpsc::channel();
-                let bd_path = self.config.behavior.bd_path.clone();
-                std::thread::spawn(move || {
-                    let _ = tx.send(run_dolt_command(&bd_path, "start"));
-                });
-                self.dolt_toggle_rx = Some(rx);
-            }
-        }
+        self.dolt.toggle(&self.config.behavior.bd_path, &self.config.behavior.mode);
     }
 
     /// Clean up agent resources on quit (beads mode only).
@@ -1230,23 +1090,3 @@ impl App {
     }
 }
 
-/// Check if the Dolt server is running by calling `bd dolt status`.
-fn check_dolt_running(bd_path: &str) -> bool {
-    std::process::Command::new(bd_path)
-        .args(["dolt", "status"])
-        .output()
-        .map(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains("server: running")
-        })
-        .unwrap_or(false)
-}
-
-/// Run a `bd dolt` subcommand (start/stop) and return whether it succeeded.
-fn run_dolt_command(bd_path: &str, subcmd: &str) -> bool {
-    std::process::Command::new(bd_path)
-        .args(["dolt", subcmd])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}

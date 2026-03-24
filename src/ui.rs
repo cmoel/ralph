@@ -579,7 +579,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Dolt server indicator (beads mode only)
     let dolt_spans: Vec<Span> = if app.config.behavior.mode == "beads" {
         let dim = Style::default().fg(Color::DarkGray);
-        match app.dolt_server_state {
+        match app.dolt.state {
             DoltServerState::On => vec![
                 Span::styled("Dolt ", dim),
                 Span::styled("● ", Style::default().fg(Color::Green)),

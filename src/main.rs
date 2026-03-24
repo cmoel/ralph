@@ -6,6 +6,7 @@ mod cli;
 mod config;
 mod db;
 mod doctor;
+mod dolt;
 mod events;
 mod execution;
 mod logging;
