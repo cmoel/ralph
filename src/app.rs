@@ -17,7 +17,9 @@ use crate::config::reload_config;
 use crate::config::{Config, LoadedConfig, get_project_config_path};
 use crate::doctor;
 use crate::logging::ReloadHandle;
-use crate::modals::{ConfigModalState, InitModalState, SpecsPanelState, ToolAllowModalState};
+use crate::modals::{
+    ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
+};
 use crate::wake_lock::WakeLock;
 use crate::work_source::{WorkItem, WorkRemaining, WorkSource, create_work_source};
 use crate::{OutputMessage, get_file_mtime, logging};
@@ -277,6 +279,12 @@ pub struct App {
     pub hooked_bead_id: Option<String>,
     /// Resolved repository path for tool history tracking.
     pub repo_path: String,
+    /// Whether the kanban board modal is visible.
+    pub show_kanban_board: bool,
+    /// State for the kanban board modal (when open).
+    pub kanban_board_state: Option<KanbanBoardState>,
+    /// Receiver for background bd list --json result (kanban board).
+    pub kanban_items_rx: Option<Receiver<Result<Vec<serde_json::Value>, String>>>,
     /// Whether the stale recovery modal is visible.
     pub show_stale_modal: bool,
     /// State for the stale recovery modal (when open).
@@ -379,6 +387,9 @@ impl App {
             heartbeat_stop: None,
             hooked_bead_id: None,
             repo_path: crate::db::detect_repo_path(),
+            show_kanban_board: false,
+            kanban_board_state: None,
+            kanban_items_rx: None,
             show_stale_modal: false,
             stale_modal_state: None,
             pending_stale_check: None,
@@ -901,6 +912,30 @@ impl App {
             Err(TryRecvError::Disconnected) => {
                 if let Some(ref mut panel) = self.specs_panel_state {
                     panel.populate(Err("Background fetch failed".to_string()));
+                }
+            }
+        }
+    }
+
+    /// Poll for background kanban board data.
+    pub fn poll_kanban_items(&mut self) {
+        let rx = match self.kanban_items_rx.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                if let Some(ref mut board) = self.kanban_board_state {
+                    board.populate(result);
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.kanban_items_rx = Some(rx); // still running
+            }
+            Err(TryRecvError::Disconnected) => {
+                if let Some(ref mut board) = self.kanban_board_state {
+                    board.populate(Err("Background fetch failed".to_string()));
                 }
             }
         }

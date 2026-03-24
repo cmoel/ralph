@@ -30,9 +30,9 @@ use crate::events::{
     ClaudeEvent, ContentBlock, Delta, StreamInnerEvent, ToolResultContent, UserContent,
 };
 use crate::modals::{
-    ConfigModalState, InitModalState, SpecsPanelState, ToolAllowModalState,
-    handle_config_modal_input, handle_init_modal_input, handle_specs_panel_input,
-    handle_tool_allow_modal_input,
+    ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
+    handle_config_modal_input, handle_init_modal_input, handle_kanban_input,
+    handle_specs_panel_input, handle_tool_allow_modal_input,
 };
 use crate::ui::{
     ExchangeType, draw_ui, extract_text_from_task_result, extract_tool_summary,
@@ -670,6 +670,7 @@ fn run_app(
         // Poll for background work source operations
         app.poll_work_check();
         app.poll_work_items();
+        app.poll_kanban_items();
 
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
@@ -728,6 +729,14 @@ fn run_app(
             if app.show_specs_panel {
                 if let Event::Key(key) = event {
                     handle_specs_panel_input(&mut app, key.code);
+                }
+                continue;
+            }
+
+            // Handle kanban board input
+            if app.show_kanban_board {
+                if let Event::Key(key) = event {
+                    handle_kanban_input(&mut app, key.code);
                 }
                 continue;
             }
@@ -849,7 +858,32 @@ fn run_app(
                         app.work_items_rx = Some(rx);
                     }
                     KeyCode::Char('B') if app.config.behavior.mode == "beads" => {
-                        // Work board (beads mode only) — wired in next slice
+                        app.show_kanban_board = true;
+                        app.kanban_board_state = Some(KanbanBoardState::new_loading());
+                        let bd_path = app.config.behavior.bd_path.clone();
+                        let (tx, rx) = mpsc::channel();
+                        std::thread::spawn(move || {
+                            let output = std::process::Command::new(&bd_path)
+                                .args(["list", "--json"])
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::piped())
+                                .stderr(std::process::Stdio::piped())
+                                .output();
+                            let result = match output {
+                                Ok(o) if o.status.success() => {
+                                    let stdout = String::from_utf8_lossy(&o.stdout);
+                                    serde_json::from_str::<Vec<serde_json::Value>>(&stdout)
+                                        .map_err(|e| format!("Failed to parse bd output: {e}"))
+                                }
+                                Ok(o) => {
+                                    let stderr = String::from_utf8_lossy(&o.stderr);
+                                    Err(format!("bd list failed: {stderr}"))
+                                }
+                                Err(e) => Err(format!("Failed to run bd: {e}")),
+                            };
+                            let _ = tx.send(result);
+                        });
+                        app.kanban_items_rx = Some(rx);
                     }
                     KeyCode::Char('i') => {
                         // Open init modal

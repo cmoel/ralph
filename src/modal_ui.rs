@@ -7,7 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::App;
-use crate::modals::{ConfigModalField, ConfigTab, InitFileStatus, InitModalField, ToolAllowField};
+use crate::modals::{
+    ConfigModalField, ConfigTab, InitFileStatus, InitModalField, KanbanColumn, ToolAllowField,
+};
 use crate::ui::centered_rect;
 
 /// Draw the configuration modal.
@@ -1152,6 +1154,164 @@ pub fn draw_stale_modal(f: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .title(title)
+            .title_alignment(Alignment::Center)
+            .style(Style::default().fg(Color::White)),
+    );
+
+    f.render_widget(modal, modal_area);
+}
+
+/// Draw the kanban board modal.
+pub fn draw_kanban_board(f: &mut Frame, app: &App) {
+    let Some(state) = &app.kanban_board_state else {
+        return;
+    };
+
+    // Use most of the screen
+    let area = f.area();
+    let modal_width = area.width.saturating_sub(4).min(120);
+    let modal_height = area.height.saturating_sub(4).min(40);
+    let modal_area = centered_rect(modal_width, modal_height, area);
+
+    f.render_widget(Clear, modal_area);
+
+    let inner_height = modal_height.saturating_sub(2) as usize;
+    let inner_width = modal_width.saturating_sub(2) as usize;
+
+    let mut content: Vec<Line> = Vec::new();
+
+    if state.is_loading {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "  Loading...",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if let Some(error) = &state.error {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            format!("  Error: {error}"),
+            Style::default().fg(Color::Red),
+        )));
+    } else {
+        let col_count = KanbanColumn::ALL.len();
+        // Each column gets equal width with separators between
+        let separators = col_count.saturating_sub(1);
+        let col_width = inner_width.saturating_sub(separators) / col_count;
+
+        // Header row
+        let mut header_spans: Vec<Span> = Vec::new();
+        for (i, col) in KanbanColumn::ALL.iter().enumerate() {
+            let is_selected = i == state.selected_column;
+            let count = state.columns[i].len();
+            let label = format!("{} ({})", col.label(), count);
+            let padded = format!("{:^width$}", label, width = col_width);
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            };
+            header_spans.push(Span::styled(padded, style));
+            if i < col_count - 1 {
+                header_spans.push(Span::styled(
+                    "\u{2502}",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        }
+        content.push(Line::from(header_spans));
+
+        // Separator line
+        let mut sep = String::new();
+        for i in 0..col_count {
+            sep.push_str(&"\u{2500}".repeat(col_width));
+            if i < col_count - 1 {
+                sep.push('\u{253c}');
+            }
+        }
+        content.push(Line::from(Span::styled(
+            sep,
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        // Card rows
+        let max_rows = inner_height.saturating_sub(2); // header + separator
+        let max_cards = state.columns.iter().map(|c| c.len()).max().unwrap_or(0);
+        let visible_rows = max_cards.min(max_rows);
+
+        for row in 0..visible_rows {
+            let mut row_spans: Vec<Span> = Vec::new();
+            for (col_idx, column) in state.columns.iter().enumerate() {
+                let is_active_col = col_idx == state.selected_column;
+                let is_selected_row = is_active_col && row == state.selected_row[col_idx];
+
+                let cell_text = if row < column.len() {
+                    let card = &column[row];
+                    let id_width = card.id.len() + 1; // "id "
+                    let title_max = col_width.saturating_sub(id_width + 1); // margin
+                    let title = if card.title.len() > title_max {
+                        format!("{}..", &card.title[..title_max.saturating_sub(2)])
+                    } else {
+                        card.title.clone()
+                    };
+                    format!("{} {}", card.id, title)
+                } else {
+                    String::new()
+                };
+
+                // Pad/truncate to column width
+                let padded = if cell_text.len() >= col_width {
+                    cell_text[..col_width].to_string()
+                } else {
+                    format!("{:<width$}", cell_text, width = col_width)
+                };
+
+                let style = if is_selected_row {
+                    Style::default().fg(Color::Black).bg(Color::White)
+                } else if is_active_col && row < column.len() {
+                    Style::default().fg(Color::White)
+                } else if row < column.len() {
+                    Style::default().fg(Color::Gray)
+                } else {
+                    Style::default()
+                };
+
+                row_spans.push(Span::styled(padded, style));
+                if col_idx < KanbanColumn::ALL.len() - 1 {
+                    row_spans.push(Span::styled(
+                        "\u{2502}",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+            content.push(Line::from(row_spans));
+        }
+
+        // Fill remaining height with empty rows
+        for _ in visible_rows..max_rows {
+            let mut row_spans: Vec<Span> = Vec::new();
+            for col_idx in 0..col_count {
+                row_spans.push(Span::raw(" ".repeat(col_width)));
+                if col_idx < col_count - 1 {
+                    row_spans.push(Span::styled(
+                        "\u{2502}",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+            content.push(Line::from(row_spans));
+        }
+    }
+
+    let modal = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Work Board ")
             .title_alignment(Alignment::Center)
             .style(Style::default().fg(Color::White)),
     );

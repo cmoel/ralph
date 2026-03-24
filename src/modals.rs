@@ -1689,3 +1689,179 @@ impl StaleModalState {
         self.agents.get(self.selected)
     }
 }
+
+/// A bead item for the kanban board.
+#[derive(Debug, Clone)]
+pub struct KanbanCard {
+    pub id: String,
+    pub title: String,
+}
+
+/// Kanban board columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KanbanColumn {
+    Blocked,
+    NeedsBrainDump,
+    NeedsShaping,
+    Ready,
+    InProgress,
+}
+
+impl KanbanColumn {
+    pub const ALL: [KanbanColumn; 5] = [
+        KanbanColumn::Blocked,
+        KanbanColumn::NeedsBrainDump,
+        KanbanColumn::NeedsShaping,
+        KanbanColumn::Ready,
+        KanbanColumn::InProgress,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            KanbanColumn::Blocked => "Blocked",
+            KanbanColumn::NeedsBrainDump => "Brain Dump",
+            KanbanColumn::NeedsShaping => "Shaping",
+            KanbanColumn::Ready => "Ready",
+            KanbanColumn::InProgress => "In Progress",
+        }
+    }
+}
+
+/// State for the kanban board modal.
+#[derive(Debug)]
+pub struct KanbanBoardState {
+    /// Cards grouped by column.
+    pub columns: Vec<Vec<KanbanCard>>,
+    /// Currently focused column index.
+    pub selected_column: usize,
+    /// Currently selected card index within each column.
+    pub selected_row: Vec<usize>,
+    /// Whether data is still loading.
+    pub is_loading: bool,
+    /// Error message if loading failed.
+    pub error: Option<String>,
+}
+
+impl KanbanBoardState {
+    pub fn new_loading() -> Self {
+        Self {
+            columns: vec![Vec::new(); 5],
+            selected_column: 3, // Start on Ready column
+            selected_row: vec![0; 5],
+            is_loading: true,
+            error: None,
+        }
+    }
+
+    pub fn populate(&mut self, result: Result<Vec<serde_json::Value>, String>) {
+        self.is_loading = false;
+        match result {
+            Ok(items) => {
+                let mut cols: Vec<Vec<KanbanCard>> = vec![Vec::new(); 5];
+                for item in &items {
+                    let id = item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let title = item
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let status = item
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("open");
+                    let labels: Vec<&str> = item
+                        .get("labels")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|l| l.as_str()).collect())
+                        .unwrap_or_default();
+
+                    // Skip closed/deferred items
+                    if status == "closed" || status == "deferred" {
+                        continue;
+                    }
+
+                    let card = KanbanCard { id, title };
+
+                    // Priority: labels first, then status
+                    if labels.contains(&"needs-brain-dump") {
+                        cols[1].push(card);
+                    } else if labels.contains(&"needs-shaping")
+                        || labels.contains(&"shaping-required")
+                    {
+                        cols[2].push(card);
+                    } else if status == "blocked" {
+                        cols[0].push(card);
+                    } else if status == "in_progress" {
+                        cols[4].push(card);
+                    } else {
+                        // open with no special labels → Ready
+                        cols[3].push(card);
+                    }
+                }
+                self.columns = cols;
+                self.selected_row = vec![0; 5];
+            }
+            Err(e) => {
+                self.error = Some(e);
+            }
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.selected_column > 0 {
+            self.selected_column -= 1;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        if self.selected_column < 4 {
+            self.selected_column += 1;
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        let col = self.selected_column;
+        if self.selected_row[col] > 0 {
+            self.selected_row[col] -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let col = self.selected_column;
+        let len = self.columns[col].len();
+        if len > 0 && self.selected_row[col] < len - 1 {
+            self.selected_row[col] += 1;
+        }
+    }
+}
+
+/// Handle keyboard input for the kanban board modal.
+pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
+    let Some(state) = &mut app.kanban_board_state else {
+        return;
+    };
+
+    match key_code {
+        KeyCode::Esc => {
+            app.show_kanban_board = false;
+            app.kanban_board_state = None;
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            state.move_left();
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            state.move_right();
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            state.move_up();
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            state.move_down();
+        }
+        _ => {}
+    }
+}

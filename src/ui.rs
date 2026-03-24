@@ -12,8 +12,8 @@ use ratatui::widgets::{
 
 use crate::app::{App, AppStatus, DoltServerState, SelectedPanel, ToolCallStatus};
 use crate::modal_ui::{
-    draw_config_modal, draw_help_modal, draw_init_modal, draw_quit_modal, draw_specs_panel,
-    draw_stale_modal, draw_tool_allow_modal,
+    draw_config_modal, draw_help_modal, draw_init_modal, draw_kanban_board, draw_quit_modal,
+    draw_specs_panel, draw_stale_modal, draw_tool_allow_modal,
 };
 
 /// Maximum length for truncated tool input display.
@@ -609,9 +609,10 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let inner_width = command_area.width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
 
-    let hint_span = app.hint.as_ref().map(|(msg, _)| {
-        Span::styled(msg.as_str(), Style::default().fg(Color::Yellow))
-    });
+    let hint_span = app
+        .hint
+        .as_ref()
+        .map(|(msg, _)| Span::styled(msg.as_str(), Style::default().fg(Color::Yellow)));
     let hint_len = hint_span.as_ref().map_or(0, |s| s.content.len());
 
     let total_fixed = commands_len + hint_len + dolt_len + status_len;
@@ -681,6 +682,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Specs panel modal
     if app.show_specs_panel {
         draw_specs_panel(f, app);
+    }
+
+    // Kanban board modal
+    if app.show_kanban_board {
+        draw_kanban_board(f, app);
     }
 
     // Init modal
