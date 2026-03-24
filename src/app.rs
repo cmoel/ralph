@@ -202,6 +202,8 @@ pub struct App {
     pub show_help_modal: bool,
     /// Whether the quit confirmation modal is visible.
     pub show_quit_modal: bool,
+    /// Transient hint message displayed in the status bar (auto-clears after timeout).
+    pub hint: Option<(String, Instant)>,
     /// Current iteration number within a run (1-indexed, 0 when stopped).
     pub current_iteration: u32,
     /// Total iterations configured for the current run:
@@ -340,6 +342,7 @@ impl App {
             init_modal_state: None,
             show_help_modal: false,
             show_quit_modal: false,
+            hint: None,
             current_iteration: 0,
             total_iterations: 0,
             cumulative_tokens: 0,
@@ -567,6 +570,20 @@ impl App {
         {
             self.status = AppStatus::Stopped;
             self.error_at = None;
+        }
+    }
+
+    /// Set a transient hint message in the status bar.
+    pub fn set_hint(&mut self, message: impl Into<String>) {
+        self.hint = Some((message.into(), Instant::now()));
+    }
+
+    /// Auto-clear hint after timeout.
+    pub fn check_hint_timeout(&mut self) {
+        if let Some((_, at)) = &self.hint
+            && at.elapsed() >= Duration::from_secs(3)
+        {
+            self.hint = None;
         }
     }
 

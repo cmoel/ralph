@@ -691,12 +691,20 @@ fn run_app(
         // Auto-clear error flash after timeout
         app.check_error_timeout();
 
+        // Auto-clear hint after timeout
+        app.check_hint_timeout();
+
         // Draw UI
         terminal.draw(|f| draw_ui(f, &mut app))?;
 
         // Poll for events with a short timeout to allow process output polling
         if crossterm::event::poll(Duration::from_millis(50))? {
             let event = crossterm::event::read()?;
+
+            // Clear hint on any keypress
+            if matches!(event, Event::Key(_)) {
+                app.hint = None;
+            }
 
             // Handle popup dismissal first
             if app.show_already_running_popup {
@@ -779,7 +787,11 @@ fn run_app(
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
-                        app.show_quit_modal = true;
+                        if app.status == AppStatus::Running {
+                            app.set_hint("press s to stop the loop");
+                        } else {
+                            app.show_quit_modal = true;
+                        }
                     }
                     KeyCode::Char('s') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {

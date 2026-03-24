@@ -608,10 +608,23 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let commands_len: usize = command_spans.iter().map(|s| s.content.len()).sum();
     let inner_width = command_area.width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
-    let spacing = inner_width.saturating_sub(commands_len + dolt_len + status_len);
+
+    let hint_span = app.hint.as_ref().map(|(msg, _)| {
+        Span::styled(msg.as_str(), Style::default().fg(Color::Yellow))
+    });
+    let hint_len = hint_span.as_ref().map_or(0, |s| s.content.len());
+
+    let total_fixed = commands_len + hint_len + dolt_len + status_len;
+    let remaining = inner_width.saturating_sub(total_fixed);
+    let left_pad = remaining / 2;
+    let right_pad = remaining.saturating_sub(left_pad);
 
     let mut line_spans = command_spans;
-    line_spans.push(Span::raw(" ".repeat(spacing)));
+    line_spans.push(Span::raw(" ".repeat(left_pad)));
+    if let Some(span) = hint_span {
+        line_spans.push(span);
+    }
+    line_spans.push(Span::raw(" ".repeat(right_pad)));
     line_spans.extend(dolt_spans);
     line_spans.push(Span::styled(status_dot, Style::default().fg(status_color)));
     line_spans.push(Span::styled(status_text, Style::default().fg(status_color)));
