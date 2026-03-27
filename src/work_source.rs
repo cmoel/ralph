@@ -317,6 +317,10 @@ pub fn is_no_ralph_label(label: &str) -> bool {
     label == "no-ralph"
 }
 
+pub fn is_known_label(label: &str, extra: &[String]) -> bool {
+    is_shaping_label(label, extra) || is_no_ralph_label(label) || label == "human"
+}
+
 fn has_label(item: &serde_json::Value, check: fn(&str) -> bool) -> bool {
     item.get("labels")
         .and_then(|l| l.as_array())

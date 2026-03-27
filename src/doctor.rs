@@ -209,7 +209,7 @@ fn check_labels_in_output(stdout: &str) -> CheckResult {
         if let Some(labels) = item.get("labels").and_then(|l| l.as_array()) {
             for label in labels {
                 if let Some(s) = label.as_str()
-                    && !work_source::is_shaping_label(s, &[])
+                    && !work_source::is_known_label(s, &[])
                 {
                     unrecognized.push((id.to_string(), s.to_string()));
                 }
@@ -313,6 +313,20 @@ mod tests {
             {"id": "ralph-1", "labels": ["needs-shaping"]},
             {"id": "ralph-2", "labels": ["shaping-required"]}
         ]"#;
+        let result = check_labels_in_output(input);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn labels_check_passes_for_human_label() {
+        let input = r#"[{"id": "ralph-abc", "labels": ["human"]}]"#;
+        let result = check_labels_in_output(input);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn labels_check_passes_for_no_ralph_label() {
+        let input = r#"[{"id": "ralph-abc", "labels": ["no-ralph"]}]"#;
         let result = check_labels_in_output(input);
         assert!(result.passed);
     }
