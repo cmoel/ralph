@@ -751,8 +751,11 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         // icon + space + id + space + title + blocker_suffix
                         let fixed_width = icon_width + 1 + id_width + blocker_suffix.width();
                         let title_max = col_width.saturating_sub(fixed_width);
-                        let title = if card.title.len() > title_max {
-                            format!("{}..", &card.title[..title_max.saturating_sub(2)])
+                        let title_display_width = UnicodeWidthStr::width(card.title.as_str());
+                        let title = if title_display_width > title_max {
+                            let truncated =
+                                truncate_to_width(&card.title, title_max.saturating_sub(2));
+                            format!("{}..", truncated.trim_end())
                         } else {
                             card.title.clone()
                         };
