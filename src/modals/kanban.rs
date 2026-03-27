@@ -1,5 +1,7 @@
 //! Kanban board modal — work board view for beads mode.
 
+use std::collections::{HashMap, HashSet};
+
 use crossterm::event::KeyCode;
 use ratatui::Frame;
 use ratatui::layout::Alignment;
@@ -218,6 +220,8 @@ pub struct KanbanBoardState {
     pub open_count: u64,
     /// Total closed issues for footer.
     pub closed_count: u64,
+    /// Maps each bead ID to the set of its direct dependency neighbors (both directions).
+    pub dep_neighbors: HashMap<String, HashSet<String>>,
 }
 
 impl KanbanBoardState {
@@ -231,6 +235,7 @@ impl KanbanBoardState {
             detail_view: None,
             open_count: 0,
             closed_count: 0,
+            dep_neighbors: HashMap::new(),
         }
     }
 
@@ -250,7 +255,7 @@ impl KanbanBoardState {
                 self.closed_count = data.closed_count;
 
                 let mut cols: Vec<Vec<KanbanCard>> = vec![Vec::new(); KanbanColumn::COUNT];
-                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut seen: HashSet<String> = HashSet::new();
 
                 // 1. in_progress → InProgress (index 3)
                 for item in &data.in_progress {
@@ -333,6 +338,36 @@ impl KanbanBoardState {
                 cols[0].sort_by_key(|c| c.priority);
                 cols[2].sort_by_key(|c| c.priority);
                 cols[3].sort_by_key(|c| c.priority);
+
+                // Build bidirectional dependency neighbor map from raw JSON
+                let mut dep_neighbors: HashMap<String, HashSet<String>> = HashMap::new();
+                let all_items = data
+                    .in_progress
+                    .iter()
+                    .chain(data.deferred.iter())
+                    .chain(data.human.iter())
+                    .chain(data.blocked.iter())
+                    .chain(data.ready.iter());
+                for item in all_items {
+                    if let Some(id) = item.get("id").and_then(|v| v.as_str())
+                        && let Some(blockers) =
+                            item.get("blocked_by").and_then(|v| v.as_array())
+                    {
+                        for b in blockers {
+                            if let Some(bid) = b.as_str() {
+                                dep_neighbors
+                                    .entry(id.to_string())
+                                    .or_default()
+                                    .insert(bid.to_string());
+                                dep_neighbors
+                                    .entry(bid.to_string())
+                                    .or_default()
+                                    .insert(id.to_string());
+                            }
+                        }
+                    }
+                }
+                self.dep_neighbors = dep_neighbors;
 
                 self.columns = cols;
                 self.selected_row = vec![0; KanbanColumn::COUNT];
@@ -607,6 +642,13 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
         let max_cards = state.columns.iter().map(|c| c.len()).max().unwrap_or(0);
         let visible_rows = max_cards.min(max_rows);
 
+        // Compute highlighted dependency neighbors for the selected card
+        let highlighted_ids: HashSet<&str> = state
+            .selected_card()
+            .and_then(|card| state.dep_neighbors.get(&card.id))
+            .map(|neighbors| neighbors.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+
         for row in 0..visible_rows {
             let mut row_spans: Vec<Span> = Vec::new();
             for (col_idx, column) in state.columns.iter().enumerate() {
@@ -652,8 +694,16 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                             format!("{:<width$}", cell_text, width = col_width)
                         };
 
+                        let is_dep_neighbor = highlighted_ids.contains(card.id.as_str());
                         let style = if is_selected_row {
                             Style::default().fg(Color::Black).bg(Color::White)
+                        } else if is_dep_neighbor {
+                            let fg = if is_active_col {
+                                Color::White
+                            } else {
+                                Color::Gray
+                            };
+                            Style::default().fg(fg).bg(Color::Rgb(25, 35, 60))
                         } else if is_active_col {
                             Style::default().fg(Color::White)
                         } else {
