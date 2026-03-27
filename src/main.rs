@@ -276,6 +276,8 @@ fn run_app(
             app.dirty = true;
             app.auto_continue_pending = false;
             app.increment_iteration();
+            // Check for stale agents before claiming next bead
+            app.start_stale_check();
             // In beads mode, claim next bead before continuing
             if execution::claim_before_start(&mut app) {
                 execution::start_command(&mut app)?;
@@ -432,6 +434,8 @@ fn run_app(
                     }
                     KeyCode::Char('s') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {
+                            // Check for stale agents before claiming next bead
+                            app.start_stale_check();
                             // Start new iteration run (reads config, sets up tracking)
                             if app.start_iteration_run() {
                                 // In beads mode, claim a bead before starting

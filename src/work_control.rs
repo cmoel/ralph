@@ -103,24 +103,13 @@ impl App {
                 // Don't clear tasks during auto-continue
             }
             WorkRemaining::No => {
-                // Before declaring all work complete, check for stale hooks
-                if self.config.behavior.mode == "beads"
-                    && self.pending_stale_check.is_none()
-                    && !self.show_stale_modal
-                {
-                    info!("no_work_checking_stale");
-                    self.start_stale_check();
-                    self.reset_iteration_state();
-                    self.status = AppStatus::Stopped;
-                } else {
-                    info!("all_work_complete");
-                    self.add_text_line(format!(
-                        "══════════════════ {} ══════════════════",
-                        complete_msg
-                    ));
-                    self.reset_iteration_state();
-                    self.status = AppStatus::Stopped;
-                }
+                info!("all_work_complete");
+                self.add_text_line(format!(
+                    "══════════════════ {} ══════════════════",
+                    complete_msg
+                ));
+                self.reset_iteration_state();
+                self.status = AppStatus::Stopped;
             }
             WorkRemaining::NeedsShaping(count) => {
                 info!(count, "all_ready_beads_need_shaping");

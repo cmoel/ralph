@@ -677,7 +677,10 @@ impl App {
 
     /// Kick off a background stale agent check (beads mode only).
     pub fn start_stale_check(&mut self) {
-        if self.config.behavior.mode != "beads" {
+        if self.config.behavior.mode != "beads"
+            || self.pending_stale_check.is_some()
+            || self.show_stale_modal
+        {
             return;
         }
         let bd_path = self.config.behavior.bd_path.clone();
