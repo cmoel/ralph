@@ -79,21 +79,41 @@ pub fn claim_before_start(app: &mut App) -> bool {
     );
     if !stale_agents.is_empty() {
         let first = &stale_agents[0];
-        if agent::resume_stale_bead(&bd_path, &agent_id, first) {
-            app.add_text_line(format!(
-                "[Auto-reclaimed: {} \"{}\"]",
-                first.hooked_bead_id, first.hooked_bead_title
-            ));
-            app.hooked_bead_id = Some(first.hooked_bead_id.clone());
-            // Release remaining stale agents back to open
-            for stale in stale_agents.iter().skip(1) {
-                agent::release_stale_bead(&bd_path, stale);
+        match agent::resume_stale_bead(&bd_path, &agent_id, first) {
+            agent::ResumeResult::Resumed => {
                 app.add_text_line(format!(
-                    "[Released stale: {} \"{}\"]",
-                    stale.hooked_bead_id, stale.hooked_bead_title
+                    "[Auto-reclaimed: {} \"{}\"]",
+                    first.hooked_bead_id, first.hooked_bead_title
                 ));
+                app.hooked_bead_id = Some(first.hooked_bead_id.clone());
+                // Release remaining stale agents back to open
+                for stale in stale_agents.iter().skip(1) {
+                    agent::release_stale_bead(&bd_path, stale);
+                    app.add_text_line(format!(
+                        "[Released stale: {} \"{}\"]",
+                        stale.hooked_bead_id, stale.hooked_bead_title
+                    ));
+                }
+                return true;
             }
-            return true;
+            agent::ResumeResult::EscalatedToHuman => {
+                app.add_text_line(format!(
+                    "[Escalated to human: {} \"{}\" — stuck twice]",
+                    first.hooked_bead_id, first.hooked_bead_title
+                ));
+                // Release remaining stale agents back to open
+                for stale in stale_agents.iter().skip(1) {
+                    agent::release_stale_bead(&bd_path, stale);
+                    app.add_text_line(format!(
+                        "[Released stale: {} \"{}\"]",
+                        stale.hooked_bead_id, stale.hooked_bead_title
+                    ));
+                }
+                // Fall through to claim new work
+            }
+            agent::ResumeResult::Failed => {
+                // Fall through to claim new work
+            }
         }
     }
 

@@ -24,6 +24,16 @@ pub struct StaleAgent {
     pub worktree_name: String,
 }
 
+/// Outcome of attempting to resume a stale bead.
+pub enum ResumeResult {
+    /// Successfully reclaimed the bead for the new agent.
+    Resumed,
+    /// Bead was stuck a second time; escalated to human review.
+    EscalatedToHuman,
+    /// Failed to reclaim (bd command error).
+    Failed,
+}
+
 /// Register an ephemeral agent bead and create a git worktree.
 /// Returns None if any step fails (logs warnings).
 pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
@@ -513,8 +523,14 @@ pub fn find_stale_agents(
 }
 
 /// Resume a stale bead: claim it on our agent, mark old agent dead.
-/// Returns true on success.
-pub fn resume_stale_bead(bd_path: &str, new_agent_id: &str, stale: &StaleAgent) -> bool {
+/// If the bead was already retried once (has retry:1 label), escalate to human instead.
+pub fn resume_stale_bead(bd_path: &str, new_agent_id: &str, stale: &StaleAgent) -> ResumeResult {
+    // Check if this bead was already retried once
+    if has_label(bd_path, &stale.hooked_bead_id, "retry:1") {
+        escalate_to_human(bd_path, stale);
+        return ResumeResult::EscalatedToHuman;
+    }
+
     // Clear hook on stale agent
     release_hook(bd_path, &stale.agent_bead_id);
 
@@ -552,15 +568,29 @@ pub fn resume_stale_bead(bd_path: &str, new_agent_id: &str, stale: &StaleAgent) 
         .output();
 
     if hooked {
+        // Mark retry:1 so next stale detection escalates to human
+        let _ = Command::new(bd_path)
+            .args([
+                "set-state",
+                &stale.hooked_bead_id,
+                "retry=1",
+                "--reason=auto-reclaimed from stale agent",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+
         info!(
             new_agent = %new_agent_id,
             stale_agent = %stale.agent_bead_id,
             bead = %stale.hooked_bead_id,
             "stale_bead_resumed"
         );
+        ResumeResult::Resumed
+    } else {
+        ResumeResult::Failed
     }
-
-    hooked
 }
 
 /// Release a stale bead: clear hook, reset bead to open, clean up agent.
@@ -583,6 +613,79 @@ pub fn release_stale_bead(bd_path: &str, stale: &StaleAgent) {
         stale_agent = %stale.agent_bead_id,
         bead = %stale.hooked_bead_id,
         "stale_bead_released"
+    );
+}
+
+/// Check if a bead has a specific label (e.g. "retry:1", "human").
+fn has_label(bd_path: &str, bead_id: &str, target: &str) -> bool {
+    let output = Command::new(bd_path)
+        .args(["show", bead_id, "--json"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    let Ok(o) = output else { return false };
+    if !o.status.success() {
+        return false;
+    }
+
+    let stdout = String::from_utf8_lossy(&o.stdout);
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&stdout) else {
+        return false;
+    };
+    let Some(item) = items.first() else {
+        return false;
+    };
+
+    item.get("labels")
+        .and_then(|l| l.as_array())
+        .is_some_and(|labels| {
+            labels.iter().any(|l| l.as_str().is_some_and(|s| s == target))
+        })
+}
+
+/// Escalate a stuck bead to human review: release it, flag it, add a comment.
+fn escalate_to_human(bd_path: &str, stale: &StaleAgent) {
+    // Release the hook and reset bead to open
+    release_bead(bd_path, &stale.agent_bead_id, &stale.hooked_bead_id);
+
+    // Close stale agent bead
+    cleanup_agent_bead(bd_path, &stale.agent_bead_id);
+
+    // Try to remove stale worktree
+    let _ = Command::new(bd_path)
+        .args(["worktree", "remove", &stale.worktree_name])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    // Flag for human review
+    let _ = Command::new(bd_path)
+        .args(["label", "add", &stale.hooked_bead_id, "human"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    // Add comment explaining why
+    let comment = format!(
+        "Auto-escalated: bead went stale twice (reclaimed once, went stale again). \
+         Last stale agent: {}",
+        stale.agent_bead_id,
+    );
+    let _ = Command::new(bd_path)
+        .args(["comments", "add", &stale.hooked_bead_id, &comment])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    info!(
+        stale_agent = %stale.agent_bead_id,
+        bead = %stale.hooked_bead_id,
+        "stale_bead_escalated_to_human"
     );
 }
 
