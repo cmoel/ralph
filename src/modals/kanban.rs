@@ -246,7 +246,7 @@ impl KanbanColumn {
     pub fn label(self) -> &'static str {
         match self {
             KanbanColumn::Deferred => "Deferred",
-            KanbanColumn::Human => "Human",
+            KanbanColumn::Human => "Triage",
             KanbanColumn::Ready => "Ready",
             KanbanColumn::InProgress => "In Progress",
         }
@@ -256,7 +256,7 @@ impl KanbanColumn {
 /// State for the kanban board modal.
 #[derive(Debug)]
 pub struct KanbanBoardState {
-    /// Cards grouped by column (Deferred, Human, Ready, InProgress).
+    /// Cards grouped by column (Deferred, Triage, Ready, InProgress).
     pub columns: Vec<Vec<KanbanCard>>,
     /// Currently focused column index.
     pub selected_column: usize,
@@ -370,18 +370,9 @@ impl KanbanBoardState {
                 human_decisions.sort_by_key(|c| c.priority);
                 human_blocked.sort_by_key(|c| c.priority);
 
-                // Build Human column with section headers
-                if !human_decisions.is_empty() || !human_blocked.is_empty() {
-                    cols[1].push(KanbanCard {
-                        id: String::new(),
-                        title: "\u{25c7} Decisions".to_string(),
-                        priority: 0,
-                        is_header: true,
-                        blockers: Vec::new(),
-                        kind: CardKind::Human,
-                        is_epic: false,
-                    });
-                    cols[1].extend(human_decisions);
+                // Build Triage column: decisions on top, separator, blocked on bottom
+                cols[1].extend(human_decisions);
+                if !cols[1].is_empty() && !human_blocked.is_empty() {
                     cols[1].push(KanbanCard {
                         id: String::new(),
                         title: String::new(),
@@ -391,17 +382,8 @@ impl KanbanBoardState {
                         kind: CardKind::Blocked,
                         is_epic: false,
                     });
-                    cols[1].push(KanbanCard {
-                        id: String::new(),
-                        title: "\u{25c7} Blocked".to_string(),
-                        priority: 0,
-                        is_header: true,
-                        blockers: Vec::new(),
-                        kind: CardKind::Blocked,
-                        is_epic: false,
-                    });
-                    cols[1].extend(human_blocked);
                 }
+                cols[1].extend(human_blocked);
 
                 // 5. ready → Ready (index 2)
                 for item in &data.ready {
