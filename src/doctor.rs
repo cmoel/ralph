@@ -139,6 +139,64 @@ pub fn check_unrecognized_labels(config: &Config) -> CheckResult {
     }
 }
 
+/// Check that a SessionStart hook running `bd prime` is installed in Claude Code settings.
+pub fn check_bd_prime_hook() -> CheckResult {
+    let paths = bd_prime_hook_search_paths();
+    for path in &paths {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && settings_has_bd_prime_hook(&contents)
+        {
+            return CheckResult::pass("bd prime SessionStart hook installed");
+        }
+    }
+    CheckResult::fail(
+        "bd prime SessionStart hook not found — add to ~/.claude/settings.json:\n    \
+         \"hooks\": { \"SessionStart\": [{ \"matcher\": \"\", \
+         \"hooks\": [{ \"type\": \"command\", \"command\": \"bd prime\" }] }] }",
+    )
+}
+
+fn bd_prime_hook_search_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".claude").join("settings.json"));
+    }
+    paths.push(std::path::PathBuf::from(".claude/settings.json"));
+    paths.push(std::path::PathBuf::from(".claude/settings.local.json"));
+    paths
+}
+
+fn settings_has_bd_prime_hook(contents: &str) -> bool {
+    let json: serde_json::Value = match serde_json::from_str(contents) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let session_start = match json.get("hooks").and_then(|h| h.get("SessionStart")) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let entries = match session_start.as_array() {
+        Some(a) => a,
+        None => return false,
+    };
+
+    for entry in entries {
+        if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            for hook in hooks {
+                if let Some(cmd) = hook.get("command").and_then(|c| c.as_str())
+                    && cmd == "bd prime"
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 fn check_labels_in_output(stdout: &str) -> CheckResult {
     let items: Vec<serde_json::Value> = match serde_json::from_str(stdout) {
         Ok(serde_json::Value::Array(arr)) => arr,
@@ -298,5 +356,71 @@ mod tests {
         let result = check_labels_in_output("not json");
         assert!(!result.passed);
         assert!(result.message.contains("Could not parse"));
+    }
+
+    #[test]
+    fn bd_prime_hook_detected_in_settings() {
+        let settings = r#"{
+            "hooks": {
+                "SessionStart": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "bd prime"}]
+                }]
+            }
+        }"#;
+        assert!(settings_has_bd_prime_hook(settings));
+    }
+
+    #[test]
+    fn bd_prime_hook_missing_when_no_hooks() {
+        let settings = r#"{"permissions": {"allow": []}}"#;
+        assert!(!settings_has_bd_prime_hook(settings));
+    }
+
+    #[test]
+    fn bd_prime_hook_missing_when_different_command() {
+        let settings = r#"{
+            "hooks": {
+                "SessionStart": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "echo hello"}]
+                }]
+            }
+        }"#;
+        assert!(!settings_has_bd_prime_hook(settings));
+    }
+
+    #[test]
+    fn bd_prime_hook_missing_when_no_session_start() {
+        let settings = r#"{
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "bd prime"}]
+                }]
+            }
+        }"#;
+        assert!(!settings_has_bd_prime_hook(settings));
+    }
+
+    #[test]
+    fn bd_prime_hook_detected_among_multiple_hooks() {
+        let settings = r#"{
+            "hooks": {
+                "SessionStart": [{
+                    "matcher": "",
+                    "hooks": [
+                        {"type": "command", "command": "echo warmup"},
+                        {"type": "command", "command": "bd prime"}
+                    ]
+                }]
+            }
+        }"#;
+        assert!(settings_has_bd_prime_hook(settings));
+    }
+
+    #[test]
+    fn bd_prime_hook_handles_invalid_json() {
+        assert!(!settings_has_bd_prime_hook("not json"));
     }
 }
