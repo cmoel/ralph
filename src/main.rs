@@ -261,7 +261,6 @@ fn run_app(
         } else {
             app.add_text_line("[Agent registration failed — running without worktree]".to_string());
         }
-
     }
 
     loop {
@@ -371,8 +370,6 @@ fn run_app(
                 continue;
             }
 
-
-
             // Handle quit confirmation modal input
             if app.show_quit_modal {
                 if let Event::Key(key) = event {
@@ -479,24 +476,7 @@ fn run_app(
                         let bd_path = app.config.behavior.bd_path.clone();
                         let (tx, rx) = mpsc::channel();
                         std::thread::spawn(move || {
-                            let output = std::process::Command::new(&bd_path)
-                                .args(["list", "--json"])
-                                .stdin(std::process::Stdio::null())
-                                .stdout(std::process::Stdio::piped())
-                                .stderr(std::process::Stdio::piped())
-                                .output();
-                            let result = match output {
-                                Ok(o) if o.status.success() => {
-                                    let stdout = String::from_utf8_lossy(&o.stdout);
-                                    serde_json::from_str::<Vec<serde_json::Value>>(&stdout)
-                                        .map_err(|e| format!("Failed to parse bd output: {e}"))
-                                }
-                                Ok(o) => {
-                                    let stderr = String::from_utf8_lossy(&o.stderr);
-                                    Err(format!("bd list failed: {stderr}"))
-                                }
-                                Err(e) => Err(format!("Failed to run bd: {e}")),
-                            };
+                            let result = crate::modals::fetch_board_data(&bd_path);
                             let _ = tx.send(result);
                         });
                         app.kanban_items_rx = Some(rx);

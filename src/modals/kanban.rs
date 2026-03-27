@@ -16,6 +16,19 @@ pub struct KanbanCard {
     pub id: String,
     pub title: String,
     pub priority: u64,
+    /// If true, this is a non-selectable section header (used in Human column).
+    pub is_header: bool,
+}
+
+/// Data fetched from multiple bd commands for board population.
+pub struct KanbanBoardData {
+    pub in_progress: Vec<serde_json::Value>,
+    pub deferred: Vec<serde_json::Value>,
+    pub human: Vec<serde_json::Value>,
+    pub blocked: Vec<serde_json::Value>,
+    pub ready: Vec<serde_json::Value>,
+    pub open_count: u64,
+    pub closed_count: u64,
 }
 
 /// Strip the project prefix from a bead ID, returning just the short suffix.
@@ -158,27 +171,26 @@ impl BeadDetailState {
 /// Kanban board columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KanbanColumn {
-    Blocked,
-    NeedsBrainDump,
-    NeedsShaping,
+    Deferred,
+    Human,
     Ready,
     InProgress,
 }
 
 impl KanbanColumn {
-    pub const ALL: [KanbanColumn; 5] = [
-        KanbanColumn::Blocked,
-        KanbanColumn::NeedsBrainDump,
-        KanbanColumn::NeedsShaping,
+    pub const ALL: [KanbanColumn; 4] = [
+        KanbanColumn::Deferred,
+        KanbanColumn::Human,
         KanbanColumn::Ready,
         KanbanColumn::InProgress,
     ];
 
+    pub const COUNT: usize = 4;
+
     pub fn label(self) -> &'static str {
         match self {
-            KanbanColumn::Blocked => "Blocked",
-            KanbanColumn::NeedsBrainDump => "Brain Dump",
-            KanbanColumn::NeedsShaping => "Shaping",
+            KanbanColumn::Deferred => "Deferred",
+            KanbanColumn::Human => "Human",
             KanbanColumn::Ready => "Ready",
             KanbanColumn::InProgress => "In Progress",
         }
@@ -188,11 +200,11 @@ impl KanbanColumn {
 /// State for the kanban board modal.
 #[derive(Debug)]
 pub struct KanbanBoardState {
-    /// Cards grouped by column.
+    /// Cards grouped by column (Deferred, Human, Ready, InProgress).
     pub columns: Vec<Vec<KanbanCard>>,
     /// Currently focused column index.
     pub selected_column: usize,
-    /// Currently selected card index within each column.
+    /// Currently selected card index within each column (skipping headers).
     pub selected_row: Vec<usize>,
     /// Whether data is still loading.
     pub is_loading: bool,
@@ -200,90 +212,146 @@ pub struct KanbanBoardState {
     pub error: Option<String>,
     /// Detail drill-down view (when Some, renders detail instead of board).
     pub detail_view: Option<BeadDetailState>,
+    /// Total open issues for footer.
+    pub open_count: u64,
+    /// Total closed issues for footer.
+    pub closed_count: u64,
 }
 
 impl KanbanBoardState {
     pub fn new_loading() -> Self {
         Self {
-            columns: vec![Vec::new(); 5],
-            selected_column: 3, // Start on Ready column
-            selected_row: vec![0; 5],
+            columns: vec![Vec::new(); KanbanColumn::COUNT],
+            selected_column: 2, // Start on Ready column
+            selected_row: vec![0; KanbanColumn::COUNT],
             is_loading: true,
             error: None,
             detail_view: None,
+            open_count: 0,
+            closed_count: 0,
         }
     }
 
-    /// Returns the currently selected card, if any.
+    /// Returns the currently selected card, if any (skipping headers).
     pub fn selected_card(&self) -> Option<&KanbanCard> {
         let col = self.selected_column;
         let row = self.selected_row[col];
-        self.columns[col].get(row)
+        let card = self.columns[col].get(row)?;
+        if card.is_header { None } else { Some(card) }
     }
 
-    pub fn populate(&mut self, result: Result<Vec<serde_json::Value>, String>) {
+    pub fn populate(&mut self, result: Result<KanbanBoardData, String>) {
         self.is_loading = false;
         match result {
-            Ok(items) => {
-                let mut cols: Vec<Vec<KanbanCard>> = vec![Vec::new(); 5];
-                for item in &items {
-                    let id = item
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let title = item
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let status = item
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("open");
-                    let labels: Vec<&str> = item
-                        .get("labels")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|l| l.as_str()).collect())
-                        .unwrap_or_default();
+            Ok(data) => {
+                self.open_count = data.open_count;
+                self.closed_count = data.closed_count;
 
-                    let priority = item
-                        .get("priority")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(4);
+                let mut cols: Vec<Vec<KanbanCard>> = vec![Vec::new(); KanbanColumn::COUNT];
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-                    // Skip closed/deferred items
-                    if status == "closed" || status == "deferred" {
-                        continue;
-                    }
-
-                    let card = KanbanCard { id, title, priority };
-
-                    // Priority: labels first, then status
-                    if labels.contains(&"needs-brain-dump") {
-                        cols[1].push(card);
-                    } else if labels.contains(&"needs-shaping")
-                        || labels.contains(&"shaping-required")
-                    {
-                        cols[2].push(card);
-                    } else if status == "blocked" {
-                        cols[0].push(card);
-                    } else if status == "in_progress" {
-                        cols[4].push(card);
-                    } else {
-                        // open with no special labels → Ready
+                // 1. in_progress → InProgress (index 3)
+                for item in &data.in_progress {
+                    if let Some(card) = parse_card(item) {
+                        seen.insert(card.id.clone());
                         cols[3].push(card);
                     }
                 }
-                for col in &mut cols {
-                    col.sort_by_key(|card| card.priority);
+
+                // 2. deferred → Deferred (index 0)
+                for item in &data.deferred {
+                    if let Some(card) = parse_card(item)
+                        && seen.insert(card.id.clone())
+                    {
+                        cols[0].push(card);
+                    }
                 }
+
+                // 3. human → Human / Decisions section (index 1)
+                let mut human_decisions: Vec<KanbanCard> = Vec::new();
+                for item in &data.human {
+                    if let Some(card) = parse_card(item)
+                        && seen.insert(card.id.clone())
+                    {
+                        human_decisions.push(card);
+                    }
+                }
+
+                // 4. blocked → Human / Blocked section (index 1)
+                let mut human_blocked: Vec<KanbanCard> = Vec::new();
+                for item in &data.blocked {
+                    if let Some(card) = parse_card(item)
+                        && seen.insert(card.id.clone())
+                    {
+                        human_blocked.push(card);
+                    }
+                }
+
+                // Sort each section by priority
+                human_decisions.sort_by_key(|c| c.priority);
+                human_blocked.sort_by_key(|c| c.priority);
+
+                // Build Human column with section headers
+                if !human_decisions.is_empty() || !human_blocked.is_empty() {
+                    cols[1].push(KanbanCard {
+                        id: String::new(),
+                        title: "\u{25c7} Decisions".to_string(),
+                        priority: 0,
+                        is_header: true,
+                    });
+                    cols[1].extend(human_decisions);
+                    cols[1].push(KanbanCard {
+                        id: String::new(),
+                        title: String::new(),
+                        priority: 0,
+                        is_header: true,
+                    });
+                    cols[1].push(KanbanCard {
+                        id: String::new(),
+                        title: "\u{25c7} Blocked".to_string(),
+                        priority: 0,
+                        is_header: true,
+                    });
+                    cols[1].extend(human_blocked);
+                }
+
+                // 5. ready → Ready (index 2)
+                for item in &data.ready {
+                    if let Some(card) = parse_card(item)
+                        && seen.insert(card.id.clone())
+                    {
+                        cols[2].push(card);
+                    }
+                }
+
+                // Sort non-Human columns by priority
+                cols[0].sort_by_key(|c| c.priority);
+                cols[2].sort_by_key(|c| c.priority);
+                cols[3].sort_by_key(|c| c.priority);
+
                 self.columns = cols;
-                self.selected_row = vec![0; 5];
+                self.selected_row = vec![0; KanbanColumn::COUNT];
+
+                // Ensure selected_row starts on a non-header card
+                for col_idx in 0..KanbanColumn::COUNT {
+                    self.advance_to_card(col_idx);
+                }
             }
             Err(e) => {
                 self.error = Some(e);
             }
+        }
+    }
+
+    /// Advance selected_row for a column to the next non-header card.
+    fn advance_to_card(&mut self, col: usize) {
+        let len = self.columns[col].len();
+        while self.selected_row[col] < len && self.columns[col][self.selected_row[col]].is_header {
+            self.selected_row[col] += 1;
+        }
+        // If we went past the end, reset to 0 (column might be all headers)
+        if self.selected_row[col] >= len {
+            self.selected_row[col] = 0;
         }
     }
 
@@ -294,25 +362,60 @@ impl KanbanBoardState {
     }
 
     pub fn move_right(&mut self) {
-        if self.selected_column < 4 {
+        if self.selected_column < KanbanColumn::COUNT - 1 {
             self.selected_column += 1;
         }
     }
 
     pub fn move_up(&mut self) {
         let col = self.selected_column;
-        if self.selected_row[col] > 0 {
-            self.selected_row[col] -= 1;
+        let mut row = self.selected_row[col];
+        // Move up, skipping headers
+        loop {
+            if row == 0 {
+                break;
+            }
+            row -= 1;
+            if !self.columns[col][row].is_header {
+                self.selected_row[col] = row;
+                break;
+            }
         }
     }
 
     pub fn move_down(&mut self) {
         let col = self.selected_column;
         let len = self.columns[col].len();
-        if len > 0 && self.selected_row[col] < len - 1 {
-            self.selected_row[col] += 1;
+        let mut row = self.selected_row[col];
+        // Move down, skipping headers
+        loop {
+            if row + 1 >= len {
+                break;
+            }
+            row += 1;
+            if !self.columns[col][row].is_header {
+                self.selected_row[col] = row;
+                break;
+            }
         }
     }
+}
+
+/// Parse a JSON bead item into a KanbanCard.
+fn parse_card(item: &serde_json::Value) -> Option<KanbanCard> {
+    let id = item.get("id").and_then(|v| v.as_str())?.to_string();
+    let title = item
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let priority = item.get("priority").and_then(|v| v.as_u64()).unwrap_or(4);
+    Some(KanbanCard {
+        id,
+        title,
+        priority,
+        is_header: false,
+    })
 }
 
 /// Handle keyboard input for the kanban board modal.
@@ -432,17 +535,24 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             Style::default().fg(Color::Red),
         )));
     } else {
-        let col_count = KanbanColumn::ALL.len();
-        // Each column gets equal width with separators between
+        let col_count = KanbanColumn::COUNT;
+        // Divider between Human (index 1) and Ready (index 2) is double-line (║)
+        // Other separators are single-line (│) — each is 1 char wide
         let separators = col_count.saturating_sub(1);
         let col_width = inner_width.saturating_sub(separators) / col_count;
+
+        // Count real cards (not headers) per column for display
+        let card_counts: Vec<usize> = state
+            .columns
+            .iter()
+            .map(|col| col.iter().filter(|c| !c.is_header).count())
+            .collect();
 
         // Header row
         let mut header_spans: Vec<Span> = Vec::new();
         for (i, col) in KanbanColumn::ALL.iter().enumerate() {
             let is_selected = i == state.selected_column;
-            let count = state.columns[i].len();
-            let label = format!("{} ({})", col.label(), count);
+            let label = format!("{} ({})", col.label(), card_counts[i]);
             let padded = format!("{:^width$}", label, width = col_width);
 
             let style = if is_selected {
@@ -457,29 +567,28 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             };
             header_spans.push(Span::styled(padded, style));
             if i < col_count - 1 {
-                header_spans.push(Span::styled(
-                    "\u{2502}",
-                    Style::default().fg(Color::DarkGray),
-                ));
+                let sep_char = if i == 1 { "\u{2551}" } else { "\u{2502}" };
+                header_spans.push(Span::styled(sep_char, Style::default().fg(Color::DarkGray)));
             }
         }
         content.push(Line::from(header_spans));
 
         // Separator line
-        let mut sep = String::new();
+        let mut sep_spans: Vec<Span> = Vec::new();
         for i in 0..col_count {
-            sep.push_str(&"\u{2500}".repeat(col_width));
+            sep_spans.push(Span::styled(
+                "\u{2500}".repeat(col_width),
+                Style::default().fg(Color::DarkGray),
+            ));
             if i < col_count - 1 {
-                sep.push('\u{253c}');
+                let junction = if i == 1 { "\u{256b}" } else { "\u{253c}" };
+                sep_spans.push(Span::styled(junction, Style::default().fg(Color::DarkGray)));
             }
         }
-        content.push(Line::from(Span::styled(
-            sep,
-            Style::default().fg(Color::DarkGray),
-        )));
+        content.push(Line::from(sep_spans));
 
         // Card rows
-        let max_rows = inner_height.saturating_sub(2); // header + separator
+        let max_rows = inner_height.saturating_sub(3); // header + separator + footer
         let max_cards = state.columns.iter().map(|c| c.len()).max().unwrap_or(0);
         let visible_rows = max_cards.min(max_rows);
 
@@ -489,63 +598,83 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                 let is_active_col = col_idx == state.selected_column;
                 let is_selected_row = is_active_col && row == state.selected_row[col_idx];
 
-                let cell_text = if row < column.len() {
+                if row < column.len() {
                     let card = &column[row];
-                    let sid = short_id(&card.id);
-                    let id_width = sid.len() + 1; // "id "
-                    let title_max = col_width.saturating_sub(id_width + 1); // margin
-                    let title = if card.title.len() > title_max {
-                        format!("{}..", &card.title[..title_max.saturating_sub(2)])
+
+                    if card.is_header {
+                        // Section header — render with dimmer style, not selectable
+                        let cell_text = format!(" {}", card.title);
+                        let padded = if cell_text.len() >= col_width {
+                            cell_text[..col_width].to_string()
+                        } else {
+                            format!("{:<width$}", cell_text, width = col_width)
+                        };
+                        let style = Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD);
+                        row_spans.push(Span::styled(padded, style));
                     } else {
-                        card.title.clone()
-                    };
-                    format!("{} {}", sid, title)
-                } else {
-                    String::new()
-                };
+                        let sid = short_id(&card.id);
+                        let id_width = sid.len() + 1; // "id "
+                        let title_max = col_width.saturating_sub(id_width + 1);
+                        let title = if card.title.len() > title_max {
+                            format!("{}..", &card.title[..title_max.saturating_sub(2)])
+                        } else {
+                            card.title.clone()
+                        };
+                        let cell_text = format!("{} {}", sid, title);
 
-                // Pad/truncate to column width
-                let padded = if cell_text.len() >= col_width {
-                    cell_text[..col_width].to_string()
-                } else {
-                    format!("{:<width$}", cell_text, width = col_width)
-                };
+                        let padded = if cell_text.len() >= col_width {
+                            cell_text[..col_width].to_string()
+                        } else {
+                            format!("{:<width$}", cell_text, width = col_width)
+                        };
 
-                let style = if is_selected_row {
-                    Style::default().fg(Color::Black).bg(Color::White)
-                } else if is_active_col && row < column.len() {
-                    Style::default().fg(Color::White)
-                } else if row < column.len() {
-                    Style::default().fg(Color::Gray)
-                } else {
-                    Style::default()
-                };
+                        let style = if is_selected_row {
+                            Style::default().fg(Color::Black).bg(Color::White)
+                        } else if is_active_col {
+                            Style::default().fg(Color::White)
+                        } else {
+                            Style::default().fg(Color::Gray)
+                        };
 
-                row_spans.push(Span::styled(padded, style));
-                if col_idx < KanbanColumn::ALL.len() - 1 {
-                    row_spans.push(Span::styled(
-                        "\u{2502}",
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                        row_spans.push(Span::styled(padded, style));
+                    }
+                } else {
+                    row_spans.push(Span::raw(" ".repeat(col_width)));
+                }
+
+                if col_idx < col_count - 1 {
+                    let sep_char = if col_idx == 1 { "\u{2551}" } else { "\u{2502}" };
+                    row_spans.push(Span::styled(sep_char, Style::default().fg(Color::DarkGray)));
                 }
             }
             content.push(Line::from(row_spans));
         }
 
-        // Fill remaining height with empty rows
+        // Fill remaining height with empty rows (leaving room for footer)
         for _ in visible_rows..max_rows {
             let mut row_spans: Vec<Span> = Vec::new();
             for col_idx in 0..col_count {
                 row_spans.push(Span::raw(" ".repeat(col_width)));
                 if col_idx < col_count - 1 {
-                    row_spans.push(Span::styled(
-                        "\u{2502}",
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    let sep_char = if col_idx == 1 { "\u{2551}" } else { "\u{2502}" };
+                    row_spans.push(Span::styled(sep_char, Style::default().fg(Color::DarkGray)));
                 }
             }
             content.push(Line::from(row_spans));
         }
+
+        // Footer
+        let footer_text = format!(
+            " {} open \u{b7} {} closed \u{b7} bd list --all",
+            state.open_count, state.closed_count
+        );
+        let footer_padded = format!("{:<width$}", footer_text, width = inner_width);
+        content.push(Line::from(Span::styled(
+            footer_padded,
+            Style::default().fg(Color::DarkGray),
+        )));
     }
 
     let modal = Paragraph::new(content).block(
@@ -593,7 +722,10 @@ fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
         content.push(Line::from(""));
 
         // Metadata line: ID · status · priority · type
-        let mut meta: Vec<Span> = vec![Span::styled(short_id(&detail.id), Style::default().fg(Color::Cyan))];
+        let mut meta: Vec<Span> = vec![Span::styled(
+            short_id(&detail.id),
+            Style::default().fg(Color::Cyan),
+        )];
         if !detail.status.is_empty() {
             meta.push(Span::styled(
                 " \u{b7} ",
@@ -751,4 +883,95 @@ fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
         .scroll((detail.scroll_offset, 0));
 
     f.render_widget(modal, modal_area);
+}
+
+/// Run a bd command and parse the JSON array output.
+fn run_bd_json(bd_path: &str, args: &[&str]) -> Result<Vec<serde_json::Value>, String> {
+    let output = std::process::Command::new(bd_path)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run bd: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("bd {} failed: {stderr}", args.join(" ")));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str::<Vec<serde_json::Value>>(&stdout)
+        .map_err(|e| format!("Failed to parse bd output: {e}"))
+}
+
+/// Fetch board data from multiple bd commands (called from background thread).
+pub fn fetch_board_data(bd_path: &str) -> Result<KanbanBoardData, String> {
+    use std::thread;
+
+    let p = bd_path.to_string();
+    let p1 = p.clone();
+    let p2 = p.clone();
+    let p3 = p.clone();
+    let p4 = p.clone();
+    let p5 = p.clone();
+
+    // Run all commands in parallel
+    let h_in_progress =
+        thread::spawn(move || run_bd_json(&p1, &["list", "--json", "--status", "in_progress"]));
+    let h_deferred = thread::spawn(move || run_bd_json(&p2, &["list", "--deferred", "--json"]));
+    let h_human = thread::spawn(move || run_bd_json(&p3, &["human", "list", "--json"]));
+    let h_blocked = thread::spawn(move || run_bd_json(&p4, &["blocked", "--json"]));
+    let h_ready = thread::spawn(move || run_bd_json(&p5, &["ready", "--json"]));
+    let h_stats = thread::spawn(move || {
+        let output = std::process::Command::new(&p)
+            .args(["stats", "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                serde_json::from_str::<serde_json::Value>(&stdout).ok()
+            }
+            _ => None,
+        }
+    });
+
+    let in_progress = h_in_progress.join().map_err(|_| "thread panic")??;
+    let deferred = h_deferred.join().map_err(|_| "thread panic")??;
+    let human = h_human.join().map_err(|_| "thread panic")??;
+    let blocked = h_blocked.join().map_err(|_| "thread panic")??;
+    let ready = h_ready.join().map_err(|_| "thread panic")??;
+    let stats = h_stats.join().map_err(|_| "thread panic")?;
+
+    let (open_count, closed_count) = stats
+        .and_then(|s| s.get("summary").cloned())
+        .map(|s| {
+            let open = s.get("open_issues").and_then(|v| v.as_u64()).unwrap_or(0)
+                + s.get("in_progress_issues")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+                + s.get("blocked_issues")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+                + s.get("deferred_issues")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+            let closed = s.get("closed_issues").and_then(|v| v.as_u64()).unwrap_or(0);
+            (open, closed)
+        })
+        .unwrap_or((0, 0));
+
+    Ok(KanbanBoardData {
+        in_progress,
+        deferred,
+        human,
+        blocked,
+        ready,
+        open_count,
+        closed_count,
+    })
 }

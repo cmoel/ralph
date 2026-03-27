@@ -183,8 +183,8 @@ pub struct App {
     pub show_kanban_board: bool,
     /// State for the kanban board modal (when open).
     pub kanban_board_state: Option<KanbanBoardState>,
-    /// Receiver for background bd list --json result (kanban board).
-    pub kanban_items_rx: Option<Receiver<Result<Vec<serde_json::Value>, String>>>,
+    /// Receiver for background kanban board data (multiple bd commands).
+    pub kanban_items_rx: Option<Receiver<Result<crate::modals::KanbanBoardData, String>>>,
     /// Receiver for background bd show --json result (bead detail drill-down).
     pub bead_detail_rx: Option<Receiver<Result<serde_json::Value, String>>>,
     /// Cached visual line count (invalidated on content or width changes).
