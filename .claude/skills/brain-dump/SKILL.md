@@ -116,13 +116,18 @@ Why this matters and what prompted it.
 
 ## Open Questions
 - Things that need investigation during shaping" \
-  -t task -p 2 \
-  --labels needs-shaping
+  -t task -p 2
+```
+
+After creating each bead, flag it for human attention so it lands in the shaping queue:
+
+```bash
+bd human <id>
 ```
 
 - Default type: `task` (adjust if clearly a `bug`, `feature`, `refactor`, etc.)
 - Default priority: `2` (adjust based on user's emphasis during extraction)
-- Always add `needs-shaping` label — these items need /shape before implementation
+- Always flag for human — these items need /shape before implementation
 - For epics: create the epic bead noting it will need children, but don't prescribe what children should be
 
 ### Specs Mode

@@ -66,7 +66,7 @@ The user specifies a bead ID or spec name directly (e.g., "shape ralph-a12" or "
 
 The user says something like "shape the beads I just dumped" or "shape what we just captured."
 
-- **Beads mode:** Run `bd list --json --labels needs-shaping` to find items needing refinement
+- **Beads mode:** Run `bd human list` and `bd blocked` to find items needing refinement
 - **Specs mode:** Read `specs/README.md` and look for items with "Needs Shaping" status
 
 Present the list and let the user pick which to shape, or shape them all if they're related.
@@ -75,7 +75,7 @@ Present the list and let the user pick which to shape, or shape them all if they
 
 If no item is specified, query for items that need shaping:
 
-- **Beads mode:** Run `bd list --json --labels needs-shaping`
+- **Beads mode:** Run `bd human list` and `bd blocked` to find items needing attention
 - **Specs mode:** Read `specs/README.md` and find "Needs Shaping" entries
 
 Present the list and ask which item(s) to shape. If only one exists, offer to start with it.
@@ -175,7 +175,13 @@ bd create --title="Epic title" --type=feature --description="$(cat <<'EOF'
 - [What's in scope]
 - [No-gos — what's explicitly out]
 EOF
-)" --labels needs-shaping --priority=2
+)" --priority=2
+```
+
+After creating, flag for human so it stays in the shaping queue until fully shaped:
+
+```bash
+bd human <id>
 ```
 
 If the epic already exists, use `bd update <id>` instead.
@@ -193,13 +199,19 @@ bd create --title="Scope name" --type=task --parent=<epic-id> --description="$(c
 
 [Optional: relevant files or starting points]
 EOF
-)" --labels needs-shaping --priority=2
+)" --priority=2
 ```
 
-#### Labels and Metadata
+After creating each child, flag for human if it still needs another shaping pass:
 
-- Add `needs-shaping` to anything that needs another pass through the sieve
-- Remove `needs-shaping` from items that are ready for the Ralph Loop
+```bash
+bd human <id>
+```
+
+#### Readiness
+
+- Flag items for human (`bd human <id>`) when they need another pass through the sieve
+- Dismiss items from human (`bd human dismiss <id>`) when they're ready for the Ralph Loop
 - Set appropriate priority, type, and any other relevant metadata
 - Set dependencies between child beads when order matters: `bd dep add <child> <depends-on>`
 
@@ -265,7 +277,7 @@ When shaping multiple items in one session:
 3. **Specs mode:** Read `specs/README.md` and `specs/TEMPLATE.md`
 4. Determine entry point:
    - If the user specified an item → load it (standalone)
-   - If the user mentioned recent items → find `needs-shaping` items (continuation)
-   - If neither → query for `needs-shaping` items and present the list (auto-discover)
+   - If the user mentioned recent items → find human-flagged and blocked items (continuation)
+   - If neither → query for human-flagged and blocked items and present the list (auto-discover)
 5. Announce the detected mode and what artifacts this session will produce
 6. Assess where the input is in its lifecycle, diagnose the pass, and begin the conversation

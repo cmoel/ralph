@@ -214,7 +214,7 @@ pub const BEADS_MODE_MD: &str = r#"
 
 Run `bd ready --json` to find available work.
 
-**To flag:** `bd label add <id> shaping-required` or `bd label add <id> too-big`
+**To flag for human review:** `bd human <id>` (under-specified, too big, needs a decision)
 
 **To mark in progress:** `bd update <id> --status in_progress` (one bead at a time)
 
@@ -226,7 +226,7 @@ Run `bd show <id>` for full bead details.
 
 ```
 bd comments add <id> -m "What failed, why it blocks, options to resolve"
-bd label add <id> blocked
+bd human <id>
 ```
 
 ## Completing Work
