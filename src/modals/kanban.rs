@@ -344,47 +344,26 @@ impl KanbanBoardState {
                     }
                 }
 
-                // 3. human → Human / Decisions section (index 1)
-                let mut human_decisions: Vec<KanbanCard> = Vec::new();
+                // 3. human → Triage (index 1) — only active (open) items
                 for item in &data.human {
                     if let Some(mut card) = parse_card(item, CardKind::Human)
                         && seen.insert(card.id.clone())
                     {
                         card.is_epic = parent_ids.contains(&card.id);
-                        human_decisions.push(card);
+                        cols[1].push(card);
                     }
                 }
+                cols[1].sort_by_key(|c| c.priority);
 
-                // 4. blocked → Human / Blocked section (index 1)
-                let mut human_blocked: Vec<KanbanCard> = Vec::new();
+                // 4. blocked → InProgress (index 3) — wip category
                 for item in &data.blocked {
                     if let Some(mut card) = parse_card(item, CardKind::Blocked)
                         && seen.insert(card.id.clone())
                     {
                         card.is_epic = parent_ids.contains(&card.id);
-                        human_blocked.push(card);
+                        cols[3].push(card);
                     }
                 }
-
-                // Sort each section by priority
-                human_decisions.sort_by_key(|c| c.priority);
-                human_blocked.sort_by_key(|c| c.priority);
-
-                // Build Triage column: decisions on top, separator, blocked on bottom
-                cols[1].extend(human_decisions);
-                if !cols[1].is_empty() && !human_blocked.is_empty() {
-                    cols[1].push(KanbanCard {
-                        id: String::new(),
-                        title: String::new(),
-                        priority: 0,
-                        is_header: true,
-                        blockers: Vec::new(),
-                        kind: CardKind::Blocked,
-                        is_epic: false,
-                        has_human_label: false,
-                    });
-                }
-                cols[1].extend(human_blocked);
 
                 // 5. ready → Ready (index 2)
                 for item in &data.ready {
@@ -791,6 +770,8 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                             EPIC_ICON.to_string()
                         } else if is_triage {
                             card.kind.triage_icon().to_string()
+                        } else if card.kind == CardKind::Blocked {
+                            "\u{1f534}".to_string() // 🔴
                         } else if card.has_human_label {
                             "\u{1f464}".to_string() // 👤
                         } else {
