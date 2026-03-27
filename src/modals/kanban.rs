@@ -431,10 +431,18 @@ impl KanbanBoardState {
                 self.dep_neighbors = dep_neighbors;
 
                 self.columns = cols;
-                self.selected_row = vec![0; KanbanColumn::COUNT];
 
-                // Ensure selected_row starts on a non-header card
+                // Preserve cursor positions across refreshes, clamping to new bounds
+                if self.selected_row.len() != KanbanColumn::COUNT {
+                    self.selected_row = vec![0; KanbanColumn::COUNT];
+                }
                 for col_idx in 0..KanbanColumn::COUNT {
+                    let len = self.columns[col_idx].len();
+                    if len == 0 {
+                        self.selected_row[col_idx] = 0;
+                    } else if self.selected_row[col_idx] >= len {
+                        self.selected_row[col_idx] = len - 1;
+                    }
                     self.advance_to_card(col_idx);
                 }
             }
