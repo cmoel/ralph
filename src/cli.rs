@@ -275,9 +275,8 @@ pub fn run_ready(verbose: bool) -> Result<()> {
 
 /// Run the logs subcommand: dump session logs to stdout.
 pub fn run_logs(id: Option<String>, path_only: bool) -> Result<()> {
-    let log_dir = logging::log_directory().ok_or_else(|| {
-        anyhow::anyhow!("Failed to determine log directory")
-    })?;
+    let log_dir = logging::log_directory()
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine log directory"))?;
 
     if path_only {
         println!("{}", log_dir.display());
@@ -349,9 +348,7 @@ fn extract_session_id(line: &str) -> Option<String> {
     let marker = "session_id=";
     let start = line.find(marker)? + marker.len();
     let rest = &line[start..];
-    let end = rest
-        .find(|c: char| c.is_whitespace())
-        .unwrap_or(rest.len());
+    let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
     Some(rest[..end].to_string())
 }
 

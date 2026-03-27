@@ -301,10 +301,7 @@ fn assess_bead_specification(bd_path: &str, bead_id: &str, agent_bead_id: &str) 
     };
 
     if let Some(reason) = check_bead_specification(&bead) {
-        let notes = format!(
-            "Flagged by Ralph: {}",
-            reason
-        );
+        let notes = format!("Flagged by Ralph: {}", reason);
         let _ = Command::new(bd_path)
             .args(["update", bead_id, "--notes", &notes])
             .stdin(std::process::Stdio::null())
@@ -718,7 +715,9 @@ fn has_label(bd_path: &str, bead_id: &str, target: &str) -> bool {
     item.get("labels")
         .and_then(|l| l.as_array())
         .is_some_and(|labels| {
-            labels.iter().any(|l| l.as_str().is_some_and(|s| s == target))
+            labels
+                .iter()
+                .any(|l| l.as_str().is_some_and(|s| s == target))
         })
 }
 

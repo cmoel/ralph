@@ -57,8 +57,7 @@ pub fn log_directory() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         dirs_home_log_dir()
     } else {
-        ProjectDirs::from("dev", "cmoel", "ralph")
-            .and_then(|p| p.state_dir().map(PathBuf::from))
+        ProjectDirs::from("dev", "cmoel", "ralph").and_then(|p| p.state_dir().map(PathBuf::from))
     }
 }
 
