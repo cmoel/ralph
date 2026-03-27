@@ -119,7 +119,9 @@ fn process_line(app: &mut App, line: &str) {
         return;
     }
 
-    // Log raw JSON at TRACE level for protocol debugging
+    // Log raw JSON at TRACE level for protocol debugging.
+    // SECURITY: TRACE may include full API responses. Acceptable at this level
+    // since TRACE is never enabled in normal operation — only for local debugging.
     trace!(json = line, "raw_json_line");
 
     // Handle stderr lines (pass through as-is)
@@ -153,6 +155,8 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
             // Silently ignore ping events
             debug!("Received ping");
         }
+        // SECURITY: DEBUG logs full event structures. Acceptable since DEBUG
+        // is only enabled for local development, never in distributed logs.
         ClaudeEvent::System(sys) => {
             debug!(?sys, "System event");
         }

@@ -369,7 +369,8 @@ fn parse_bead_id(json_output: &str) -> Option<String> {
             return Some(id.to_string());
         }
     }
-    warn!(output = %json_output, "could_not_parse_bead_id");
+    let truncated: String = json_output.chars().take(200).collect();
+    warn!(output = %truncated, "could_not_parse_bead_id");
     None
 }
 
