@@ -24,14 +24,12 @@ pub enum CardKind {
 }
 
 impl CardKind {
-    /// Returns the emoji icon for this card kind.
-    pub fn icon(self) -> &'static str {
+    /// Returns the emoji icon for this card kind in the Triage column.
+    pub fn triage_icon(self) -> &'static str {
         match self {
-            CardKind::Human => "\u{1f464}",             // 👤
-            CardKind::Blocked => "\u{1f534}",           // 🔴
-            CardKind::Ready => "\u{1f7e2}",             // 🟢
-            CardKind::InProgress => "\u{2699}\u{fe0f}", // ⚙️
-            CardKind::Deferred => "\u{2744}\u{fe0f}",   // ❄️
+            CardKind::Human => "\u{2753}",    // ❓
+            CardKind::Blocked => "\u{1f534}", // 🔴
+            _ => "\u{1f916}",                 // 🤖 (fallback)
         }
     }
 }
@@ -53,6 +51,8 @@ pub struct KanbanCard {
     pub kind: CardKind,
     /// Whether this bead is an epic (has children).
     pub is_epic: bool,
+    /// Whether this bead has the "human" label.
+    pub has_human_label: bool,
 }
 
 /// Data fetched from multiple bd commands for board population.
@@ -381,6 +381,7 @@ impl KanbanBoardState {
                         blockers: Vec::new(),
                         kind: CardKind::Blocked,
                         is_epic: false,
+                        has_human_label: false,
                     });
                 }
                 cols[1].extend(human_blocked);
@@ -519,6 +520,11 @@ fn parse_card(item: &serde_json::Value, kind: CardKind) -> Option<KanbanCard> {
                 .collect()
         })
         .unwrap_or_default();
+    let has_human_label = item
+        .get("labels")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().any(|v| v.as_str() == Some("human")))
+        .unwrap_or(false);
     Some(KanbanCard {
         id,
         title,
@@ -527,6 +533,7 @@ fn parse_card(item: &serde_json::Value, kind: CardKind) -> Option<KanbanCard> {
         blockers,
         kind,
         is_epic: false, // Set later in populate() after collecting parent IDs
+        has_human_label,
     })
 }
 
@@ -733,11 +740,16 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                             .add_modifier(Modifier::BOLD);
                         row_spans.push(Span::styled(padded, style));
                     } else {
-                        // Build icon prefix: epic icon (if applicable) + status icon
+                        // Context-aware icon: Triage uses kind, others use mode
+                        let is_triage = col_idx == 1;
                         let icon_prefix = if card.is_epic {
-                            format!("{}{}", EPIC_ICON, card.kind.icon())
+                            EPIC_ICON.to_string()
+                        } else if is_triage {
+                            card.kind.triage_icon().to_string()
+                        } else if card.has_human_label {
+                            "\u{1f464}".to_string() // 👤
                         } else {
-                            card.kind.icon().to_string()
+                            "\u{1f916}".to_string() // 🤖
                         };
                         let icon_width = UnicodeWidthStr::width(icon_prefix.as_str());
 
