@@ -658,7 +658,22 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
         // Divider between Human (index 1) and Ready (index 2) is double-line (║)
         // Other separators are single-line (│) — each is 1 char wide
         let separators = col_count.saturating_sub(1);
-        let col_width = inner_width.saturating_sub(separators) / col_count;
+        let usable = inner_width.saturating_sub(separators);
+
+        // Accordion layout: selected column gets ~45% of width, others split the rest
+        let expanded_width = usable * 45 / 100;
+        let collapsed_width = usable.saturating_sub(expanded_width) / (col_count - 1);
+        // Distribute any rounding remainder to the expanded column
+        let leftover = usable.saturating_sub(expanded_width + collapsed_width * (col_count - 1));
+        let col_widths: Vec<usize> = (0..col_count)
+            .map(|i| {
+                if i == state.selected_column {
+                    expanded_width + leftover
+                } else {
+                    collapsed_width
+                }
+            })
+            .collect();
 
         // Count real cards (not headers) per column for display
         let card_counts: Vec<usize> = state
@@ -671,8 +686,9 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
         let mut header_spans: Vec<Span> = Vec::new();
         for (i, col) in KanbanColumn::ALL.iter().enumerate() {
             let is_selected = i == state.selected_column;
+            let w = col_widths[i];
             let label = format!("{} ({})", col.label(), card_counts[i]);
-            let padded = format!("{:^width$}", label, width = col_width);
+            let padded = format!("{:^width$}", label, width = w);
 
             let style = if is_selected {
                 Style::default()
@@ -694,9 +710,9 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
 
         // Separator line
         let mut sep_spans: Vec<Span> = Vec::new();
-        for i in 0..col_count {
+        for (i, &w) in col_widths.iter().enumerate() {
             sep_spans.push(Span::styled(
-                "\u{2500}".repeat(col_width),
+                "\u{2500}".repeat(w),
                 Style::default().fg(Color::DarkGray),
             ));
             if i < col_count - 1 {
@@ -723,6 +739,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             for (col_idx, column) in state.columns.iter().enumerate() {
                 let is_active_col = col_idx == state.selected_column;
                 let is_selected_row = is_active_col && row == state.selected_row[col_idx];
+                let w = col_widths[col_idx];
 
                 if row < column.len() {
                     let card = &column[row];
@@ -730,17 +747,36 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                     if card.is_header {
                         // Section header — render with dimmer style, not selectable
                         let cell_text = format!(" {}", card.title);
-                        let padded = if cell_text.len() >= col_width {
-                            cell_text[..col_width].to_string()
+                        let padded = if cell_text.len() >= w {
+                            cell_text[..w].to_string()
                         } else {
-                            format!("{:<width$}", cell_text, width = col_width)
+                            format!("{:<width$}", cell_text, width = w)
                         };
                         let style = Style::default()
                             .fg(Color::DarkGray)
                             .add_modifier(Modifier::BOLD);
                         row_spans.push(Span::styled(padded, style));
+                    } else if !is_active_col {
+                        // Collapsed column: short ID + truncated title
+                        let sid = short_id(&card.id);
+                        let cell_text = format!(" {} {}", sid, card.title);
+                        let display_width = UnicodeWidthStr::width(cell_text.as_str());
+                        let padded = if display_width >= w {
+                            truncate_to_width(&cell_text, w)
+                        } else {
+                            let padding = w - display_width;
+                            format!("{}{}", cell_text, " ".repeat(padding))
+                        };
+
+                        let is_dep_neighbor = highlighted_ids.contains(card.id.as_str());
+                        let style = if is_dep_neighbor {
+                            Style::default().fg(Color::Gray).bg(Color::Rgb(25, 35, 60))
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        row_spans.push(Span::styled(padded, style));
                     } else {
-                        // Context-aware icon: Triage uses kind, others use mode
+                        // Expanded column: full card with icon, id, title, blockers
                         let is_triage = col_idx == 1;
                         let icon_prefix = if card.is_epic {
                             EPIC_ICON.to_string()
@@ -762,7 +798,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         };
                         // icon + space + id + space + title + blocker_suffix
                         let fixed_width = icon_width + 1 + id_width + blocker_suffix.width();
-                        let title_max = col_width.saturating_sub(fixed_width);
+                        let title_max = w.saturating_sub(fixed_width);
                         let title_display_width = UnicodeWidthStr::width(card.title.as_str());
                         let title = if title_display_width > title_max {
                             let truncated =
@@ -775,10 +811,10 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                             format!("{} {} {}{}", icon_prefix, sid, title, blocker_suffix);
 
                         let display_width = UnicodeWidthStr::width(cell_text.as_str());
-                        let padded = if display_width >= col_width {
-                            truncate_to_width(&cell_text, col_width)
+                        let padded = if display_width >= w {
+                            truncate_to_width(&cell_text, w)
                         } else {
-                            let padding = col_width - display_width;
+                            let padding = w - display_width;
                             format!("{}{}", cell_text, " ".repeat(padding))
                         };
 
@@ -786,22 +822,15 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         let style = if is_selected_row {
                             Style::default().fg(Color::Black).bg(Color::White)
                         } else if is_dep_neighbor {
-                            let fg = if is_active_col {
-                                Color::White
-                            } else {
-                                Color::Gray
-                            };
-                            Style::default().fg(fg).bg(Color::Rgb(25, 35, 60))
-                        } else if is_active_col {
-                            Style::default().fg(Color::White)
+                            Style::default().fg(Color::White).bg(Color::Rgb(25, 35, 60))
                         } else {
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(Color::White)
                         };
 
                         row_spans.push(Span::styled(padded, style));
                     }
                 } else {
-                    row_spans.push(Span::raw(" ".repeat(col_width)));
+                    row_spans.push(Span::raw(" ".repeat(w)));
                 }
 
                 if col_idx < col_count - 1 {
@@ -815,8 +844,8 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
         // Fill remaining height with empty rows (leaving room for footer)
         for _ in visible_rows..max_rows {
             let mut row_spans: Vec<Span> = Vec::new();
-            for col_idx in 0..col_count {
-                row_spans.push(Span::raw(" ".repeat(col_width)));
+            for (col_idx, &w) in col_widths.iter().enumerate() {
+                row_spans.push(Span::raw(" ".repeat(w)));
                 if col_idx < col_count - 1 {
                     let sep_char = if col_idx == 1 { "\u{2551}" } else { "\u{2502}" };
                     row_spans.push(Span::styled(sep_char, Style::default().fg(Color::DarkGray)));
