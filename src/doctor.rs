@@ -325,13 +325,6 @@ mod tests {
     }
 
     #[test]
-    fn labels_check_passes_for_no_ralph_label() {
-        let input = r#"[{"id": "ralph-abc", "labels": ["no-ralph"]}]"#;
-        let result = check_labels_in_output(input);
-        assert!(result.passed);
-    }
-
-    #[test]
     fn labels_check_fails_for_unrecognized_label() {
         let input = r#"[{"id": "ralph-bmv", "labels": ["shapng-required"]}]"#;
         let result = check_labels_in_output(input);

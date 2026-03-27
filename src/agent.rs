@@ -202,7 +202,7 @@ pub fn claim_next_bead(bd_path: &str, agent_bead_id: &str) -> Option<(String, St
             .is_some_and(|ls| {
                 ls.iter().any(|l| {
                     l.as_str().is_some_and(|s| {
-                        matches!(s, "needs-shaping" | "shaping-required" | "no-ralph")
+                        matches!(s, "needs-shaping" | "shaping-required" | "human")
                     })
                 })
             });
