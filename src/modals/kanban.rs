@@ -1172,7 +1172,7 @@ pub fn fetch_board_data(bd_path: &str) -> Result<KanbanBoardData, String> {
     let h_in_progress =
         thread::spawn(move || run_bd_json(&p1, &["list", "--json", "--status", "in_progress"]));
     let h_deferred = thread::spawn(move || run_bd_json(&p2, &["list", "--deferred", "--json"]));
-    let h_human = thread::spawn(move || run_bd_json(&p3, &["human", "list", "--json"]));
+    let h_human = thread::spawn(move || run_bd_json(&p3, &["human", "list", "--json", "--status=open"]));
     let h_blocked = thread::spawn(move || run_bd_json(&p4, &["blocked", "--json"]));
     let h_ready = thread::spawn(move || run_bd_json(&p5, &["ready", "--json"]));
     let h_stats = thread::spawn(move || {
