@@ -18,12 +18,6 @@ pub enum Commands {
     Init,
     /// Force-regenerate all managed files (preserves .ralph config)
     Reinit,
-    /// Show status summary of work items
-    Status {
-        /// Print individual item statuses
-        #[arg(long)]
-        verbose: bool,
-    },
     /// Check environment health and report pass/fail for each check
     Doctor,
     /// List implementable beads (beads mode only)
@@ -169,73 +163,6 @@ pub fn run_reinit() -> Result<()> {
             std::process::exit(1);
         }
     }
-}
-
-/// Run the status subcommand: print work item status summary.
-pub fn run_status(verbose: bool) -> Result<()> {
-    let loaded_config = config::load_config();
-    let cfg = &loaded_config.config;
-    let work_source = work_source::create_work_source(
-        &cfg.behavior.mode,
-        cfg.specs_path(),
-        &cfg.behavior.bd_path,
-    );
-
-    let items = match work_source.list_items() {
-        Ok(items) => items,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    if items.is_empty() {
-        println!("{}", work_source.complete_message());
-        return Ok(());
-    }
-
-    let blocked = items
-        .iter()
-        .filter(|i| i.status == work_source::WorkItemStatus::Blocked)
-        .count();
-    let ready = items
-        .iter()
-        .filter(|i| i.status == work_source::WorkItemStatus::Ready)
-        .count();
-    let in_progress = items
-        .iter()
-        .filter(|i| i.status == work_source::WorkItemStatus::InProgress)
-        .count();
-    let done = items
-        .iter()
-        .filter(|i| i.status == work_source::WorkItemStatus::Done)
-        .count();
-
-    // Build summary parts, only including non-zero counts
-    let mut parts = Vec::new();
-    if in_progress > 0 {
-        parts.push(format!("{} in progress", in_progress));
-    }
-    if ready > 0 {
-        parts.push(format!("{} ready", ready));
-    }
-    if blocked > 0 {
-        parts.push(format!("{} blocked", blocked));
-    }
-    if done > 0 {
-        parts.push(format!("{} done", done));
-    }
-
-    println!("{}", parts.join(", "));
-
-    if verbose {
-        println!();
-        for item in &items {
-            println!("  [{}] {}", item.status.label(), item.name);
-        }
-    }
-
-    Ok(())
 }
 
 /// Run the ready subcommand: list implementable beads.

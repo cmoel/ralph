@@ -91,7 +91,6 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init) => return cli::run_init(),
         Some(Commands::Reinit) => return cli::run_reinit(),
-        Some(Commands::Status { verbose }) => return cli::run_status(verbose),
         Some(Commands::Doctor) => return cli::run_doctor(),
         Some(Commands::Ready { verbose }) => return cli::run_ready(verbose),
         Some(Commands::Tool(tool_cmd)) => {
@@ -636,27 +635,9 @@ mod tests {
     }
 
     #[test]
-    fn cli_status_subcommand_parses() {
-        let cli = Cli::try_parse_from(["ralph", "status"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Status { verbose: false })
-        ));
-    }
-
-    #[test]
     fn cli_doctor_subcommand_parses() {
         let cli = Cli::try_parse_from(["ralph", "doctor"]).unwrap();
         assert!(matches!(cli.command, Some(Commands::Doctor)));
-    }
-
-    #[test]
-    fn cli_status_verbose_parses() {
-        let cli = Cli::try_parse_from(["ralph", "status", "--verbose"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Status { verbose: true })
-        ));
     }
 
     #[test]
