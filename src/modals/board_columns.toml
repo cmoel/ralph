@@ -1,0 +1,43 @@
+[[columns]]
+name = "Deferred"
+
+[[columns.sources]]
+command = "bd list --json --status deferred"
+emoji = "❄"
+
+[[columns.sources]]
+command = "bd list --json --status pinned"
+emoji = "📌"
+
+[[columns]]
+name = "Triage"
+
+[[columns.sources]]
+command = "bd human list --json --status=open"
+emoji = "❓"
+
+[[columns.sources]]
+command = "bd list --json --status blocked"
+emoji = "🚫"
+
+[[columns.sources]]
+command = '''bd blocked --json | jq '[.[] | select(.status != "deferred" and .status != "pinned" and .status != "in_progress" and .status != "hooked")]' '''
+emoji = "🔴"
+
+[[columns]]
+name = "Ready"
+
+[[columns.sources]]
+command = '''bd ready --json | jq '[.[] | select((.labels // []) | index("human") | not)]' '''
+emoji = "○"
+
+[[columns]]
+name = "In Progress"
+
+[[columns.sources]]
+command = "bd list --json --status in_progress"
+emoji = "◐"
+
+[[columns.sources]]
+command = "bd list --json --status hooked"
+emoji = "◇"

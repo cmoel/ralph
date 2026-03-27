@@ -473,12 +473,16 @@ fn run_app(
                         app.work_items_rx = Some(rx);
                     }
                     KeyCode::Char('B') if app.config.behavior.mode == "beads" => {
+                        let board_config = crate::modals::load_board_config();
+                        let column_defs = board_config.columns.clone();
                         app.show_kanban_board = true;
-                        app.kanban_board_state = Some(KanbanBoardState::new_loading());
+                        app.kanban_board_state =
+                            Some(KanbanBoardState::new_loading(board_config.columns));
                         let bd_path = app.config.behavior.bd_path.clone();
                         let (tx, rx) = mpsc::channel();
                         std::thread::spawn(move || {
-                            let result = crate::modals::fetch_board_data(&bd_path);
+                            let result =
+                                crate::modals::fetch_board_data(&bd_path, &column_defs);
                             let _ = tx.send(result);
                         });
                         app.kanban_items_rx = Some(rx);

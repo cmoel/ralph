@@ -1,4 +1,8 @@
-//! Kanban board modal — work board view for beads mode.
+//! Kanban board modal — pipeline-based work board view.
+//!
+//! Columns are defined in `board_columns.toml`. Each column has a name and a list
+//! of shell pipeline sources that return JSON arrays. Ralph renders the results
+//! with zero knowledge of beads internals.
 
 use std::collections::{HashMap, HashSet};
 
@@ -8,34 +12,45 @@ use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use serde::Deserialize;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::ui::centered_rect;
 
-/// The status category of a card, used to determine its emoji icon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CardKind {
-    Ready,
-    InProgress,
-    Blocked,
-    Human,
-    Deferred,
+// ---------------------------------------------------------------------------
+// Column definitions
+// ---------------------------------------------------------------------------
+
+/// Board configuration: a list of column definitions.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoardConfig {
+    pub columns: Vec<ColumnDef>,
 }
 
-impl CardKind {
-    /// Returns the emoji icon for this card kind in the Triage column.
-    pub fn triage_icon(self) -> &'static str {
-        match self {
-            CardKind::Human => "\u{2753}",    // ❓
-            CardKind::Blocked => "\u{1f534}", // 🔴
-            _ => "\u{1f916}",                 // 🤖 (fallback)
-        }
-    }
+/// A column definition with a name and list of pipeline sources.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ColumnDef {
+    pub name: String,
+    pub sources: Vec<SourceDef>,
 }
 
-/// Emoji icon for epic beads (has children).
-const EPIC_ICON: &str = "\u{26f0}\u{fe0f}"; // ⛰️
+/// A pipeline source: a shell command that returns a JSON array, plus an emoji.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SourceDef {
+    pub command: String,
+    pub emoji: String,
+}
+
+/// Load the embedded board column definitions.
+pub fn load_board_config() -> BoardConfig {
+    toml::from_str(include_str!("board_columns.toml"))
+        .expect("embedded board_columns.toml is invalid")
+}
+
+// ---------------------------------------------------------------------------
+// Card type
+// ---------------------------------------------------------------------------
 
 /// A bead item for the kanban board.
 #[derive(Debug, Clone)]
@@ -43,28 +58,27 @@ pub struct KanbanCard {
     pub id: String,
     pub title: String,
     pub priority: u64,
-    /// If true, this is a non-selectable section header (used in Human column).
-    pub is_header: bool,
     /// Short IDs of beads blocking this one (empty if not blocked).
     pub blockers: Vec<String>,
-    /// The status category, determines the emoji icon shown.
-    pub kind: CardKind,
+    /// Emoji from the source definition.
+    pub emoji: String,
     /// Whether this bead is an epic (has children).
     pub is_epic: bool,
-    /// Whether this bead has the "human" label.
-    pub has_human_label: bool,
+    /// Whether this card represents a pipeline error (non-selectable).
+    pub is_error: bool,
 }
 
-/// Data fetched from multiple bd commands for board population.
+/// Data fetched from pipeline sources for board population.
 pub struct KanbanBoardData {
-    pub in_progress: Vec<serde_json::Value>,
-    pub deferred: Vec<serde_json::Value>,
-    pub human: Vec<serde_json::Value>,
-    pub blocked: Vec<serde_json::Value>,
-    pub ready: Vec<serde_json::Value>,
+    pub columns: Vec<Vec<KanbanCard>>,
     pub open_count: u64,
     pub closed_count: u64,
+    pub dep_neighbors: HashMap<String, HashSet<String>>,
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /// Strip the project prefix from a bead ID, returning just the short suffix.
 /// e.g., "ralph-y3t" → "y3t", "private-lessons-gac" → "gac"
@@ -92,6 +106,10 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
     }
     result
 }
+
+// ---------------------------------------------------------------------------
+// Bead detail state (drill-down view)
+// ---------------------------------------------------------------------------
 
 /// Parsed detail data for a single bead.
 #[derive(Debug)]
@@ -224,43 +242,20 @@ impl BeadDetailState {
     }
 }
 
-/// Kanban board columns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KanbanColumn {
-    Deferred,
-    Human,
-    Ready,
-    InProgress,
-}
-
-impl KanbanColumn {
-    pub const ALL: [KanbanColumn; 4] = [
-        KanbanColumn::Deferred,
-        KanbanColumn::Human,
-        KanbanColumn::Ready,
-        KanbanColumn::InProgress,
-    ];
-
-    pub const COUNT: usize = 4;
-
-    pub fn label(self) -> &'static str {
-        match self {
-            KanbanColumn::Deferred => "Deferred",
-            KanbanColumn::Human => "Triage",
-            KanbanColumn::Ready => "Ready",
-            KanbanColumn::InProgress => "In Progress",
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// Board state
+// ---------------------------------------------------------------------------
 
 /// State for the kanban board modal.
 #[derive(Debug)]
 pub struct KanbanBoardState {
-    /// Cards grouped by column (Deferred, Triage, Ready, InProgress).
+    /// Column definitions from the board config.
+    pub column_defs: Vec<ColumnDef>,
+    /// Cards grouped by column.
     pub columns: Vec<Vec<KanbanCard>>,
     /// Currently focused column index.
     pub selected_column: usize,
-    /// Currently selected card index within each column (skipping headers).
+    /// Currently selected card index within each column (skipping error cards).
     pub selected_row: Vec<usize>,
     /// Whether data is still loading.
     pub is_loading: bool,
@@ -277,26 +272,36 @@ pub struct KanbanBoardState {
 }
 
 impl KanbanBoardState {
-    pub fn new_loading() -> Self {
+    pub fn new_loading(column_defs: Vec<ColumnDef>) -> Self {
+        let col_count = column_defs.len();
+        let default_col = column_defs
+            .iter()
+            .position(|c| c.name == "Ready")
+            .unwrap_or(0);
         Self {
-            columns: vec![Vec::new(); KanbanColumn::COUNT],
-            selected_column: 2, // Start on Ready column
-            selected_row: vec![0; KanbanColumn::COUNT],
+            columns: vec![Vec::new(); col_count],
+            selected_column: default_col,
+            selected_row: vec![0; col_count],
             is_loading: true,
             error: None,
             detail_view: None,
             open_count: 0,
             closed_count: 0,
             dep_neighbors: HashMap::new(),
+            column_defs,
         }
     }
 
-    /// Returns the currently selected card, if any (skipping headers).
+    fn col_count(&self) -> usize {
+        self.column_defs.len()
+    }
+
+    /// Returns the currently selected card, if any (skipping error cards).
     pub fn selected_card(&self) -> Option<&KanbanCard> {
         let col = self.selected_column;
         let row = self.selected_row[col];
         let card = self.columns[col].get(row)?;
-        if card.is_header { None } else { Some(card) }
+        if card.is_error { None } else { Some(card) }
     }
 
     pub fn populate(&mut self, result: Result<KanbanBoardData, String>) {
@@ -305,117 +310,15 @@ impl KanbanBoardState {
             Ok(data) => {
                 self.open_count = data.open_count;
                 self.closed_count = data.closed_count;
-
-                let mut cols: Vec<Vec<KanbanCard>> = vec![Vec::new(); KanbanColumn::COUNT];
-                let mut seen: HashSet<String> = HashSet::new();
-
-                // Collect all parent IDs to detect epics
-                let all_items_iter = data
-                    .in_progress
-                    .iter()
-                    .chain(data.deferred.iter())
-                    .chain(data.human.iter())
-                    .chain(data.blocked.iter())
-                    .chain(data.ready.iter());
-                let parent_ids: HashSet<String> = all_items_iter
-                    .filter_map(|item| {
-                        item.get("parent")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .collect();
-
-                // 1. in_progress → InProgress (index 3)
-                for item in &data.in_progress {
-                    if let Some(mut card) = parse_card(item, CardKind::InProgress) {
-                        card.is_epic = parent_ids.contains(&card.id);
-                        seen.insert(card.id.clone());
-                        cols[3].push(card);
-                    }
-                }
-
-                // 2. deferred → Deferred (index 0)
-                for item in &data.deferred {
-                    if let Some(mut card) = parse_card(item, CardKind::Deferred)
-                        && seen.insert(card.id.clone())
-                    {
-                        card.is_epic = parent_ids.contains(&card.id);
-                        cols[0].push(card);
-                    }
-                }
-
-                // 3. human → Triage (index 1) — only active (open) items
-                for item in &data.human {
-                    if let Some(mut card) = parse_card(item, CardKind::Human)
-                        && seen.insert(card.id.clone())
-                    {
-                        card.is_epic = parent_ids.contains(&card.id);
-                        cols[1].push(card);
-                    }
-                }
-                cols[1].sort_by_key(|c| c.priority);
-
-                // 4. blocked → InProgress (index 3) — wip category
-                for item in &data.blocked {
-                    if let Some(mut card) = parse_card(item, CardKind::Blocked)
-                        && seen.insert(card.id.clone())
-                    {
-                        card.is_epic = parent_ids.contains(&card.id);
-                        cols[3].push(card);
-                    }
-                }
-
-                // 5. ready → Ready (index 2)
-                for item in &data.ready {
-                    if let Some(mut card) = parse_card(item, CardKind::Ready)
-                        && seen.insert(card.id.clone())
-                    {
-                        card.is_epic = parent_ids.contains(&card.id);
-                        cols[2].push(card);
-                    }
-                }
-
-                // Sort non-Human columns by priority
-                cols[0].sort_by_key(|c| c.priority);
-                cols[2].sort_by_key(|c| c.priority);
-                cols[3].sort_by_key(|c| c.priority);
-
-                // Build bidirectional dependency neighbor map from raw JSON
-                let mut dep_neighbors: HashMap<String, HashSet<String>> = HashMap::new();
-                let all_items = data
-                    .in_progress
-                    .iter()
-                    .chain(data.deferred.iter())
-                    .chain(data.human.iter())
-                    .chain(data.blocked.iter())
-                    .chain(data.ready.iter());
-                for item in all_items {
-                    if let Some(id) = item.get("id").and_then(|v| v.as_str())
-                        && let Some(blockers) = item.get("blocked_by").and_then(|v| v.as_array())
-                    {
-                        for b in blockers {
-                            if let Some(bid) = b.as_str() {
-                                dep_neighbors
-                                    .entry(id.to_string())
-                                    .or_default()
-                                    .insert(bid.to_string());
-                                dep_neighbors
-                                    .entry(bid.to_string())
-                                    .or_default()
-                                    .insert(id.to_string());
-                            }
-                        }
-                    }
-                }
-                self.dep_neighbors = dep_neighbors;
-
-                self.columns = cols;
+                self.dep_neighbors = data.dep_neighbors;
+                self.columns = data.columns;
 
                 // Preserve cursor positions across refreshes, clamping to new bounds
-                if self.selected_row.len() != KanbanColumn::COUNT {
-                    self.selected_row = vec![0; KanbanColumn::COUNT];
+                let col_count = self.col_count();
+                if self.selected_row.len() != col_count {
+                    self.selected_row = vec![0; col_count];
                 }
-                for col_idx in 0..KanbanColumn::COUNT {
+                for col_idx in 0..col_count {
                     let len = self.columns[col_idx].len();
                     if len == 0 {
                         self.selected_row[col_idx] = 0;
@@ -431,13 +334,13 @@ impl KanbanBoardState {
         }
     }
 
-    /// Advance selected_row for a column to the next non-header card.
+    /// Advance selected_row for a column to the next non-error card.
     fn advance_to_card(&mut self, col: usize) {
         let len = self.columns[col].len();
-        while self.selected_row[col] < len && self.columns[col][self.selected_row[col]].is_header {
+        while self.selected_row[col] < len && self.columns[col][self.selected_row[col]].is_error {
             self.selected_row[col] += 1;
         }
-        // If we went past the end, reset to 0 (column might be all headers)
+        // If we went past the end, reset to 0 (column might be all errors)
         if self.selected_row[col] >= len {
             self.selected_row[col] = 0;
         }
@@ -450,7 +353,7 @@ impl KanbanBoardState {
     }
 
     pub fn move_right(&mut self) {
-        if self.selected_column < KanbanColumn::COUNT - 1 {
+        if self.selected_column < self.col_count() - 1 {
             self.selected_column += 1;
         }
     }
@@ -458,13 +361,13 @@ impl KanbanBoardState {
     pub fn move_up(&mut self) {
         let col = self.selected_column;
         let mut row = self.selected_row[col];
-        // Move up, skipping headers
+        // Move up, skipping error cards
         loop {
             if row == 0 {
                 break;
             }
             row -= 1;
-            if !self.columns[col][row].is_header {
+            if !self.columns[col][row].is_error {
                 self.selected_row[col] = row;
                 break;
             }
@@ -475,13 +378,13 @@ impl KanbanBoardState {
         let col = self.selected_column;
         let len = self.columns[col].len();
         let mut row = self.selected_row[col];
-        // Move down, skipping headers
+        // Move down, skipping error cards
         loop {
             if row + 1 >= len {
                 break;
             }
             row += 1;
-            if !self.columns[col][row].is_header {
+            if !self.columns[col][row].is_error {
                 self.selected_row[col] = row;
                 break;
             }
@@ -489,8 +392,8 @@ impl KanbanBoardState {
     }
 }
 
-/// Parse a JSON bead item into a KanbanCard with the given kind.
-fn parse_card(item: &serde_json::Value, kind: CardKind) -> Option<KanbanCard> {
+/// Parse a JSON bead item into a KanbanCard with the given source emoji.
+fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
     let id = item.get("id").and_then(|v| v.as_str())?.to_string();
     let title = item
         .get("title")
@@ -507,22 +410,20 @@ fn parse_card(item: &serde_json::Value, kind: CardKind) -> Option<KanbanCard> {
                 .collect()
         })
         .unwrap_or_default();
-    let has_human_label = item
-        .get("labels")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().any(|v| v.as_str() == Some("human")))
-        .unwrap_or(false);
     Some(KanbanCard {
         id,
         title,
         priority,
-        is_header: false,
         blockers,
-        kind,
-        is_epic: false, // Set later in populate() after collecting parent IDs
-        has_human_label,
+        emoji: emoji.to_string(),
+        is_epic: false, // Set later in fetch_board_data after collecting parent IDs
+        is_error: false,
     })
 }
+
+// ---------------------------------------------------------------------------
+// Input handling
+// ---------------------------------------------------------------------------
 
 /// Handle keyboard input for the kanban board modal.
 pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
@@ -604,6 +505,10 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Board rendering
+// ---------------------------------------------------------------------------
+
 /// Draw the kanban board modal.
 pub fn draw_kanban_board(f: &mut Frame, app: &App) {
     let Some(state) = &app.kanban_board_state else {
@@ -642,17 +547,23 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             Style::default().fg(Color::Red),
         )));
     } else {
-        let col_count = KanbanColumn::COUNT;
-        // Divider between Human (index 1) and Ready (index 2) is double-line (║)
-        // Other separators are single-line (│) — each is 1 char wide
+        let col_count = state.col_count();
         let separators = col_count.saturating_sub(1);
         let usable = inner_width.saturating_sub(separators);
 
         // Accordion layout: selected column gets ~45% of width, others split the rest
-        let expanded_width = usable * 45 / 100;
-        let collapsed_width = usable.saturating_sub(expanded_width) / (col_count - 1);
-        // Distribute any rounding remainder to the expanded column
-        let leftover = usable.saturating_sub(expanded_width + collapsed_width * (col_count - 1));
+        let (expanded_width, collapsed_width) = if col_count <= 1 {
+            (usable, 0)
+        } else {
+            let exp = usable * 45 / 100;
+            let coll = usable.saturating_sub(exp) / (col_count - 1);
+            (exp, coll)
+        };
+        let leftover = if col_count <= 1 {
+            0
+        } else {
+            usable.saturating_sub(expanded_width + collapsed_width * (col_count - 1))
+        };
         let col_widths: Vec<usize> = (0..col_count)
             .map(|i| {
                 if i == state.selected_column {
@@ -663,19 +574,19 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             })
             .collect();
 
-        // Count real cards (not headers) per column for display
+        // Count real cards (not error cards) per column for display
         let card_counts: Vec<usize> = state
             .columns
             .iter()
-            .map(|col| col.iter().filter(|c| !c.is_header).count())
+            .map(|col| col.iter().filter(|c| !c.is_error).count())
             .collect();
 
         // Header row
         let mut header_spans: Vec<Span> = Vec::new();
-        for (i, col) in KanbanColumn::ALL.iter().enumerate() {
+        for (i, col_def) in state.column_defs.iter().enumerate() {
             let is_selected = i == state.selected_column;
             let w = col_widths[i];
-            let label = format!("{} ({})", col.label(), card_counts[i]);
+            let label = format!("{} ({})", col_def.name, card_counts[i]);
             let padded = format!("{:^width$}", label, width = w);
 
             let style = if is_selected {
@@ -690,8 +601,10 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             };
             header_spans.push(Span::styled(padded, style));
             if i < col_count - 1 {
-                let sep_char = if i == 1 { "\u{2551}" } else { "\u{2502}" };
-                header_spans.push(Span::styled(sep_char, Style::default().fg(Color::DarkGray)));
+                header_spans.push(Span::styled(
+                    "\u{2502}",
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
         }
         content.push(Line::from(header_spans));
@@ -704,8 +617,10 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::DarkGray),
             ));
             if i < col_count - 1 {
-                let junction = if i == 1 { "\u{256b}" } else { "\u{253c}" };
-                sep_spans.push(Span::styled(junction, Style::default().fg(Color::DarkGray)));
+                sep_spans.push(Span::styled(
+                    "\u{253c}",
+                    Style::default().fg(Color::DarkGray),
+                ));
             }
         }
         content.push(Line::from(sep_spans));
@@ -732,17 +647,17 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                 if row < column.len() {
                     let card = &column[row];
 
-                    if card.is_header {
-                        // Section header — render with dimmer style, not selectable
-                        let cell_text = format!(" {}", card.title);
-                        let padded = if cell_text.len() >= w {
-                            cell_text[..w].to_string()
+                    if card.is_error {
+                        // Error card — render with error style, not selectable
+                        let cell_text = format!(" {} {}", card.emoji, card.title);
+                        let display_width = UnicodeWidthStr::width(cell_text.as_str());
+                        let padded = if display_width >= w {
+                            truncate_to_width(&cell_text, w)
                         } else {
-                            format!("{:<width$}", cell_text, width = w)
+                            let padding = w - display_width;
+                            format!("{}{}", cell_text, " ".repeat(padding))
                         };
-                        let style = Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::BOLD);
+                        let style = Style::default().fg(Color::Red);
                         row_spans.push(Span::styled(padded, style));
                     } else if !is_active_col {
                         // Collapsed column: short ID + truncated title
@@ -764,19 +679,8 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         };
                         row_spans.push(Span::styled(padded, style));
                     } else {
-                        // Expanded column: full card with icon, id, title, blockers
-                        let is_triage = col_idx == 1;
-                        let icon_prefix = if card.is_epic {
-                            EPIC_ICON.to_string()
-                        } else if is_triage {
-                            card.kind.triage_icon().to_string()
-                        } else if card.kind == CardKind::Blocked {
-                            "\u{1f534}".to_string() // 🔴
-                        } else if card.has_human_label {
-                            "\u{1f464}".to_string() // 👤
-                        } else {
-                            "\u{1f916}".to_string() // 🤖
-                        };
+                        // Expanded column: source emoji, id, title, blockers
+                        let icon_prefix = &card.emoji;
                         let icon_width = UnicodeWidthStr::width(icon_prefix.as_str());
 
                         let sid = short_id(&card.id);
@@ -809,12 +713,18 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         };
 
                         let is_dep_neighbor = highlighted_ids.contains(card.id.as_str());
-                        let style = if is_selected_row {
+                        let base_style = if is_selected_row {
                             Style::default().fg(Color::Black).bg(Color::White)
                         } else if is_dep_neighbor {
                             Style::default().fg(Color::White).bg(Color::Rgb(25, 35, 60))
                         } else {
                             Style::default().fg(Color::White)
+                        };
+                        // Epics get bold styling but keep the source emoji
+                        let style = if card.is_epic {
+                            base_style.add_modifier(Modifier::BOLD)
+                        } else {
+                            base_style
                         };
 
                         row_spans.push(Span::styled(padded, style));
@@ -824,8 +734,10 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                 }
 
                 if col_idx < col_count - 1 {
-                    let sep_char = if col_idx == 1 { "\u{2551}" } else { "\u{2502}" };
-                    row_spans.push(Span::styled(sep_char, Style::default().fg(Color::DarkGray)));
+                    row_spans.push(Span::styled(
+                        "\u{2502}",
+                        Style::default().fg(Color::DarkGray),
+                    ));
                 }
             }
             content.push(Line::from(row_spans));
@@ -837,8 +749,10 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             for (col_idx, &w) in col_widths.iter().enumerate() {
                 row_spans.push(Span::raw(" ".repeat(w)));
                 if col_idx < col_count - 1 {
-                    let sep_char = if col_idx == 1 { "\u{2551}" } else { "\u{2502}" };
-                    row_spans.push(Span::styled(sep_char, Style::default().fg(Color::DarkGray)));
+                    row_spans.push(Span::styled(
+                        "\u{2502}",
+                        Style::default().fg(Color::DarkGray),
+                    ));
                 }
             }
             content.push(Line::from(row_spans));
@@ -866,6 +780,10 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
 
     f.render_widget(modal, modal_area);
 }
+
+// ---------------------------------------------------------------------------
+// Bead detail rendering (unchanged)
+// ---------------------------------------------------------------------------
 
 /// Draw the bead detail drill-down view.
 fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
@@ -1064,27 +982,46 @@ fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
     f.render_widget(modal, modal_area);
 }
 
-/// Run a bd command and parse the JSON array output.
-fn run_bd_json(bd_path: &str, args: &[&str]) -> Result<Vec<serde_json::Value>, String> {
-    let output = std::process::Command::new(bd_path)
-        .args(args)
+// ---------------------------------------------------------------------------
+// Pipeline execution
+// ---------------------------------------------------------------------------
+
+/// Run a shell pipeline and parse the JSON array output.
+fn run_shell_pipeline(command: &str, bd_path: &str) -> Result<Vec<serde_json::Value>, String> {
+    let mut cmd = std::process::Command::new("sh");
+    cmd.args(["-c", command])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    // Ensure the directory containing bd is on PATH so pipeline commands
+    // can find the bd binary even when bd_path is an absolute path.
+    let bd_abs = std::path::Path::new(bd_path);
+    if let Some(parent) = bd_abs.parent().filter(|p| !p.as_os_str().is_empty())
+        && let Ok(current_path) = std::env::var("PATH")
+    {
+        cmd.env("PATH", format!("{}:{current_path}", parent.display()));
+    }
+
+    let output = cmd
         .output()
-        .map_err(|e| format!("Failed to run bd: {e}"))?;
+        .map_err(|e| format!("Failed to run pipeline: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("bd {} failed: {stderr}", args.join(" ")));
+        return Err(format!("Pipeline failed: {stderr}"));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let trimmed = stdout.trim();
     if trimmed.is_empty() || trimmed == "null" {
         return Ok(Vec::new());
     }
-    serde_json::from_str::<Vec<serde_json::Value>>(&stdout)
-        .map_err(|e| format!("Failed to parse bd output: {e}"))
+    serde_json::from_str::<Vec<serde_json::Value>>(trimmed)
+        .map_err(|e| format!("Failed to parse pipeline output: {e}"))
 }
+
+// ---------------------------------------------------------------------------
+// Filesystem watcher
+// ---------------------------------------------------------------------------
 
 /// Watch .beads/ directory for changes and send notifications (called from background thread).
 /// Debounces events — waits 200ms after the last change before notifying.
@@ -1138,24 +1075,36 @@ pub fn watch_beads_directory(
     // watcher is dropped here, stopping the OS-level watch
 }
 
-/// Fetch board data from multiple bd commands (called from background thread).
-pub fn fetch_board_data(bd_path: &str) -> Result<KanbanBoardData, String> {
+// ---------------------------------------------------------------------------
+// Data fetching
+// ---------------------------------------------------------------------------
+
+/// Fetch board data from pipeline sources (called from background thread).
+pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<KanbanBoardData, String> {
     use std::thread;
 
-    let p = bd_path.to_string();
-    let p1 = p.clone();
-    let p2 = p.clone();
-    let p3 = p.clone();
-    let p4 = p.clone();
-    let p5 = p.clone();
+    // Collect all (col_idx, emoji, command) tuples
+    let mut tasks: Vec<(usize, String, String)> = Vec::new();
+    for (col_idx, col_def) in column_defs.iter().enumerate() {
+        for source in &col_def.sources {
+            tasks.push((col_idx, source.emoji.clone(), source.command.clone()));
+        }
+    }
 
-    // Run all commands in parallel
-    let h_in_progress =
-        thread::spawn(move || run_bd_json(&p1, &["list", "--json", "--status", "in_progress"]));
-    let h_deferred = thread::spawn(move || run_bd_json(&p2, &["list", "--deferred", "--json"]));
-    let h_human = thread::spawn(move || run_bd_json(&p3, &["human", "list", "--json", "--status=open"]));
-    let h_blocked = thread::spawn(move || run_bd_json(&p4, &["blocked", "--json"]));
-    let h_ready = thread::spawn(move || run_bd_json(&p5, &["ready", "--json"]));
+    // Spawn all source commands in parallel
+    type PipelineHandle = (usize, String, thread::JoinHandle<Result<Vec<serde_json::Value>, String>>);
+    let bd = bd_path.to_string();
+    let handles: Vec<PipelineHandle> = tasks
+        .into_iter()
+        .map(|(col_idx, emoji, command)| {
+            let bd_clone = bd.clone();
+            let handle = thread::spawn(move || run_shell_pipeline(&command, &bd_clone));
+            (col_idx, emoji, handle)
+        })
+        .collect();
+
+    // Also fetch stats in parallel
+    let p = bd_path.to_string();
     let h_stats = thread::spawn(move || {
         let output = std::process::Command::new(&p)
             .args(["stats", "--json"])
@@ -1172,13 +1121,87 @@ pub fn fetch_board_data(bd_path: &str) -> Result<KanbanBoardData, String> {
         }
     });
 
-    let in_progress = h_in_progress.join().map_err(|_| "thread panic")??;
-    let deferred = h_deferred.join().map_err(|_| "thread panic")??;
-    let human = h_human.join().map_err(|_| "thread panic")??;
-    let blocked = h_blocked.join().map_err(|_| "thread panic")??;
-    let ready = h_ready.join().map_err(|_| "thread panic")??;
-    let stats = h_stats.join().map_err(|_| "thread panic")?;
+    // Collect results into columns
+    let col_count = column_defs.len();
+    let mut columns: Vec<Vec<KanbanCard>> = vec![Vec::new(); col_count];
+    let mut all_items: Vec<serde_json::Value> = Vec::new();
 
+    for (col_idx, emoji, handle) in handles {
+        match handle.join().map_err(|_| "thread panic".to_string())? {
+            Ok(items) => {
+                all_items.extend(items.iter().cloned());
+                for item in &items {
+                    if let Some(card) = parse_card(item, &emoji) {
+                        columns[col_idx].push(card);
+                    }
+                }
+            }
+            Err(err) => {
+                // Render an error card in the column; other sources still render
+                columns[col_idx].push(KanbanCard {
+                    id: String::new(),
+                    title: format!("Error: {err}"),
+                    priority: 999,
+                    blockers: Vec::new(),
+                    emoji: "\u{26a0}\u{fe0f}".to_string(), // ⚠️
+                    is_epic: false,
+                    is_error: true,
+                });
+            }
+        }
+    }
+
+    // Dedup within each column by ID
+    for column in &mut columns {
+        let mut seen = HashSet::new();
+        column.retain(|card| card.is_error || card.id.is_empty() || seen.insert(card.id.clone()));
+    }
+
+    // Detect epics (beads that are parents of other beads)
+    let parent_ids: HashSet<String> = all_items
+        .iter()
+        .filter_map(|item| {
+            item.get("parent")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+    for column in &mut columns {
+        for card in column.iter_mut() {
+            if parent_ids.contains(&card.id) {
+                card.is_epic = true;
+            }
+        }
+    }
+
+    // Sort each column by priority (error cards sort to the end)
+    for column in &mut columns {
+        column.sort_by_key(|c| if c.is_error { u64::MAX } else { c.priority });
+    }
+
+    // Build bidirectional dependency neighbor map
+    let mut dep_neighbors: HashMap<String, HashSet<String>> = HashMap::new();
+    for item in &all_items {
+        if let Some(id) = item.get("id").and_then(|v| v.as_str())
+            && let Some(blockers) = item.get("blocked_by").and_then(|v| v.as_array())
+        {
+            for b in blockers {
+                if let Some(bid) = b.as_str() {
+                    dep_neighbors
+                        .entry(id.to_string())
+                        .or_default()
+                        .insert(bid.to_string());
+                    dep_neighbors
+                        .entry(bid.to_string())
+                        .or_default()
+                        .insert(id.to_string());
+                }
+            }
+        }
+    }
+
+    // Stats
+    let stats = h_stats.join().map_err(|_| "thread panic")?;
     let (open_count, closed_count) = stats
         .and_then(|s| s.get("summary").cloned())
         .map(|s| {
@@ -1192,18 +1215,18 @@ pub fn fetch_board_data(bd_path: &str) -> Result<KanbanBoardData, String> {
                 + s.get("deferred_issues")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
-            let closed = s.get("closed_issues").and_then(|v| v.as_u64()).unwrap_or(0);
+            let closed = s
+                .get("closed_issues")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             (open, closed)
         })
         .unwrap_or((0, 0));
 
     Ok(KanbanBoardData {
-        in_progress,
-        deferred,
-        human,
-        blocked,
-        ready,
+        columns,
         open_count,
         closed_count,
+        dep_neighbors,
     })
 }

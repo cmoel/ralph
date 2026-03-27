@@ -664,11 +664,16 @@ impl App {
         }
 
         // If something changed and we're not already fetching, trigger re-fetch
-        if changed && self.kanban_items_rx.is_none() && self.show_kanban_board {
+        if changed
+            && self.kanban_items_rx.is_none()
+            && self.show_kanban_board
+            && let Some(ref board) = self.kanban_board_state
+        {
             let bd_path = self.config.behavior.bd_path.clone();
+            let column_defs = board.column_defs.clone();
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let result = crate::modals::fetch_board_data(&bd_path);
+                let result = crate::modals::fetch_board_data(&bd_path, &column_defs);
                 let _ = tx.send(result);
             });
             self.kanban_items_rx = Some(rx);
