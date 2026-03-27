@@ -1089,7 +1089,8 @@ fn run_bd_json(bd_path: &str, args: &[&str]) -> Result<Vec<serde_json::Value>, S
         return Err(format!("bd {} failed: {stderr}", args.join(" ")));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.trim().is_empty() {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || trimmed == "null" {
         return Ok(Vec::new());
     }
     serde_json::from_str::<Vec<serde_json::Value>>(&stdout)
