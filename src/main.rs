@@ -93,6 +93,7 @@ fn main() -> Result<()> {
         Some(Commands::Reinit) => return cli::run_reinit(),
         Some(Commands::Doctor) => return cli::run_doctor(),
         Some(Commands::Ready { verbose }) => return cli::run_ready(verbose),
+        Some(Commands::Logs { id, path }) => return cli::run_logs(id, path),
         Some(Commands::Tool(tool_cmd)) => {
             return match tool_cmd {
                 ToolCommands::History {
@@ -775,5 +776,41 @@ mod tests {
             cli.command,
             Some(Commands::Ready { verbose: true })
         ));
+    }
+
+    #[test]
+    fn cli_logs_subcommand_parses() {
+        let cli = Cli::try_parse_from(["ralph", "logs"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Logs {
+                id: None,
+                path: false
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_logs_path_flag_parses() {
+        let cli = Cli::try_parse_from(["ralph", "logs", "--path"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Logs {
+                id: None,
+                path: true
+            })
+        ));
+    }
+
+    #[test]
+    fn cli_logs_id_parses() {
+        let cli = Cli::try_parse_from(["ralph", "logs", "--id", "abc123"]).unwrap();
+        match cli.command {
+            Some(Commands::Logs { id, path }) => {
+                assert_eq!(id.as_deref(), Some("abc123"));
+                assert!(!path);
+            }
+            _ => panic!("Expected Logs"),
+        }
     }
 }

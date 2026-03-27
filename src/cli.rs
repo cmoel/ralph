@@ -1,6 +1,7 @@
 //! CLI argument parsing and subcommand implementations.
 
 use std::io;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::Result;
@@ -8,6 +9,7 @@ use clap::Parser;
 
 use crate::config;
 use crate::doctor;
+use crate::logging;
 use crate::modals::InitModalState;
 use crate::work_source;
 
@@ -25,6 +27,15 @@ pub enum Commands {
         /// Annotate each item with include/exclude reason
         #[arg(long)]
         verbose: bool,
+    },
+    /// Dump session logs to stdout
+    Logs {
+        /// Dump logs for a specific session ID
+        #[arg(long)]
+        id: Option<String>,
+        /// Print the log directory path and exit
+        #[arg(long)]
+        path: bool,
     },
     /// Manage and inspect tool permissions and history
     #[command(subcommand)]
@@ -262,6 +273,88 @@ pub fn run_ready(verbose: bool) -> Result<()> {
     Ok(())
 }
 
+/// Run the logs subcommand: dump session logs to stdout.
+pub fn run_logs(id: Option<String>, path_only: bool) -> Result<()> {
+    let log_dir = logging::log_directory().ok_or_else(|| {
+        anyhow::anyhow!("Failed to determine log directory")
+    })?;
+
+    if path_only {
+        println!("{}", log_dir.display());
+        return Ok(());
+    }
+
+    if !log_dir.exists() {
+        eprintln!("Error: log directory does not exist: {}", log_dir.display());
+        std::process::exit(1);
+    }
+
+    // Collect and sort log files
+    let mut log_files: Vec<PathBuf> = std::fs::read_dir(&log_dir)?
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("ralph."))
+        })
+        .map(|e| e.path())
+        .collect();
+    log_files.sort();
+
+    if log_files.is_empty() {
+        eprintln!("Error: no log files found");
+        std::process::exit(1);
+    }
+
+    let session_id = match id {
+        Some(id) => id,
+        None => find_most_recent_session(&log_files)?,
+    };
+
+    // Warning to stderr so it doesn't pollute piped output
+    eprintln!("Review for secrets before sharing");
+
+    // Dump all lines for this session (oldest first)
+    let filter = format!("session_id={}", session_id);
+    for file in &log_files {
+        let content = std::fs::read_to_string(file)?;
+        for line in content.lines() {
+            if line.contains(&filter) {
+                println!("{}", line);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Find the most recent session_start in log files (sorted oldest to newest).
+fn find_most_recent_session(log_files: &[PathBuf]) -> Result<String> {
+    for file in log_files.iter().rev() {
+        let content = std::fs::read_to_string(file)?;
+        for line in content.lines().rev() {
+            if line.contains("session_start")
+                && let Some(id) = extract_session_id(line)
+            {
+                return Ok(id);
+            }
+        }
+    }
+    eprintln!("Error: no sessions found in log files");
+    std::process::exit(1);
+}
+
+/// Extract session_id value from a log line like `... session_id=abc123 ...`.
+fn extract_session_id(line: &str) -> Option<String> {
+    let marker = "session_id=";
+    let start = line.find(marker)? + marker.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_string())
+}
+
 /// Run the doctor subcommand: check environment health.
 pub fn run_doctor() -> Result<()> {
     let loaded_config = config::load_config();
@@ -302,4 +395,27 @@ pub fn run_doctor() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_session_id_from_log_line() {
+        let line = "2026-03-27T10:00:00.000Z  INFO ralph::logging: session_start session_id=abc123 log_level=info";
+        assert_eq!(extract_session_id(line), Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn extract_session_id_at_end_of_line() {
+        let line = "some prefix session_id=def456";
+        assert_eq!(extract_session_id(line), Some("def456".to_string()));
+    }
+
+    #[test]
+    fn extract_session_id_missing() {
+        let line = "no session here";
+        assert_eq!(extract_session_id(line), None);
+    }
 }

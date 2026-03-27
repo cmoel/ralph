@@ -52,6 +52,16 @@ pub fn new_session_id() -> String {
     generate_session_id()
 }
 
+/// Returns the platform-appropriate log directory path without initializing logging.
+pub fn log_directory() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        dirs_home_log_dir()
+    } else {
+        ProjectDirs::from("dev", "cmoel", "ralph")
+            .and_then(|p| p.state_dir().map(PathBuf::from))
+    }
+}
+
 /// Initializes the logging system.
 ///
 /// The `session_id` parameter is the session ID for this Ralph invocation.
