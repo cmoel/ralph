@@ -18,6 +18,8 @@ pub struct KanbanCard {
     pub priority: u64,
     /// If true, this is a non-selectable section header (used in Human column).
     pub is_header: bool,
+    /// Short IDs of beads blocking this one (empty if not blocked).
+    pub blockers: Vec<String>,
 }
 
 /// Data fetched from multiple bd commands for board population.
@@ -298,6 +300,7 @@ impl KanbanBoardState {
                         title: "\u{25c7} Decisions".to_string(),
                         priority: 0,
                         is_header: true,
+                        blockers: Vec::new(),
                     });
                     cols[1].extend(human_decisions);
                     cols[1].push(KanbanCard {
@@ -305,12 +308,14 @@ impl KanbanBoardState {
                         title: String::new(),
                         priority: 0,
                         is_header: true,
+                        blockers: Vec::new(),
                     });
                     cols[1].push(KanbanCard {
                         id: String::new(),
                         title: "\u{25c7} Blocked".to_string(),
                         priority: 0,
                         is_header: true,
+                        blockers: Vec::new(),
                     });
                     cols[1].extend(human_blocked);
                 }
@@ -410,11 +415,21 @@ fn parse_card(item: &serde_json::Value) -> Option<KanbanCard> {
         .unwrap_or("")
         .to_string();
     let priority = item.get("priority").and_then(|v| v.as_u64()).unwrap_or(4);
+    let blockers = item
+        .get("blocked_by")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| short_id(s).to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     Some(KanbanCard {
         id,
         title,
         priority,
         is_header: false,
+        blockers,
     })
 }
 
@@ -616,13 +631,20 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                     } else {
                         let sid = short_id(&card.id);
                         let id_width = sid.len() + 1; // "id "
-                        let title_max = col_width.saturating_sub(id_width + 1);
+                        let blocker_suffix = if card.blockers.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" \u{2190} {}", card.blockers.join(", "))
+                        };
+                        let title_max =
+                            col_width.saturating_sub(id_width + 1 + blocker_suffix.len());
                         let title = if card.title.len() > title_max {
                             format!("{}..", &card.title[..title_max.saturating_sub(2)])
                         } else {
                             card.title.clone()
                         };
-                        let cell_text = format!("{} {}", sid, title);
+                        let cell_text =
+                            format!("{} {}{}", sid, title, blocker_suffix);
 
                         let padded = if cell_text.len() >= col_width {
                             cell_text[..col_width].to_string()
