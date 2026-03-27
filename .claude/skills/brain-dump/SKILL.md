@@ -122,7 +122,7 @@ Why this matters and what prompted it.
 After creating each bead, flag it for human attention so it lands in the shaping queue:
 
 ```bash
-bd human <id>
+bd update <id> --add-label=human
 ```
 
 - Default type: `task` (adjust if clearly a `bug`, `feature`, `refactor`, etc.)

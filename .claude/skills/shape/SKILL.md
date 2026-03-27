@@ -66,7 +66,7 @@ The user specifies a bead ID or spec name directly (e.g., "shape ralph-a12" or "
 
 The user says something like "shape the beads I just dumped" or "shape what we just captured."
 
-- **Beads mode:** Run `bd human list` and `bd blocked` to find items needing refinement
+- **Beads mode:** Run `bd list --label=human` and `bd blocked` to find items needing refinement
 - **Specs mode:** Read `specs/README.md` and look for items with "Needs Shaping" status
 
 Present the list and let the user pick which to shape, or shape them all if they're related.
@@ -75,7 +75,7 @@ Present the list and let the user pick which to shape, or shape them all if they
 
 If no item is specified, query for items that need shaping:
 
-- **Beads mode:** Run `bd human list` and `bd blocked` to find items needing attention
+- **Beads mode:** Run `bd list --label=human` and `bd blocked` to find items needing attention
 - **Specs mode:** Read `specs/README.md` and find "Needs Shaping" entries
 
 Present the list and ask which item(s) to shape. If only one exists, offer to start with it.
@@ -181,7 +181,7 @@ EOF
 After creating, flag for human so it stays in the shaping queue until fully shaped:
 
 ```bash
-bd human <id>
+bd update <id> --add-label=human
 ```
 
 If the epic already exists, use `bd update <id>` instead.
@@ -205,13 +205,13 @@ EOF
 After creating each child, flag for human if it still needs another shaping pass:
 
 ```bash
-bd human <id>
+bd update <id> --add-label=human
 ```
 
 #### Readiness
 
-- Flag items for human (`bd human <id>`) when they need another pass through the sieve
-- Dismiss items from human (`bd human dismiss <id>`) when they're ready for the Ralph Loop
+- Flag items for human (`bd update <id> --add-label=human`) when they need another pass through the sieve
+- Unflag items from human (`bd update <id> --remove-label=human`) when they're ready for the Ralph Loop
 - Set appropriate priority, type, and any other relevant metadata
 - Set dependencies between child beads when order matters: `bd dep add <child> <depends-on>`
 
