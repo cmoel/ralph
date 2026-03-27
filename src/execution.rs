@@ -4,7 +4,6 @@ use std::sync::mpsc;
 use std::thread;
 
 use anyhow::Result;
-use crossterm::event::KeyCode;
 use tracing::{debug, info};
 
 use crate::agent;
@@ -53,6 +52,8 @@ pub fn assemble_prompt(config: &crate::config::Config) -> Result<String> {
 }
 
 /// In beads mode, claim the next available bead before starting claude.
+/// Reclaims stale beads first (priority over new claims), then falls through
+/// to claiming a new bead if nothing was reclaimed.
 /// Returns true if we should proceed with start_command (claimed or non-beads mode).
 /// Returns false if claiming failed (no work available).
 pub fn claim_before_start(app: &mut App) -> bool {
@@ -69,6 +70,33 @@ pub fn claim_before_start(app: &mut App) -> bool {
         None => return true, // no agent registered, skip claiming
     };
 
+    // Auto-reclaim stale beads (priority over new claims)
+    let bd_path = app.config.behavior.bd_path.clone();
+    let stale_agents = agent::find_stale_agents(
+        &bd_path,
+        app.config.behavior.stale_threshold,
+        Some(&agent_id),
+    );
+    if !stale_agents.is_empty() {
+        let first = &stale_agents[0];
+        if agent::resume_stale_bead(&bd_path, &agent_id, first) {
+            app.add_text_line(format!(
+                "[Auto-reclaimed: {} \"{}\"]",
+                first.hooked_bead_id, first.hooked_bead_title
+            ));
+            app.hooked_bead_id = Some(first.hooked_bead_id.clone());
+            // Release remaining stale agents back to open
+            for stale in stale_agents.iter().skip(1) {
+                agent::release_stale_bead(&bd_path, stale);
+                app.add_text_line(format!(
+                    "[Released stale: {} \"{}\"]",
+                    stale.hooked_bead_id, stale.hooked_bead_title
+                ));
+            }
+            return true;
+        }
+    }
+
     match agent::claim_next_bead(&app.config.behavior.bd_path, &agent_id) {
         Some((bead_id, title)) => {
             app.add_text_line(format!("[Claimed: {} {}]", bead_id, title));
@@ -79,89 +107,6 @@ pub fn claim_before_start(app: &mut App) -> bool {
             app.add_text_line("[No beads available to claim]".to_string());
             false
         }
-    }
-}
-
-/// Handle input for the stale agent recovery modal.
-pub fn handle_stale_modal_input(app: &mut App, key: KeyCode) {
-    match key {
-        KeyCode::Char('r') | KeyCode::Char('R') => {
-            // Resume: claim the stale bead on our agent
-            let stale = match app
-                .stale_modal_state
-                .as_ref()
-                .and_then(|s| s.current().cloned())
-            {
-                Some(s) => s,
-                None => return,
-            };
-            let agent_id = match &app.agent_bead_id {
-                Some(id) => id.clone(),
-                None => {
-                    app.add_text_line("[Cannot resume — no agent registered]".to_string());
-                    app.show_stale_modal = false;
-                    app.stale_modal_state = None;
-                    return;
-                }
-            };
-            let bd_path = app.config.behavior.bd_path.clone();
-            if agent::resume_stale_bead(&bd_path, &agent_id, &stale) {
-                app.add_text_line(format!(
-                    "[Resumed: {} \"{}\"]",
-                    stale.hooked_bead_id, stale.hooked_bead_title
-                ));
-                app.hooked_bead_id = Some(stale.hooked_bead_id.clone());
-            } else {
-                app.add_text_line("[Resume failed]".to_string());
-            }
-            if let Some(ref mut state) = app.stale_modal_state {
-                state.advance();
-                if state.is_empty() {
-                    app.show_stale_modal = false;
-                    app.stale_modal_state = None;
-                }
-            }
-        }
-        KeyCode::Char('x') | KeyCode::Char('X') => {
-            // Release: clear hook, reset bead to open
-            let stale = match app
-                .stale_modal_state
-                .as_ref()
-                .and_then(|s| s.current().cloned())
-            {
-                Some(s) => s,
-                None => return,
-            };
-            let bd_path = app.config.behavior.bd_path.clone();
-            agent::release_stale_bead(&bd_path, &stale);
-            app.add_text_line(format!(
-                "[Released: {} \"{}\"]",
-                stale.hooked_bead_id, stale.hooked_bead_title
-            ));
-            if let Some(ref mut state) = app.stale_modal_state {
-                state.advance();
-                if state.is_empty() {
-                    app.show_stale_modal = false;
-                    app.stale_modal_state = None;
-                }
-            }
-        }
-        KeyCode::Char('n') | KeyCode::Char('N') => {
-            // Skip this stale agent
-            if let Some(ref mut state) = app.stale_modal_state {
-                state.advance();
-                if state.is_empty() {
-                    app.show_stale_modal = false;
-                    app.stale_modal_state = None;
-                }
-            }
-        }
-        KeyCode::Esc => {
-            // Close modal entirely
-            app.show_stale_modal = false;
-            app.stale_modal_state = None;
-        }
-        _ => {}
     }
 }
 

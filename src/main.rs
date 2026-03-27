@@ -263,8 +263,6 @@ fn run_app(
             app.add_text_line("[Agent registration failed — running without worktree]".to_string());
         }
 
-        // Check for stale agents (background, non-blocking)
-        app.start_stale_check();
     }
 
     loop {
@@ -276,8 +274,6 @@ fn run_app(
             app.dirty = true;
             app.auto_continue_pending = false;
             app.increment_iteration();
-            // Check for stale agents before claiming next bead
-            app.start_stale_check();
             // In beads mode, claim next bead before continuing
             if execution::claim_before_start(&mut app) {
                 execution::start_command(&mut app)?;
@@ -306,9 +302,6 @@ fn run_app(
 
         // Poll for background doctor check results
         app.poll_doctor();
-
-        // Poll for stale agent detection results
-        app.poll_stale_check();
 
         // Auto-clear error flash after timeout
         app.check_error_timeout();
@@ -379,13 +372,7 @@ fn run_app(
                 continue;
             }
 
-            // Handle stale recovery modal input
-            if app.show_stale_modal {
-                if let Event::Key(key) = event {
-                    execution::handle_stale_modal_input(&mut app, key.code);
-                }
-                continue;
-            }
+
 
             // Handle quit confirmation modal input
             if app.show_quit_modal {
@@ -434,8 +421,6 @@ fn run_app(
                     }
                     KeyCode::Char('s') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {
-                            // Check for stale agents before claiming next bead
-                            app.start_stale_check();
                             // Start new iteration run (reads config, sets up tracking)
                             if app.start_iteration_run() {
                                 // In beads mode, claim a bead before starting

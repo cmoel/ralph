@@ -187,12 +187,6 @@ pub struct App {
     pub kanban_items_rx: Option<Receiver<Result<Vec<serde_json::Value>, String>>>,
     /// Receiver for background bd show --json result (bead detail drill-down).
     pub bead_detail_rx: Option<Receiver<Result<serde_json::Value, String>>>,
-    /// Whether the stale recovery modal is visible.
-    pub show_stale_modal: bool,
-    /// State for the stale recovery modal (when open).
-    pub stale_modal_state: Option<crate::modals::StaleModalState>,
-    /// Receiver for background stale agent detection.
-    pub pending_stale_check: Option<Receiver<Vec<crate::agent::StaleAgent>>>,
     /// Cached visual line count (invalidated on content or width changes).
     pub cached_visual_line_count: Option<u16>,
 }
@@ -284,9 +278,6 @@ impl App {
             kanban_board_state: None,
             kanban_items_rx: None,
             bead_detail_rx: None,
-            show_stale_modal: false,
-            stale_modal_state: None,
-            pending_stale_check: None,
             cached_visual_line_count: None,
         }
     }
@@ -651,50 +642,6 @@ impl App {
                 }
             }
         }
-    }
-
-    /// Poll for background stale agent detection result.
-    pub fn poll_stale_check(&mut self) {
-        let rx = match self.pending_stale_check.take() {
-            Some(rx) => rx,
-            None => return,
-        };
-
-        match rx.try_recv() {
-            Ok(stale_agents) if !stale_agents.is_empty() => {
-                info!(count = stale_agents.len(), "stale_modal_showing");
-                self.show_stale_modal = true;
-                self.stale_modal_state = Some(crate::modals::StaleModalState::new(stale_agents));
-                self.dirty = true;
-            }
-            Ok(_) => {} // No stale agents
-            Err(TryRecvError::Empty) => {
-                self.pending_stale_check = Some(rx); // still running
-            }
-            Err(TryRecvError::Disconnected) => {}
-        }
-    }
-
-    /// Kick off a background stale agent check (beads mode only).
-    pub fn start_stale_check(&mut self) {
-        if self.config.behavior.mode != "beads"
-            || self.pending_stale_check.is_some()
-            || self.show_stale_modal
-        {
-            return;
-        }
-        let bd_path = self.config.behavior.bd_path.clone();
-        let threshold = self.config.behavior.stale_threshold;
-        let exclude = self.agent_bead_id.clone();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(crate::agent::find_stale_agents(
-                &bd_path,
-                threshold,
-                exclude.as_deref(),
-            ));
-        });
-        self.pending_stale_check = Some(rx);
     }
 
     /// Clear all pending background work source operations.
