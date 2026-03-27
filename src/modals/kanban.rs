@@ -17,6 +17,12 @@ pub struct KanbanCard {
     pub title: String,
 }
 
+/// Strip the project prefix from a bead ID, returning just the short suffix.
+/// e.g., "ralph-y3t" → "y3t", "private-lessons-gac" → "gac"
+fn short_id(id: &str) -> &str {
+    id.rsplit_once('-').map_or(id, |(_, short)| short)
+}
+
 /// Parsed detail data for a single bead.
 #[derive(Debug)]
 pub struct BeadDetailState {
@@ -476,14 +482,15 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
 
                 let cell_text = if row < column.len() {
                     let card = &column[row];
-                    let id_width = card.id.len() + 1; // "id "
+                    let sid = short_id(&card.id);
+                    let id_width = sid.len() + 1; // "id "
                     let title_max = col_width.saturating_sub(id_width + 1); // margin
                     let title = if card.title.len() > title_max {
                         format!("{}..", &card.title[..title_max.saturating_sub(2)])
                     } else {
                         card.title.clone()
                     };
-                    format!("{} {}", card.id, title)
+                    format!("{} {}", sid, title)
                 } else {
                     String::new()
                 };
@@ -577,7 +584,7 @@ fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
         content.push(Line::from(""));
 
         // Metadata line: ID · status · priority · type
-        let mut meta: Vec<Span> = vec![Span::styled(&detail.id, Style::default().fg(Color::Cyan))];
+        let mut meta: Vec<Span> = vec![Span::styled(short_id(&detail.id), Style::default().fg(Color::Cyan))];
         if !detail.status.is_empty() {
             meta.push(Span::styled(
                 " \u{b7} ",
@@ -727,7 +734,7 @@ fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" {} ", detail.id))
+                .title(format!(" {} ", short_id(&detail.id)))
                 .title_alignment(Alignment::Center)
                 .style(Style::default().fg(Color::White)),
         )
