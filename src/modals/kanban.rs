@@ -8,9 +8,36 @@ use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::ui::centered_rect;
+
+/// The status category of a card, used to determine its emoji icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardKind {
+    Ready,
+    InProgress,
+    Blocked,
+    Human,
+    Deferred,
+}
+
+impl CardKind {
+    /// Returns the emoji icon for this card kind.
+    pub fn icon(self) -> &'static str {
+        match self {
+            CardKind::Human => "\u{1f464}",             // 👤
+            CardKind::Blocked => "\u{1f534}",           // 🔴
+            CardKind::Ready => "\u{1f7e2}",             // 🟢
+            CardKind::InProgress => "\u{2699}\u{fe0f}", // ⚙️
+            CardKind::Deferred => "\u{2744}\u{fe0f}",   // ❄️
+        }
+    }
+}
+
+/// Emoji icon for epic beads (has children).
+const EPIC_ICON: &str = "\u{26f0}\u{fe0f}"; // ⛰️
 
 /// A bead item for the kanban board.
 #[derive(Debug, Clone)]
@@ -22,6 +49,10 @@ pub struct KanbanCard {
     pub is_header: bool,
     /// Short IDs of beads blocking this one (empty if not blocked).
     pub blockers: Vec<String>,
+    /// The status category, determines the emoji icon shown.
+    pub kind: CardKind,
+    /// Whether this bead is an epic (has children).
+    pub is_epic: bool,
 }
 
 /// Data fetched from multiple bd commands for board population.
@@ -39,6 +70,27 @@ pub struct KanbanBoardData {
 /// e.g., "ralph-y3t" → "y3t", "private-lessons-gac" → "gac"
 fn short_id(id: &str) -> &str {
     id.rsplit_once('-').map_or(id, |(_, short)| short)
+}
+
+/// Truncate a string to fit within `max_width` display columns.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let mut width = 0;
+    let mut result = String::new();
+    for ch in s.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + w > max_width {
+            break;
+        }
+        result.push(ch);
+        width += w;
+    }
+    // Pad with spaces if we stopped short (e.g., skipped a 2-wide char)
+    while width < max_width {
+        result.push(' ');
+        width += 1;
+    }
+    result
 }
 
 /// Parsed detail data for a single bead.
@@ -257,9 +309,26 @@ impl KanbanBoardState {
                 let mut cols: Vec<Vec<KanbanCard>> = vec![Vec::new(); KanbanColumn::COUNT];
                 let mut seen: HashSet<String> = HashSet::new();
 
+                // Collect all parent IDs to detect epics
+                let all_items_iter = data
+                    .in_progress
+                    .iter()
+                    .chain(data.deferred.iter())
+                    .chain(data.human.iter())
+                    .chain(data.blocked.iter())
+                    .chain(data.ready.iter());
+                let parent_ids: HashSet<String> = all_items_iter
+                    .filter_map(|item| {
+                        item.get("parent")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .collect();
+
                 // 1. in_progress → InProgress (index 3)
                 for item in &data.in_progress {
-                    if let Some(card) = parse_card(item) {
+                    if let Some(mut card) = parse_card(item, CardKind::InProgress) {
+                        card.is_epic = parent_ids.contains(&card.id);
                         seen.insert(card.id.clone());
                         cols[3].push(card);
                     }
@@ -267,9 +336,10 @@ impl KanbanBoardState {
 
                 // 2. deferred → Deferred (index 0)
                 for item in &data.deferred {
-                    if let Some(card) = parse_card(item)
+                    if let Some(mut card) = parse_card(item, CardKind::Deferred)
                         && seen.insert(card.id.clone())
                     {
+                        card.is_epic = parent_ids.contains(&card.id);
                         cols[0].push(card);
                     }
                 }
@@ -277,9 +347,10 @@ impl KanbanBoardState {
                 // 3. human → Human / Decisions section (index 1)
                 let mut human_decisions: Vec<KanbanCard> = Vec::new();
                 for item in &data.human {
-                    if let Some(card) = parse_card(item)
+                    if let Some(mut card) = parse_card(item, CardKind::Human)
                         && seen.insert(card.id.clone())
                     {
+                        card.is_epic = parent_ids.contains(&card.id);
                         human_decisions.push(card);
                     }
                 }
@@ -287,9 +358,10 @@ impl KanbanBoardState {
                 // 4. blocked → Human / Blocked section (index 1)
                 let mut human_blocked: Vec<KanbanCard> = Vec::new();
                 for item in &data.blocked {
-                    if let Some(card) = parse_card(item)
+                    if let Some(mut card) = parse_card(item, CardKind::Blocked)
                         && seen.insert(card.id.clone())
                     {
+                        card.is_epic = parent_ids.contains(&card.id);
                         human_blocked.push(card);
                     }
                 }
@@ -306,6 +378,8 @@ impl KanbanBoardState {
                         priority: 0,
                         is_header: true,
                         blockers: Vec::new(),
+                        kind: CardKind::Human,
+                        is_epic: false,
                     });
                     cols[1].extend(human_decisions);
                     cols[1].push(KanbanCard {
@@ -314,6 +388,8 @@ impl KanbanBoardState {
                         priority: 0,
                         is_header: true,
                         blockers: Vec::new(),
+                        kind: CardKind::Blocked,
+                        is_epic: false,
                     });
                     cols[1].push(KanbanCard {
                         id: String::new(),
@@ -321,15 +397,18 @@ impl KanbanBoardState {
                         priority: 0,
                         is_header: true,
                         blockers: Vec::new(),
+                        kind: CardKind::Blocked,
+                        is_epic: false,
                     });
                     cols[1].extend(human_blocked);
                 }
 
                 // 5. ready → Ready (index 2)
                 for item in &data.ready {
-                    if let Some(card) = parse_card(item)
+                    if let Some(mut card) = parse_card(item, CardKind::Ready)
                         && seen.insert(card.id.clone())
                     {
+                        card.is_epic = parent_ids.contains(&card.id);
                         cols[2].push(card);
                     }
                 }
@@ -350,8 +429,7 @@ impl KanbanBoardState {
                     .chain(data.ready.iter());
                 for item in all_items {
                     if let Some(id) = item.get("id").and_then(|v| v.as_str())
-                        && let Some(blockers) =
-                            item.get("blocked_by").and_then(|v| v.as_array())
+                        && let Some(blockers) = item.get("blocked_by").and_then(|v| v.as_array())
                     {
                         for b in blockers {
                             if let Some(bid) = b.as_str() {
@@ -441,8 +519,8 @@ impl KanbanBoardState {
     }
 }
 
-/// Parse a JSON bead item into a KanbanCard.
-fn parse_card(item: &serde_json::Value) -> Option<KanbanCard> {
+/// Parse a JSON bead item into a KanbanCard with the given kind.
+fn parse_card(item: &serde_json::Value, kind: CardKind) -> Option<KanbanCard> {
     let id = item.get("id").and_then(|v| v.as_str())?.to_string();
     let title = item
         .get("title")
@@ -465,6 +543,8 @@ fn parse_card(item: &serde_json::Value) -> Option<KanbanCard> {
         priority,
         is_header: false,
         blockers,
+        kind,
+        is_epic: false, // Set later in populate() after collecting parent IDs
     })
 }
 
@@ -671,6 +751,14 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                             .add_modifier(Modifier::BOLD);
                         row_spans.push(Span::styled(padded, style));
                     } else {
+                        // Build icon prefix: epic icon (if applicable) + status icon
+                        let icon_prefix = if card.is_epic {
+                            format!("{}{}", EPIC_ICON, card.kind.icon())
+                        } else {
+                            card.kind.icon().to_string()
+                        };
+                        let icon_width = UnicodeWidthStr::width(icon_prefix.as_str());
+
                         let sid = short_id(&card.id);
                         let id_width = sid.len() + 1; // "id "
                         let blocker_suffix = if card.blockers.is_empty() {
@@ -678,20 +766,23 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         } else {
                             format!(" \u{2190} {}", card.blockers.join(", "))
                         };
-                        let title_max =
-                            col_width.saturating_sub(id_width + 1 + blocker_suffix.len());
+                        // icon + space + id + space + title + blocker_suffix
+                        let fixed_width = icon_width + 1 + id_width + blocker_suffix.width();
+                        let title_max = col_width.saturating_sub(fixed_width);
                         let title = if card.title.len() > title_max {
                             format!("{}..", &card.title[..title_max.saturating_sub(2)])
                         } else {
                             card.title.clone()
                         };
                         let cell_text =
-                            format!("{} {}{}", sid, title, blocker_suffix);
+                            format!("{} {} {}{}", icon_prefix, sid, title, blocker_suffix);
 
-                        let padded = if cell_text.len() >= col_width {
-                            cell_text[..col_width].to_string()
+                        let display_width = UnicodeWidthStr::width(cell_text.as_str());
+                        let padded = if display_width >= col_width {
+                            truncate_to_width(&cell_text, col_width)
                         } else {
-                            format!("{:<width$}", cell_text, width = col_width)
+                            let padding = col_width - display_width;
+                            format!("{}{}", cell_text, " ".repeat(padding))
                         };
 
                         let is_dep_neighbor = highlighted_ids.contains(card.id.as_str());
