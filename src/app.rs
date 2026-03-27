@@ -187,6 +187,10 @@ pub struct App {
     pub kanban_items_rx: Option<Receiver<Result<crate::modals::KanbanBoardData, String>>>,
     /// Receiver for background bd show --json result (bead detail drill-down).
     pub bead_detail_rx: Option<Receiver<Result<serde_json::Value, String>>>,
+    /// Receiver for filesystem change events on .beads/ directory (kanban auto-refresh).
+    pub kanban_fs_rx: Option<Receiver<()>>,
+    /// Stop signal for the kanban filesystem watcher thread.
+    pub kanban_watcher_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Cached visual line count (invalidated on content or width changes).
     pub cached_visual_line_count: Option<u16>,
 }
@@ -278,6 +282,8 @@ impl App {
             kanban_board_state: None,
             kanban_items_rx: None,
             bead_detail_rx: None,
+            kanban_fs_rx: None,
+            kanban_watcher_stop: None,
             cached_visual_line_count: None,
         }
     }
@@ -642,6 +648,39 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Poll for filesystem changes on .beads/ and trigger board re-fetch.
+    pub fn poll_kanban_watcher(&mut self) {
+        let rx = match self.kanban_fs_rx.as_ref() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        // Drain all pending events (we only care that something changed)
+        let mut changed = false;
+        while rx.try_recv().is_ok() {
+            changed = true;
+        }
+
+        // If something changed and we're not already fetching, trigger re-fetch
+        if changed && self.kanban_items_rx.is_none() && self.show_kanban_board {
+            let bd_path = self.config.behavior.bd_path.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let result = crate::modals::fetch_board_data(&bd_path);
+                let _ = tx.send(result);
+            });
+            self.kanban_items_rx = Some(rx);
+        }
+    }
+
+    /// Stop the kanban filesystem watcher.
+    pub fn stop_kanban_watcher(&mut self) {
+        if let Some(stop) = self.kanban_watcher_stop.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.kanban_fs_rx = None;
     }
 
     /// Clear all pending background work source operations.

@@ -564,6 +564,7 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Esc => {
             app.show_kanban_board = false;
             app.kanban_board_state = None;
+            app.stop_kanban_watcher();
         }
         KeyCode::Enter => {
             if let Some(card) = state.selected_card() {
@@ -1093,6 +1094,58 @@ fn run_bd_json(bd_path: &str, args: &[&str]) -> Result<Vec<serde_json::Value>, S
     }
     serde_json::from_str::<Vec<serde_json::Value>>(&stdout)
         .map_err(|e| format!("Failed to parse bd output: {e}"))
+}
+
+/// Watch .beads/ directory for changes and send notifications (called from background thread).
+/// Debounces events — waits 200ms after the last change before notifying.
+pub fn watch_beads_directory(
+    tx: std::sync::mpsc::Sender<()>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use notify::{Config, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let beads_dir = match std::env::current_dir() {
+        Ok(dir) => dir.join(".beads"),
+        Err(_) => return,
+    };
+
+    if !beads_dir.exists() {
+        return;
+    }
+
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut watcher = match notify::RecommendedWatcher::new(event_tx, Config::default()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    if watcher.watch(&beads_dir, RecursiveMode::Recursive).is_err() {
+        return;
+    }
+
+    let debounce_duration = Duration::from_millis(200);
+    let mut last_event: Option<Instant> = None;
+
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        match event_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(Ok(_)) => {
+                last_event = Some(Instant::now());
+            }
+            Ok(Err(_)) => {} // notify error, ignore
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+
+        if let Some(last) = last_event
+            && last.elapsed() >= debounce_duration
+        {
+            let _ = tx.send(());
+            last_event = None;
+        }
+    }
+    // watcher is dropped here, stopping the OS-level watch
 }
 
 /// Fetch board data from multiple bd commands (called from background thread).

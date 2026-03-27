@@ -287,6 +287,7 @@ fn run_app(
         app.poll_work_items();
         app.poll_kanban_items();
         app.poll_bead_detail();
+        app.poll_kanban_watcher();
 
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
@@ -481,6 +482,16 @@ fn run_app(
                             let _ = tx.send(result);
                         });
                         app.kanban_items_rx = Some(rx);
+
+                        // Start filesystem watcher for live board updates
+                        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                        let (fs_tx, fs_rx) = mpsc::channel();
+                        let stop_clone = std::sync::Arc::clone(&stop);
+                        std::thread::spawn(move || {
+                            crate::modals::watch_beads_directory(fs_tx, stop_clone);
+                        });
+                        app.kanban_fs_rx = Some(fs_rx);
+                        app.kanban_watcher_stop = Some(stop);
                     }
                     KeyCode::Char('i') => {
                         // Open init modal
