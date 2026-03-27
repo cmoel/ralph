@@ -15,6 +15,7 @@ use crate::ui::centered_rect;
 pub struct KanbanCard {
     pub id: String,
     pub title: String,
+    pub priority: u64,
 }
 
 /// Strip the project prefix from a bead ID, returning just the short suffix.
@@ -246,12 +247,17 @@ impl KanbanBoardState {
                         .map(|arr| arr.iter().filter_map(|l| l.as_str()).collect())
                         .unwrap_or_default();
 
+                    let priority = item
+                        .get("priority")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(4);
+
                     // Skip closed/deferred items
                     if status == "closed" || status == "deferred" {
                         continue;
                     }
 
-                    let card = KanbanCard { id, title };
+                    let card = KanbanCard { id, title, priority };
 
                     // Priority: labels first, then status
                     if labels.contains(&"needs-brain-dump") {
@@ -268,6 +274,9 @@ impl KanbanBoardState {
                         // open with no special labels → Ready
                         cols[3].push(card);
                     }
+                }
+                for col in &mut cols {
+                    col.sort_by_key(|card| card.priority);
                 }
                 self.columns = cols;
                 self.selected_row = vec![0; 5];
