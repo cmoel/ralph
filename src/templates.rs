@@ -206,32 +206,26 @@ Document in BOTH the spec AND `specs/README.md`.
 Mark the spec complete in `specs/README.md`.
 "#;
 
-/// Beads-mode work discovery instructions (compiled into binary).
+/// Beads-mode behavioral instructions (compiled into binary).
+/// Command reference is provided by `bd prime` — this only covers Ralph-specific workflow.
 pub const BEADS_MODE_MD: &str = r#"
 # Beads Mode
 
 ## Work Discovery
 
-Run `bd ready --json` to find available work.
+Find available work. Pick ONE item.
 
-**To flag for human review:** `bd human <id>` (under-specified, too big, needs a decision)
+**Flag for human review** if a bead is under-specified, too big, or needs a decision.
 
-**To mark in progress:** `bd update <id> --status in_progress` (one bead at a time)
-
-## Details
-
-Run `bd show <id>` for full bead details.
+**Mark in progress** before starting (one bead at a time).
 
 ## When Blocked
 
-```
-bd comments add <id> -m "What failed, why it blocks, options to resolve"
-bd human <id>
-```
+Document what failed, why it blocks, and options to resolve. Then flag for human review.
 
 ## Completing Work
 
-Close the bead: `bd close <id>`
+Close the bead when done.
 "#;
 
 /// Returns mode-specific prompt content for the given mode, if any.
