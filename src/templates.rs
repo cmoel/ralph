@@ -219,6 +219,18 @@ Find available work. Pick ONE item.
 
 **Mark in progress** before starting (one bead at a time).
 
+## Assessment
+
+After selecting a bead, assess its specification before implementing:
+
+1. Run `bd show <id>` to read the full bead details
+2. Check: Does it have clear acceptance criteria? Do you understand what "done" looks like?
+3. If the bead is under-specified:
+   - Run `bd update <id> --notes="WHAT'S MISSING: [list what's unclear]\nQUESTIONS: [list questions that need answering]"`
+   - Run `bd human <id> --reason="[brief explanation of what's needed]"`
+   - Exit immediately — do not attempt to implement an under-specified bead
+4. If the bead is clear enough to implement, proceed with the work
+
 ## When Blocked
 
 Document what failed, why it blocks, and options to resolve. Then flag for human review.

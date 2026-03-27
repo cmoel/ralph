@@ -235,6 +235,12 @@ pub fn claim_next_bead(bd_path: &str, agent_bead_id: &str) -> Option<(String, St
                     .stderr(std::process::Stdio::null())
                     .output();
 
+                // Assess bead specification quality before proceeding
+                if !assess_bead_specification(bd_path, id, agent_bead_id) {
+                    info!(bead_id = %id, "bead_rejected_trying_next");
+                    continue;
+                }
+
                 info!(bead_id = %id, title = %title, "bead_claimed");
                 return Some((id.to_string(), title.to_string()));
             }
@@ -250,6 +256,77 @@ pub fn claim_next_bead(bd_path: &str, agent_bead_id: &str) -> Option<(String, St
 
     info!("no_claimable_beads");
     None
+}
+
+/// Check whether bead metadata indicates sufficient specification.
+/// Returns None if the bead passes, or Some(reason) if it should be flagged.
+pub fn check_bead_specification(bead: &serde_json::Value) -> Option<String> {
+    let description = bead
+        .get("description")
+        .and_then(|d| d.as_str())
+        .unwrap_or("");
+
+    if description.trim().is_empty() {
+        return Some(
+            "Under-specified: no description provided. Add a description explaining what done looks like.".to_string(),
+        );
+    }
+
+    None
+}
+
+/// Assess a claimed bead's specification quality.
+/// If under-specified, flags for human review, resets to open, releases the hook, and returns false.
+/// Returns true if the bead is ready for implementation.
+fn assess_bead_specification(bd_path: &str, bead_id: &str, agent_bead_id: &str) -> bool {
+    let output = Command::new(bd_path)
+        .args(["show", bead_id, "--json"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            warn!(bead_id = %bead_id, "assess_fetch_failed");
+            return true; // If we can't fetch, let Claude handle it
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let bead: serde_json::Value = match serde_json::from_str(stdout.as_ref()) {
+        Ok(v) => v,
+        Err(_) => return true,
+    };
+
+    if let Some(reason) = check_bead_specification(&bead) {
+        let notes = format!(
+            "Flagged by Ralph: {}",
+            reason
+        );
+        let _ = Command::new(bd_path)
+            .args(["update", bead_id, "--notes", &notes])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        let _ = Command::new(bd_path)
+            .args(["human", bead_id, "--reason", &reason])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        reset_bead_to_open(bd_path, bead_id);
+        release_hook(bd_path, agent_bead_id);
+
+        info!(bead_id = %bead_id, reason = %reason, "bead_under_specified");
+        return false;
+    }
+
+    true
 }
 
 /// Release the hook on this agent (clear the hook state dimension).
@@ -769,4 +846,49 @@ fn resolve_worktree_path(worktree_name: &str) -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     root.join(worktree_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn check_bead_specification_passes_with_description() {
+        let bead = json!({
+            "id": "ralph-abc",
+            "title": "Some feature",
+            "description": "Build a thing that does X. Done when Y works."
+        });
+        assert!(check_bead_specification(&bead).is_none());
+    }
+
+    #[test]
+    fn check_bead_specification_rejects_empty_description() {
+        let bead = json!({
+            "id": "ralph-abc",
+            "title": "Some feature",
+            "description": ""
+        });
+        assert!(check_bead_specification(&bead).is_some());
+    }
+
+    #[test]
+    fn check_bead_specification_rejects_whitespace_only_description() {
+        let bead = json!({
+            "id": "ralph-abc",
+            "title": "Some feature",
+            "description": "   \n  "
+        });
+        assert!(check_bead_specification(&bead).is_some());
+    }
+
+    #[test]
+    fn check_bead_specification_rejects_missing_description() {
+        let bead = json!({
+            "id": "ralph-abc",
+            "title": "Some feature"
+        });
+        assert!(check_bead_specification(&bead).is_some());
+    }
 }
