@@ -67,6 +67,8 @@ pub struct KanbanCard {
     pub is_error: bool,
     /// Labels attached to this bead.
     pub labels: Vec<String>,
+    /// The bead's status (e.g. "open", "blocked", "in_progress").
+    pub status: String,
 }
 
 /// Data fetched from pipeline sources for board population.
@@ -75,6 +77,8 @@ pub struct KanbanBoardData {
     pub open_count: u64,
     pub closed_count: u64,
     pub dep_neighbors: HashMap<String, HashSet<String>>,
+    /// Bead IDs with status=blocked but no actual blocking dependencies.
+    pub manual_blocked_ids: HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +289,8 @@ pub struct KanbanBoardState {
     pub close_confirm: Option<CloseConfirmState>,
     /// Defer input overlay state.
     pub defer_input: Option<DeferState>,
+    /// Bead IDs with status=blocked but no actual blocking dependencies.
+    pub manual_blocked_ids: HashSet<String>,
 }
 
 /// State for the close confirmation overlay (Shift+X).
@@ -410,6 +416,7 @@ impl KanbanBoardState {
             dep_neighbors: HashMap::new(),
             close_confirm: None,
             defer_input: None,
+            manual_blocked_ids: HashSet::new(),
             column_defs,
         }
     }
@@ -433,6 +440,7 @@ impl KanbanBoardState {
                 self.open_count = data.open_count;
                 self.closed_count = data.closed_count;
                 self.dep_neighbors = data.dep_neighbors;
+                self.manual_blocked_ids = data.manual_blocked_ids;
                 self.columns = data.columns;
 
                 // Preserve cursor positions across refreshes, clamping to new bounds
@@ -541,6 +549,11 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
                 .collect()
         })
         .unwrap_or_default();
+    let status = item
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     Some(KanbanCard {
         id,
         title,
@@ -550,6 +563,7 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
         is_epic: false, // Set later in fetch_board_data after collecting parent IDs
         is_error: false,
         labels,
+        status,
     })
 }
 
@@ -917,8 +931,28 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
         }
         content.push(Line::from(sep_spans));
 
+        // Warning banner for manual-blocked beads
+        let manual_blocked_count = state.manual_blocked_ids.len();
+        let has_banner = manual_blocked_count > 0;
+        if has_banner {
+            let noun = if manual_blocked_count == 1 {
+                "bead has"
+            } else {
+                "beads have"
+            };
+            let banner_text = format!(
+                " {manual_blocked_count} {noun} 'blocked' status without dependencies \u{2014} Ralph won't pick these up"
+            );
+            let banner_padded = format!("{:<width$}", banner_text, width = inner_width);
+            content.push(Line::from(Span::styled(
+                banner_padded,
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+
         // Card rows
-        let max_rows = inner_height.saturating_sub(3); // header + separator + footer
+        let banner_rows = if has_banner { 1 } else { 0 };
+        let max_rows = inner_height.saturating_sub(3 + banner_rows); // header + separator + footer + banner
         let max_cards = state.columns.iter().map(|c| c.len()).max().unwrap_or(0);
         let visible_rows = max_cards.min(max_rows);
 
@@ -964,7 +998,10 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         };
 
                         let is_dep_neighbor = highlighted_ids.contains(card.id.as_str());
-                        let style = if is_dep_neighbor {
+                        let is_manual_blocked = state.manual_blocked_ids.contains(&card.id);
+                        let style = if is_manual_blocked {
+                            Style::default().fg(Color::Yellow)
+                        } else if is_dep_neighbor {
                             Style::default().fg(Color::Gray).bg(Color::Rgb(25, 35, 60))
                         } else {
                             Style::default().fg(Color::DarkGray)
@@ -1005,8 +1042,11 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                         };
 
                         let is_dep_neighbor = highlighted_ids.contains(card.id.as_str());
+                        let is_manual_blocked = state.manual_blocked_ids.contains(&card.id);
                         let base_style = if is_selected_row {
                             Style::default().fg(Color::Black).bg(Color::White)
+                        } else if is_manual_blocked {
+                            Style::default().fg(Color::Yellow)
                         } else if is_dep_neighbor {
                             Style::default().fg(Color::White).bg(Color::Rgb(25, 35, 60))
                         } else {
@@ -1557,6 +1597,7 @@ pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<Kanb
                     is_epic: false,
                     is_error: true,
                     labels: Vec::new(),
+                    status: String::new(),
                 });
             }
         }
@@ -1611,6 +1652,14 @@ pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<Kanb
         }
     }
 
+    // Detect manual-blocked beads: status=blocked but no actual blocking dependencies
+    let manual_blocked_ids: HashSet<String> = columns
+        .iter()
+        .flat_map(|col| col.iter())
+        .filter(|card| card.status == "blocked" && card.blockers.is_empty())
+        .map(|card| card.id.clone())
+        .collect();
+
     // Stats
     let stats = h_stats.join().map_err(|_| "thread panic")?;
     let (open_count, closed_count) = stats
@@ -1639,5 +1688,6 @@ pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<Kanb
         open_count,
         closed_count,
         dep_neighbors,
+        manual_blocked_ids,
     })
 }
