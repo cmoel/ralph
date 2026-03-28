@@ -82,7 +82,7 @@ pub struct App {
     pub config: Config,
     /// Path to the global configuration file.
     pub config_path: PathBuf,
-    /// Path to the project configuration file (.ralph), if it existed at startup.
+    /// Path to the per-project configuration file, if it existed at startup.
     pub project_config_path: Option<PathBuf>,
     /// Last known mtime of the global config file for change detection.
     pub config_mtime: Option<SystemTime>,
@@ -94,7 +94,7 @@ pub struct App {
     pub config_reloaded_at: Option<Instant>,
     /// Error message if global config reload failed.
     pub config_reload_error: Option<String>,
-    /// Error message if project config (.ralph) reload failed.
+    /// Error message if per-project config reload failed.
     pub project_config_error: Option<String>,
     /// Name of the currently active spec (from specs/README.md).
     pub current_spec: Option<String>,
@@ -537,7 +537,7 @@ impl App {
             _ => false,
         };
 
-        // Check project config mtime (also detect new .ralph appearing)
+        // Check project config mtime (also detect new project config appearing)
         let project_path = self
             .project_config_path
             .clone()
@@ -545,8 +545,8 @@ impl App {
         let project_mtime = project_path.as_ref().and_then(|p| get_file_mtime(p));
         let project_changed = match (project_mtime, self.project_config_mtime) {
             (Some(current), Some(prev)) => current != prev,
-            (Some(_), None) => true, // .ralph appeared
-            (None, Some(_)) => true, // .ralph disappeared
+            (Some(_), None) => true, // project config appeared
+            (None, Some(_)) => true, // project config disappeared
             (None, None) => false,
         };
 
@@ -812,6 +812,12 @@ impl App {
             crate::modals::DepDirection::BlockedBy => (dep.bead_id, picked_id),
             crate::modals::DepDirection::Blocks => (picked_id, dep.bead_id),
         };
+        if let Some(state) = &mut self.kanban_board_state {
+            state.push_action(crate::modals::BoardAction::AddDependency {
+                issue: issue.clone(),
+                depends_on: depends_on.clone(),
+            });
+        }
         std::thread::spawn(move || {
             std::process::Command::new(&bd_path)
                 .args(["dep", "add", &issue, &depends_on])

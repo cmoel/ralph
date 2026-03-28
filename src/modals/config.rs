@@ -95,13 +95,13 @@ impl ConfigModalField {
 pub struct ConfigModalState {
     /// Current focused field.
     pub focus: ConfigModalField,
-    /// Active tab (Project or Global). None when no .ralph exists.
+    /// Active tab (Project or Global). None when project path unavailable.
     pub tab: Option<ConfigTab>,
-    /// Project tab form state (only present when .ralph exists).
+    /// Project tab form state (only present when project config path is available).
     pub project_form: Option<TabFormState>,
     /// Global tab form state.
     pub global_form: TabFormState,
-    /// Path to the project config file (.ralph), if it exists.
+    /// Path to the per-project config file, if available.
     pub project_config_path: Option<PathBuf>,
 }
 
@@ -278,7 +278,7 @@ impl TabFormState {
 }
 
 impl ConfigModalState {
-    /// Create a new modal state for global config only (no .ralph).
+    /// Create a new modal state with global tab only (fallback when project path unavailable).
     pub fn from_config(config: &Config) -> Self {
         Self {
             focus: ConfigModalField::ClaudePath,
@@ -310,7 +310,7 @@ impl ConfigModalState {
         self.tab.unwrap_or(ConfigTab::Global)
     }
 
-    /// Whether tabs are shown (i.e., a .ralph exists).
+    /// Whether tabs are shown (i.e., a project config path is available).
     pub fn has_tabs(&self) -> bool {
         self.tab.is_some()
     }
@@ -751,6 +751,8 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
                         app.config_mtime = get_file_mtime(&app.config_path);
                         if let Some(ref path) = state.project_config_path {
                             app.project_config_mtime = get_file_mtime(path);
+                            // Track the project config path for hot-reload
+                            app.project_config_path = Some(path.clone());
                         }
                         app.show_config_modal = false;
                         app.config_modal_state = None;
@@ -1009,7 +1011,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     // Build content lines
     let mut content: Vec<Line> = Vec::new();
 
-    // Tab bar (only when .ralph exists)
+    // Tab bar (only when project config path is available)
     if let Some(s) = state
         && s.has_tabs()
     {
@@ -1040,7 +1042,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         state
             .and_then(|s| s.project_config_path.as_ref())
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| ".ralph".to_string())
+            .unwrap_or_else(|| "project config".to_string())
     } else {
         app.config_path.display().to_string()
     };

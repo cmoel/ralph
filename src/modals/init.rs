@@ -102,8 +102,6 @@ impl InitModalState {
             ".claude/skills/shape/SKILL.md".to_string(),
             PathBuf::from(".claude/skills/shape/SKILL.md"),
         ));
-        files_to_check.push((".ralph".to_string(), PathBuf::from(".ralph")));
-
         let mode = &config.behavior.mode;
         let files = files_to_check
             .into_iter()
@@ -181,8 +179,8 @@ impl InitModalState {
             .count()
     }
 
-    /// Create a reinit state: same files as init but excludes `.ralph` config
-    /// and marks existing files as `WillRegenerate` instead of `Exists`.
+    /// Create a reinit state: same files as init but marks
+    /// existing files as `WillRegenerate` instead of `Exists`.
     pub fn new_reinit(config: &Config) -> Self {
         let prompt_path = config.prompt_path();
         let specs_path = config.specs_path();
@@ -266,8 +264,6 @@ impl InitModalState {
                     templates::BRAIN_DUMP_SKILL_MD
                 } else if file.display_path.contains("shape") {
                     templates::SHAPE_SKILL_MD
-                } else if file.display_path == ".ralph" {
-                    templates::RALPH_CONFIG
                 } else {
                     return Err(format!("Unknown template for: {}", file.display_path));
                 };
@@ -508,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_init_both_modes_include_prompt_and_ralph() {
+    fn test_init_both_modes_include_prompt_and_skills() {
         for mode in &["specs", "beads"] {
             let config = config_with_mode(mode);
             let state = InitModalState::new(&config);
@@ -519,23 +515,22 @@ mod tests {
                 .map(|f| f.display_path.as_str())
                 .collect();
             assert!(paths.iter().any(|p| p.ends_with("PROMPT.md")));
-            assert!(paths.iter().any(|p| *p == ".ralph"));
             assert!(paths.iter().any(|p| p.contains("brain-dump")));
             assert!(paths.iter().any(|p| p.contains("shape")));
         }
     }
 
     #[test]
-    fn test_init_specs_mode_has_six_files() {
+    fn test_init_specs_mode_has_five_files() {
         let config = config_with_mode("specs");
         let state = InitModalState::new(&config);
-        assert_eq!(state.files.len(), 6);
+        assert_eq!(state.files.len(), 5);
     }
 
     #[test]
-    fn test_init_beads_mode_has_four_files() {
+    fn test_init_beads_mode_has_three_files() {
         let config = config_with_mode("beads");
         let state = InitModalState::new(&config);
-        assert_eq!(state.files.len(), 4);
+        assert_eq!(state.files.len(), 3);
     }
 }

@@ -219,7 +219,7 @@ pub struct PartialBehaviorConfig {
 }
 
 /// Project-specific configuration where every field is optional.
-/// Parsed from `.ralph` files. Fields that are `None` inherit from the global config.
+/// Fields that are `None` inherit from the global config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PartialConfig {
@@ -336,23 +336,38 @@ pub fn get_config_path() -> Option<PathBuf> {
     get_config_dir().map(|dir| dir.join("config.toml"))
 }
 
-/// Get the project config path (.ralph in current working directory).
+/// Derive a project key from an absolute path.
+/// Replaces path separators with dashes (e.g. `/Users/me/code/foo` → `-Users-me-code-foo`).
+fn project_key_from_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace(['/', '\\'], "-")
+}
+
+/// Compute the per-project config path (deterministic, may not exist yet).
+/// Returns `<config-dir>/projects/<key>/config.toml` based on the current working directory.
+pub fn compute_project_config_path() -> Option<PathBuf> {
+    let config_dir = get_config_dir()?;
+    let cwd = std::env::current_dir().ok()?;
+    let key = project_key_from_path(&cwd);
+    Some(config_dir.join("projects").join(key).join("config.toml"))
+}
+
+/// Get the per-project config path if the file exists.
 pub fn get_project_config_path() -> Option<PathBuf> {
-    let path = std::env::current_dir().ok()?.join(".ralph");
+    let path = compute_project_config_path()?;
     if path.exists() { Some(path) } else { None }
 }
 
-/// Load a project config (.ralph) from the given path.
+/// Load a per-project config from the given path.
 /// Returns Ok(PartialConfig) on success, Err(String) on parse/read failure.
 pub fn load_project_config(path: &PathBuf) -> Result<PartialConfig, String> {
     let contents = fs::read_to_string(path).map_err(|e| {
         warn!(path = ?path, error = %e, "project_config_read_failed");
-        format!("Failed to read .ralph: {}", e)
+        format!("Failed to read project config: {}", e)
     })?;
 
     toml::from_str::<PartialConfig>(&contents).map_err(|e| {
         warn!(path = ?path, error = %e, "project_config_parse_failed");
-        format!("Invalid .ralph: {}", e)
+        format!("Invalid project config: {}", e)
     })
 }
 
@@ -390,7 +405,7 @@ pub fn load_config() -> LoadedConfig {
 
     let (mut config, status) = load_or_create_config(&config_path);
 
-    // Check for project-level .ralph file
+    // Check for per-project config file
     let project_config_path = get_project_config_path();
     if let Some(ref project_path) = project_config_path {
         match load_project_config(project_path) {
@@ -461,7 +476,7 @@ pub fn reload_config(
                 Err(e) => Some(e),
             }
         } else {
-            // .ralph was deleted — just use global config, no error
+            // Project config was deleted — just use global config, no error
             None
         }
     } else {
@@ -497,8 +512,9 @@ pub fn save_config(config: &Config, config_path: &PathBuf) -> Result<(), String>
     Ok(())
 }
 
-/// Save a partial config to the given file path (for .ralph project configs).
-/// Prepends a comment header. Only writes fields that are Some.
+/// Save a partial config to the given file path (per-project config).
+/// Creates parent directories if needed. Prepends a comment header.
+/// Only writes fields that are Some.
 pub fn save_partial_config(partial: &PartialConfig, config_path: &PathBuf) -> Result<(), String> {
     let toml_content = toml::to_string_pretty(partial).map_err(|e| {
         warn!(error = %e, "partial_config_save_serialize_failed");
@@ -514,6 +530,14 @@ pub fn save_partial_config(partial: &PartialConfig, config_path: &PathBuf) -> Re
             toml_content
         )
     };
+
+    // Ensure parent directory exists (creates projects/<key>/ on first save)
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            warn!(path = ?parent, error = %e, "project_config_dir_create_failed");
+            format!("Failed to create project config directory: {}", e)
+        })?;
+    }
 
     fs::write(config_path, &content).map_err(|e| {
         warn!(path = ?config_path, error = %e, "partial_config_save_write_failed");
@@ -1034,5 +1058,25 @@ iterations = 3
         assert!(deserialized.logging.level.is_none());
         assert_eq!(deserialized.behavior.iterations, Some(5));
         assert!(deserialized.behavior.keep_awake.is_none());
+    }
+
+    #[test]
+    fn test_project_key_from_path() {
+        let key = project_key_from_path(std::path::Path::new("/Users/me/code/foo"));
+        assert_eq!(key, "-Users-me-code-foo");
+
+        let key = project_key_from_path(std::path::Path::new("/"));
+        assert_eq!(key, "-");
+    }
+
+    #[test]
+    fn test_compute_project_config_path_structure() {
+        // Verify the returned path has the expected structure
+        if let Some(path) = compute_project_config_path() {
+            let path_str = path.to_string_lossy();
+            assert!(path_str.contains("projects"));
+            assert!(path_str.ends_with("config.toml"));
+        }
+        // If None, config dir can't be determined (CI env) — that's ok
     }
 }

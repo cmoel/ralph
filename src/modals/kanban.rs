@@ -5,8 +5,9 @@
 //! with zero knowledge of beads internals.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Modifier, Style};
@@ -293,6 +294,12 @@ pub struct KanbanBoardState {
     pub manual_blocked_ids: HashSet<String>,
     /// Dependency direction picker overlay state.
     pub dep_direction: Option<DepDirectionState>,
+    /// Undo stack — push on every forward action, pop on undo.
+    pub undo_stack: Vec<BoardAction>,
+    /// Redo stack — push when undoing, clear on new forward action.
+    pub redo_stack: Vec<BoardAction>,
+    /// Transient status message with timestamp for auto-dismiss.
+    pub status_message: Option<(String, Instant)>,
 }
 
 /// Which direction the dependency goes.
@@ -302,6 +309,153 @@ pub enum DepDirection {
     BlockedBy,
     /// The selected bead blocks the picked bead.
     Blocks,
+}
+
+/// An undoable board action, stored in the undo/redo stacks.
+#[derive(Debug, Clone)]
+pub enum BoardAction {
+    ToggleHumanLabel {
+        bead_id: String,
+        was_present: bool,
+    },
+    Defer {
+        bead_id: String,
+        previous_status: String,
+    },
+    Close {
+        bead_id: String,
+        previous_status: String,
+    },
+    ChangePriority {
+        bead_id: String,
+        old_priority: u64,
+        new_priority: u64,
+    },
+    AddDependency {
+        issue: String,
+        depends_on: String,
+    },
+}
+
+impl BoardAction {
+    /// Human-readable description of the forward action.
+    fn describe(&self) -> String {
+        match self {
+            BoardAction::ToggleHumanLabel {
+                bead_id,
+                was_present,
+            } => {
+                if *was_present {
+                    format!("removed human label from {bead_id}")
+                } else {
+                    format!("added human label to {bead_id}")
+                }
+            }
+            BoardAction::Defer { bead_id, .. } => format!("deferred {bead_id}"),
+            BoardAction::Close { bead_id, .. } => format!("closed {bead_id}"),
+            BoardAction::ChangePriority {
+                bead_id,
+                new_priority,
+                ..
+            } => format!("priority P{new_priority} on {bead_id}"),
+            BoardAction::AddDependency { issue, depends_on } => {
+                format!("dep {issue} -> {depends_on}")
+            }
+        }
+    }
+
+    /// Execute the forward (original) action via bd CLI.
+    fn execute_forward(&self, bd_path: &str) {
+        let bd = bd_path.to_string();
+        match self.clone() {
+            BoardAction::ToggleHumanLabel {
+                bead_id,
+                was_present,
+            } => {
+                let flag = if was_present {
+                    "--remove-label=human"
+                } else {
+                    "--add-label=human"
+                };
+                spawn_bd(&bd, &["update", &bead_id, flag]);
+            }
+            BoardAction::Defer { bead_id, .. } => {
+                spawn_bd(&bd, &["update", &bead_id, "--status=deferred"]);
+            }
+            BoardAction::Close { bead_id, .. } => {
+                spawn_bd(&bd, &["close", &bead_id]);
+            }
+            BoardAction::ChangePriority {
+                bead_id,
+                new_priority,
+                ..
+            } => {
+                let p = new_priority.to_string();
+                spawn_bd(&bd, &["update", &bead_id, "--priority", &p]);
+            }
+            BoardAction::AddDependency { issue, depends_on } => {
+                spawn_bd(&bd, &["dep", "add", &issue, &depends_on]);
+            }
+        }
+    }
+
+    /// Execute the reverse (undo) action via bd CLI.
+    fn execute_reverse(&self, bd_path: &str) {
+        let bd = bd_path.to_string();
+        match self.clone() {
+            BoardAction::ToggleHumanLabel {
+                bead_id,
+                was_present,
+            } => {
+                let flag = if was_present {
+                    "--add-label=human"
+                } else {
+                    "--remove-label=human"
+                };
+                spawn_bd(&bd, &["update", &bead_id, flag]);
+            }
+            BoardAction::Defer {
+                bead_id,
+                previous_status,
+            } => {
+                let status_flag = format!("--status={previous_status}");
+                spawn_bd(&bd, &["update", &bead_id, &status_flag]);
+            }
+            BoardAction::Close {
+                bead_id,
+                previous_status,
+            } => {
+                let status_flag = format!("--status={previous_status}");
+                spawn_bd(&bd, &["update", &bead_id, &status_flag]);
+            }
+            BoardAction::ChangePriority {
+                bead_id,
+                old_priority,
+                ..
+            } => {
+                let p = old_priority.to_string();
+                spawn_bd(&bd, &["update", &bead_id, "--priority", &p]);
+            }
+            BoardAction::AddDependency { issue, depends_on } => {
+                spawn_bd(&bd, &["dep", "remove", &issue, &depends_on]);
+            }
+        }
+    }
+}
+
+/// Spawn a fire-and-forget bd command in a background thread.
+fn spawn_bd(bd_path: &str, args: &[&str]) {
+    let bd = bd_path.to_string();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    std::thread::spawn(move || {
+        std::process::Command::new(&bd)
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok();
+    });
 }
 
 /// State for the dependency direction picker overlay (b).
@@ -436,6 +590,9 @@ impl KanbanBoardState {
             defer_input: None,
             manual_blocked_ids: HashSet::new(),
             dep_direction: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            status_message: None,
             column_defs,
         }
     }
@@ -493,6 +650,23 @@ impl KanbanBoardState {
         if self.selected_row[col] >= len {
             self.selected_row[col] = 0;
         }
+    }
+
+    /// Find a card by bead ID across all columns.
+    fn find_card(&self, bead_id: &str) -> Option<&KanbanCard> {
+        self.columns.iter().flatten().find(|c| c.id == bead_id)
+    }
+
+    /// Record a forward action: push to undo stack and clear redo stack.
+    pub fn push_action(&mut self, action: BoardAction) {
+        self.set_status(action.describe());
+        self.undo_stack.push(action);
+        self.redo_stack.clear();
+    }
+
+    /// Set a transient status message that auto-dismisses after a few seconds.
+    pub fn set_status(&mut self, msg: String) {
+        self.status_message = Some((msg, Instant::now()));
     }
 
     pub fn move_left(&mut self) {
@@ -591,7 +765,7 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
 // ---------------------------------------------------------------------------
 
 /// Handle keyboard input for the kanban board modal.
-pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
+pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModifiers) {
     let Some(state) = &mut app.kanban_board_state else {
         return;
     };
@@ -606,7 +780,15 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 let bead_id = confirm.bead_id.clone();
                 let reason = confirm.reason.trim().to_string();
                 let bd_path = app.config.behavior.bd_path.clone();
+                let previous_status = state
+                    .find_card(&bead_id)
+                    .map(|c| c.status.clone())
+                    .unwrap_or_else(|| "open".to_string());
                 state.close_confirm = None;
+                state.push_action(BoardAction::Close {
+                    bead_id: bead_id.clone(),
+                    previous_status,
+                });
                 std::thread::spawn(move || {
                     let mut cmd = std::process::Command::new(&bd_path);
                     cmd.arg("close").arg(&bead_id);
@@ -674,7 +856,15 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 let bead_id = defer.bead_id.clone();
                 let until = defer.until.trim().to_string();
                 let bd_path = app.config.behavior.bd_path.clone();
+                let previous_status = state
+                    .find_card(&bead_id)
+                    .map(|c| c.status.clone())
+                    .unwrap_or_else(|| "open".to_string());
                 state.defer_input = None;
+                state.push_action(BoardAction::Defer {
+                    bead_id: bead_id.clone(),
+                    previous_status,
+                });
                 std::thread::spawn(move || {
                     let mut cmd = std::process::Command::new(&bd_path);
                     if until.is_empty() {
@@ -778,18 +968,16 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 && card.priority > 0
             {
                 let bead_id = card.id.clone();
-                let new_priority = card.priority - 1;
+                let old_priority = card.priority;
+                let new_priority = old_priority - 1;
                 let bd_path = app.config.behavior.bd_path.clone();
-                std::thread::spawn(move || {
-                    std::process::Command::new(&bd_path)
-                        .args(["update", &bead_id, "--priority"])
-                        .arg(new_priority.to_string())
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .ok();
+                state.push_action(BoardAction::ChangePriority {
+                    bead_id: bead_id.clone(),
+                    old_priority,
+                    new_priority,
                 });
+                let p = new_priority.to_string();
+                spawn_bd(&bd_path, &["update", &bead_id, "--priority", &p]);
             }
         }
         KeyCode::Char('-') => {
@@ -797,18 +985,16 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 && card.priority < 4
             {
                 let bead_id = card.id.clone();
-                let new_priority = card.priority + 1;
+                let old_priority = card.priority;
+                let new_priority = old_priority + 1;
                 let bd_path = app.config.behavior.bd_path.clone();
-                std::thread::spawn(move || {
-                    std::process::Command::new(&bd_path)
-                        .args(["update", &bead_id, "--priority"])
-                        .arg(new_priority.to_string())
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .ok();
+                state.push_action(BoardAction::ChangePriority {
+                    bead_id: bead_id.clone(),
+                    old_priority,
+                    new_priority,
                 });
+                let p = new_priority.to_string();
+                spawn_bd(&bd_path, &["update", &bead_id, "--priority", &p]);
             }
         }
         KeyCode::Char('H') => {
@@ -816,20 +1002,16 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 let bead_id = card.id.clone();
                 let has_human = card.labels.contains(&"human".to_string());
                 let bd_path = app.config.behavior.bd_path.clone();
-                std::thread::spawn(move || {
-                    let flag = if has_human {
-                        "--remove-label=human"
-                    } else {
-                        "--add-label=human"
-                    };
-                    std::process::Command::new(&bd_path)
-                        .args(["update", &bead_id, flag])
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .ok();
+                state.push_action(BoardAction::ToggleHumanLabel {
+                    bead_id: bead_id.clone(),
+                    was_present: has_human,
                 });
+                let flag = if has_human {
+                    "--remove-label=human"
+                } else {
+                    "--add-label=human"
+                };
+                spawn_bd(&bd_path, &["update", &bead_id, flag]);
             }
         }
         KeyCode::Char('d') => {
@@ -846,6 +1028,22 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 state.dep_direction = Some(DepDirectionState {
                     bead_id: card.id.clone(),
                 });
+            }
+        }
+        KeyCode::Char('u') => {
+            if let Some(action) = state.undo_stack.pop() {
+                let bd_path = app.config.behavior.bd_path.clone();
+                action.execute_reverse(&bd_path);
+                state.set_status(format!("Undid: {}", action.describe()));
+                state.redo_stack.push(action);
+            }
+        }
+        KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(action) = state.redo_stack.pop() {
+                let bd_path = app.config.behavior.bd_path.clone();
+                action.execute_forward(&bd_path);
+                state.set_status(format!("Redid: {}", action.describe()));
+                state.undo_stack.push(action);
             }
         }
         KeyCode::Char('h') | KeyCode::Left => {
@@ -1143,16 +1341,31 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             content.push(Line::from(row_spans));
         }
 
-        // Footer
-        let footer_text = format!(
-            " {} open \u{b7} {} closed \u{b7} bd list --all",
-            state.open_count, state.closed_count
-        );
-        let footer_padded = format!("{:<width$}", footer_text, width = inner_width);
-        content.push(Line::from(Span::styled(
-            footer_padded,
-            Style::default().fg(Color::DarkGray),
-        )));
+        // Footer — show status message if fresh, otherwise default counts
+        let status_msg_timeout = std::time::Duration::from_secs(3);
+        let active_status = state
+            .status_message
+            .as_ref()
+            .filter(|(_, ts)| ts.elapsed() < status_msg_timeout)
+            .map(|(msg, _)| msg.clone());
+
+        if let Some(msg) = active_status {
+            let padded = format!(" {msg:<width$}", width = inner_width.saturating_sub(1));
+            content.push(Line::from(Span::styled(
+                padded,
+                Style::default().fg(Color::Yellow),
+            )));
+        } else {
+            let footer_text = format!(
+                " {} open \u{b7} {} closed \u{b7} bd list --all",
+                state.open_count, state.closed_count
+            );
+            let footer_padded = format!("{:<width$}", footer_text, width = inner_width);
+            content.push(Line::from(Span::styled(
+                footer_padded,
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
     }
 
     let modal = Paragraph::new(content).block(

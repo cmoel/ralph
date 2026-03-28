@@ -18,7 +18,7 @@ use crate::work_source;
 pub enum Commands {
     /// Initialize project with Ralph scaffolding
     Init,
-    /// Force-regenerate all managed files (preserves .ralph config)
+    /// Force-regenerate all managed files (preserves project config)
     Reinit,
     /// Check environment health and report pass/fail for each check
     Doctor,

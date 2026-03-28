@@ -172,10 +172,6 @@ How to build it.
 Specs evolve. Agents may update specs as they learn—adding discovered requirements, refining criteria, or documenting blockers.
 "#;
 
-/// Project-specific config file template.
-pub const RALPH_CONFIG: &str =
-    "# Project-specific Ralph config \u{2014} edit with config modal (c)\n";
-
 /// Specs-mode work discovery instructions (compiled into binary).
 pub const SPECS_MODE_MD: &str = r#"
 # Specs Mode
@@ -261,7 +257,7 @@ Drain ideas from the user's head through intense, relentless questioning, then f
 
 ## Setup
 
-**Detect mode** by reading the `.ralph` config file in the project root. Look for `mode = "beads"` or `mode = "specs"` under `[behavior]`.
+**Detect mode** by checking the project directory. If a `.beads/` directory exists, it's beads mode. Otherwise, specs mode (default).
 
 - **Beads mode**: Run `bd list --json` to see existing beads for deduplication context.
 - **Specs mode** (default): Read `specs/README.md` to see existing specs for deduplication context.
@@ -423,7 +419,7 @@ After filing, present a summary:
 
 ## Start
 
-1. Read `.ralph` to detect the mode
+1. Detect mode (`.beads/` dir → beads, otherwise → specs)
 2. **Beads mode:** Run `bd list --json` to see existing beads
 3. **Specs mode:** Read `specs/README.md` to see existing specs
 4. Announce the detected mode to the user
@@ -442,7 +438,7 @@ Deeply refine rough work items into fully shaped, implementation-ready specifica
 
 ## Setup
 
-**Detect mode** by reading the `.ralph` config file in the project root. Look for `mode = "beads"` or `mode = "specs"` under `[behavior]`.
+**Detect mode** by checking the project directory. If a `.beads/` directory exists, it's beads mode. Otherwise, specs mode (default).
 
 - **Beads mode**: Run `bd list --json` to see existing beads for context.
 - **Specs mode** (default): Read `specs/README.md` and `specs/TEMPLATE.md` before starting.
@@ -732,7 +728,7 @@ When shaping multiple items in one session:
 
 ## Start
 
-1. Read `.ralph` to detect the mode
+1. Detect mode (`.beads/` dir → beads, otherwise → specs)
 2. **Beads mode:** Run `bd list --json` to see existing beads
 3. **Specs mode:** Read `specs/README.md` and `specs/TEMPLATE.md`
 4. Determine entry point:

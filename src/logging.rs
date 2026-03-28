@@ -57,7 +57,7 @@ pub fn log_directory() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         dirs_home_log_dir()
     } else {
-        ProjectDirs::from("dev", "cmoel", "ralph").and_then(|p| p.state_dir().map(PathBuf::from))
+        ProjectDirs::from("com", "cmoel", "ralph").and_then(|p| p.state_dir().map(PathBuf::from))
     }
 }
 
@@ -72,7 +72,7 @@ pub fn log_directory() -> Option<PathBuf> {
 /// The `reload_handle` can be used to dynamically change the log level.
 pub fn init(session_id: String, log_level: &str) -> Result<LoggingContext, LoggingError> {
     // Get platform-appropriate log directory
-    let project_dirs = ProjectDirs::from("dev", "cmoel", "ralph").ok_or_else(|| LoggingError {
+    let project_dirs = ProjectDirs::from("com", "cmoel", "ralph").ok_or_else(|| LoggingError {
         message: "Failed to determine platform directories".to_string(),
     })?;
 

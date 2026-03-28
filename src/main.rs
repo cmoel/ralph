@@ -28,7 +28,10 @@ use clap::Parser;
 
 use crate::app::{App, AppStatus};
 use crate::cli::{Cli, Commands, ToolCommands};
-use crate::config::{LoadedConfig, load_global_config, load_project_config};
+use crate::config::{
+    LoadedConfig, PartialConfig, compute_project_config_path, load_global_config,
+    load_project_config,
+};
 use crate::modals::{
     ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
     handle_bead_picker_input, handle_config_modal_input, handle_init_modal_input,
@@ -203,6 +206,13 @@ fn run_app(
     let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
     app.validate_board_config();
 
+    // Deprecation warning for specs mode
+    if app.config.behavior.mode == "specs" {
+        app.add_text_line(
+            "⚠ Specs mode is deprecated and will be removed in Ralph v2.0. Switch to beads mode in the config modal (c).".to_string()
+        );
+    }
+
     // Sniff test: warn if PROMPT.md contains mode-mismatched content
     let prompt_path = app.config.prompt_path();
     if let Ok(content) = std::fs::read_to_string(&prompt_path) {
@@ -370,7 +380,7 @@ fn run_app(
             // Handle kanban board input
             if app.show_kanban_board {
                 if let Event::Key(key) = event {
-                    handle_kanban_input(&mut app, key.code);
+                    handle_kanban_input(&mut app, key.code, key.modifiers);
                 }
                 continue;
             }
@@ -446,24 +456,25 @@ fn run_app(
                         }
                     },
                     KeyCode::Char('c') => {
-                        // Open config modal with project tab if .ralph exists
+                        // Open config modal — always show project tab when path is computable
                         app.show_config_modal = true;
-                        app.config_modal_state = if let Some(ref project_path) =
-                            app.project_config_path
-                        {
+                        let project_path = app
+                            .project_config_path
+                            .clone()
+                            .or_else(compute_project_config_path);
+                        app.config_modal_state = if let Some(project_path) = project_path {
                             let global_config = load_global_config(&app.config_path);
-                            match load_project_config(project_path) {
-                                Ok(partial) => Some(ConfigModalState::from_config_with_project(
-                                    &global_config,
-                                    &partial,
-                                    &app.config,
-                                    project_path.clone(),
-                                )),
-                                Err(_) => {
-                                    // If .ralph can't be parsed, fall back to global-only
-                                    Some(ConfigModalState::from_config(&app.config))
-                                }
-                            }
+                            let partial = if project_path.exists() {
+                                load_project_config(&project_path).unwrap_or_default()
+                            } else {
+                                PartialConfig::default()
+                            };
+                            Some(ConfigModalState::from_config_with_project(
+                                &global_config,
+                                &partial,
+                                &app.config,
+                                project_path,
+                            ))
                         } else {
                             Some(ConfigModalState::from_config(&app.config))
                         };
