@@ -604,6 +604,44 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 });
             }
         }
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            if let Some(card) = state.selected_card()
+                && card.priority > 0
+            {
+                let bead_id = card.id.clone();
+                let new_priority = card.priority - 1;
+                let bd_path = app.config.behavior.bd_path.clone();
+                std::thread::spawn(move || {
+                    std::process::Command::new(&bd_path)
+                        .args(["update", &bead_id, "--priority"])
+                        .arg(new_priority.to_string())
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .ok();
+                });
+            }
+        }
+        KeyCode::Char('-') => {
+            if let Some(card) = state.selected_card()
+                && card.priority < 4
+            {
+                let bead_id = card.id.clone();
+                let new_priority = card.priority + 1;
+                let bd_path = app.config.behavior.bd_path.clone();
+                std::thread::spawn(move || {
+                    std::process::Command::new(&bd_path)
+                        .args(["update", &bead_id, "--priority"])
+                        .arg(new_priority.to_string())
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .ok();
+                });
+            }
+        }
         KeyCode::Char('h') | KeyCode::Left => {
             state.move_left();
         }
