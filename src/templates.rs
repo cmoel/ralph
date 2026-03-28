@@ -227,9 +227,23 @@ After selecting a bead, assess its specification before implementing:
    - Exit immediately — do not attempt to implement an under-specified bead
 4. If the bead is clear enough to implement, proceed with the work
 
-## When Blocked
+## When Blocked — MANDATORY ESCALATION
 
-Document what failed, why it blocks, and options to resolve. Then flag for human review.
+If ANYTHING prevents you from completing the bead — you MUST do ALL THREE of these steps:
+
+1. `bd update <id> --add-label=human` — FLAG IT. This is how the human knows it needs attention.
+2. `bd update <id> --notes="BLOCKED: [what failed and why]"` — Document the blocker.
+3. Exit immediately — do NOT continue working on this bead.
+
+This applies to ALL blockers, including but not limited to:
+- Git commit failures (SSH signing, GPG, permissions)
+- File permission denials
+- Missing tools or dependencies
+- Tests that fail for reasons outside the bead's scope
+- Anything you cannot resolve yourself
+
+NEVER write a note about being blocked without ALSO adding the human label.
+A note without the human label is invisible to the user — the bead will rot in in_progress forever.
 
 ## Completing Work
 
