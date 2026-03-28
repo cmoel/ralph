@@ -283,6 +283,8 @@ pub struct KanbanBoardState {
     pub dep_neighbors: HashMap<String, HashSet<String>>,
     /// Close confirmation overlay state.
     pub close_confirm: Option<CloseConfirmState>,
+    /// Defer input overlay state.
+    pub defer_input: Option<DeferState>,
 }
 
 /// State for the close confirmation overlay (Shift+X).
@@ -337,6 +339,58 @@ impl CloseConfirmState {
     }
 }
 
+/// State for the defer input overlay (d).
+#[derive(Debug)]
+pub struct DeferState {
+    /// The bead ID to defer.
+    pub bead_id: String,
+    /// Optional "until" date text being typed.
+    pub until: String,
+    /// Cursor position (byte offset) within `until`.
+    pub cursor_pos: usize,
+}
+
+impl DeferState {
+    fn insert_char(&mut self, c: char) {
+        self.until.insert(self.cursor_pos, c);
+        self.cursor_pos += c.len_utf8();
+    }
+
+    fn delete_char_before(&mut self) {
+        if self.cursor_pos > 0 {
+            let prev = self.until[..self.cursor_pos]
+                .chars()
+                .last()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos -= prev;
+            self.until.remove(self.cursor_pos);
+        }
+    }
+
+    fn cursor_left(&mut self) {
+        if self.cursor_pos > 0 {
+            let prev = self.until[..self.cursor_pos]
+                .chars()
+                .last()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos -= prev;
+        }
+    }
+
+    fn cursor_right(&mut self) {
+        if self.cursor_pos < self.until.len() {
+            let next = self.until[self.cursor_pos..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos += next;
+        }
+    }
+}
+
 impl KanbanBoardState {
     pub fn new_loading(column_defs: Vec<ColumnDef>) -> Self {
         let col_count = column_defs.len();
@@ -355,6 +409,7 @@ impl KanbanBoardState {
             closed_count: 0,
             dep_neighbors: HashMap::new(),
             close_confirm: None,
+            defer_input: None,
             column_defs,
         }
     }
@@ -549,6 +604,48 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
         return;
     }
 
+    // If defer input is open, handle its input
+    if let Some(defer) = &mut state.defer_input {
+        match key_code {
+            KeyCode::Esc => {
+                state.defer_input = None;
+            }
+            KeyCode::Enter => {
+                let bead_id = defer.bead_id.clone();
+                let until = defer.until.trim().to_string();
+                let bd_path = app.config.behavior.bd_path.clone();
+                state.defer_input = None;
+                std::thread::spawn(move || {
+                    let mut cmd = std::process::Command::new(&bd_path);
+                    if until.is_empty() {
+                        cmd.args(["update", &bead_id, "--status=deferred"]);
+                    } else {
+                        cmd.args(["defer", &bead_id, "--until"]).arg(&until);
+                    }
+                    cmd.stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .ok();
+                });
+            }
+            KeyCode::Backspace => {
+                defer.delete_char_before();
+            }
+            KeyCode::Left => {
+                defer.cursor_left();
+            }
+            KeyCode::Right => {
+                defer.cursor_right();
+            }
+            KeyCode::Char(c) => {
+                defer.insert_char(c);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // If detail view is open, handle detail input
     if let Some(detail) = &mut state.detail_view {
         match key_code {
@@ -672,6 +769,15 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                         .stderr(std::process::Stdio::null())
                         .status()
                         .ok();
+                });
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(card) = state.selected_card() {
+                state.defer_input = Some(DeferState {
+                    bead_id: card.id.clone(),
+                    until: String::new(),
+                    cursor_pos: 0,
                 });
             }
         }
@@ -970,6 +1076,11 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
     if let Some(confirm) = &state.close_confirm {
         draw_close_confirm(f, confirm);
     }
+
+    // Defer input overlay
+    if let Some(defer) = &state.defer_input {
+        draw_defer_input(f, defer);
+    }
 }
 
 /// Draw the close confirmation overlay with optional reason input.
@@ -1021,6 +1132,60 @@ fn draw_close_confirm(f: &mut Frame, confirm: &CloseConfirmState) {
             .title(" Close Bead ")
             .title_alignment(Alignment::Center)
             .style(Style::default().fg(Color::Red)),
+    );
+
+    f.render_widget(widget, overlay);
+}
+
+/// Draw the defer input overlay with optional until-date input.
+fn draw_defer_input(f: &mut Frame, defer: &DeferState) {
+    let area = f.area();
+    let overlay = centered_rect(50, 5, area);
+    f.render_widget(Clear, overlay);
+
+    let prompt = format!("Defer {}. Until (optional):", defer.bead_id);
+
+    // Build the text input line with cursor
+    let before = &defer.until[..defer.cursor_pos];
+    let at_end = defer.cursor_pos >= defer.until.len();
+    let cursor_char = if at_end {
+        ' '
+    } else {
+        defer.until[defer.cursor_pos..].chars().next().unwrap()
+    };
+    let after = if at_end {
+        ""
+    } else {
+        &defer.until[defer.cursor_pos + cursor_char.len_utf8()..]
+    };
+
+    let input_line = Line::from(vec![
+        Span::styled(before, Style::default().fg(Color::White)),
+        Span::styled(
+            cursor_char.to_string(),
+            Style::default().fg(Color::Black).bg(Color::White),
+        ),
+        Span::styled(after, Style::default().fg(Color::White)),
+    ]);
+
+    let content = vec![
+        Line::from(Span::styled(
+            prompt,
+            Style::default().fg(Color::Yellow),
+        )),
+        input_line,
+        Line::from(Span::styled(
+            "Enter to defer \u{b7} Esc to cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let widget = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Defer Bead ")
+            .title_alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Cyan)),
     );
 
     f.render_widget(widget, overlay);
