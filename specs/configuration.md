@@ -56,7 +56,7 @@ Environment variables override config file values:
 
 ### Technical Constraints
 
-- Use `directories::ProjectDirs::from("dev", "cmoel", "ralph")`
+- Use `directories::ProjectDirs::from("com", "cmoel", "ralph")`
 - Expand `~` in paths to actual home directory
 - Config parsing errors should not crash the app
 - Store both the config values AND the config file path in `App`

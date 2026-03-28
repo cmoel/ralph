@@ -34,7 +34,7 @@ If logging initialization fails, Ralph continues to function—the error is stor
 
 - Use existing dependencies: `tracing`, `tracing-appender`, `tracing-subscriber`
 - Add `directories` crate for cross-platform path resolution
-- Use `directories::ProjectDirs::from("dev", "cmoel", "ralph")` for path resolution
+- Use `directories::ProjectDirs::from("com", "cmoel", "ralph")` for path resolution
 - Create log directory if it doesn't exist
 - Default log level: INFO (configurable via `RUST_LOG`)
 
