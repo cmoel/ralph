@@ -279,6 +279,60 @@ pub struct KanbanBoardState {
     pub closed_count: u64,
     /// Maps each bead ID to the set of its direct dependency neighbors (both directions).
     pub dep_neighbors: HashMap<String, HashSet<String>>,
+    /// Close confirmation overlay state.
+    pub close_confirm: Option<CloseConfirmState>,
+}
+
+/// State for the close confirmation overlay (Shift+X).
+#[derive(Debug)]
+pub struct CloseConfirmState {
+    /// The bead ID to close.
+    pub bead_id: String,
+    /// Optional reason text being typed.
+    pub reason: String,
+    /// Cursor position (byte offset) within `reason`.
+    pub cursor_pos: usize,
+}
+
+impl CloseConfirmState {
+    fn insert_char(&mut self, c: char) {
+        self.reason.insert(self.cursor_pos, c);
+        self.cursor_pos += c.len_utf8();
+    }
+
+    fn delete_char_before(&mut self) {
+        if self.cursor_pos > 0 {
+            let prev = self.reason[..self.cursor_pos]
+                .chars()
+                .last()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos -= prev;
+            self.reason.remove(self.cursor_pos);
+        }
+    }
+
+    fn cursor_left(&mut self) {
+        if self.cursor_pos > 0 {
+            let prev = self.reason[..self.cursor_pos]
+                .chars()
+                .last()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos -= prev;
+        }
+    }
+
+    fn cursor_right(&mut self) {
+        if self.cursor_pos < self.reason.len() {
+            let next = self.reason[self.cursor_pos..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+            self.cursor_pos += next;
+        }
+    }
 }
 
 impl KanbanBoardState {
@@ -298,6 +352,7 @@ impl KanbanBoardState {
             open_count: 0,
             closed_count: 0,
             dep_neighbors: HashMap::new(),
+            close_confirm: None,
             column_defs,
         }
     }
@@ -441,6 +496,47 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
         return;
     };
 
+    // If close confirmation is open, handle its input
+    if let Some(confirm) = &mut state.close_confirm {
+        match key_code {
+            KeyCode::Esc => {
+                state.close_confirm = None;
+            }
+            KeyCode::Enter => {
+                let bead_id = confirm.bead_id.clone();
+                let reason = confirm.reason.trim().to_string();
+                let bd_path = app.config.behavior.bd_path.clone();
+                state.close_confirm = None;
+                std::thread::spawn(move || {
+                    let mut cmd = std::process::Command::new(&bd_path);
+                    cmd.arg("close").arg(&bead_id);
+                    if !reason.is_empty() {
+                        cmd.arg("--reason").arg(&reason);
+                    }
+                    cmd.stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .ok();
+                });
+            }
+            KeyCode::Backspace => {
+                confirm.delete_char_before();
+            }
+            KeyCode::Left => {
+                confirm.cursor_left();
+            }
+            KeyCode::Right => {
+                confirm.cursor_right();
+            }
+            KeyCode::Char(c) => {
+                confirm.insert_char(c);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // If detail view is open, handle detail input
     if let Some(detail) = &mut state.detail_view {
         match key_code {
@@ -497,6 +593,15 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                     let _ = tx.send(result);
                 });
                 app.bead_detail_rx = Some(rx);
+            }
+        }
+        KeyCode::Char('X') => {
+            if let Some(card) = state.selected_card() {
+                state.close_confirm = Some(CloseConfirmState {
+                    bead_id: card.id.clone(),
+                    reason: String::new(),
+                    cursor_pos: 0,
+                });
             }
         }
         KeyCode::Char('h') | KeyCode::Left => {
@@ -789,6 +894,65 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
     );
 
     f.render_widget(modal, modal_area);
+
+    // Close confirmation overlay
+    if let Some(confirm) = &state.close_confirm {
+        draw_close_confirm(f, confirm);
+    }
+}
+
+/// Draw the close confirmation overlay with optional reason input.
+fn draw_close_confirm(f: &mut Frame, confirm: &CloseConfirmState) {
+    let area = f.area();
+    let overlay = centered_rect(50, 5, area);
+    f.render_widget(Clear, overlay);
+
+    let prompt = format!("Close {}? Reason (optional):", confirm.bead_id);
+
+    // Build the text input line with cursor
+    let before = &confirm.reason[..confirm.cursor_pos];
+    let at_end = confirm.cursor_pos >= confirm.reason.len();
+    let cursor_char = if at_end {
+        ' '
+    } else {
+        confirm.reason[confirm.cursor_pos..].chars().next().unwrap()
+    };
+    let after = if at_end {
+        ""
+    } else {
+        &confirm.reason[confirm.cursor_pos + cursor_char.len_utf8()..]
+    };
+
+    let input_line = Line::from(vec![
+        Span::styled(before, Style::default().fg(Color::White)),
+        Span::styled(
+            cursor_char.to_string(),
+            Style::default().fg(Color::Black).bg(Color::White),
+        ),
+        Span::styled(after, Style::default().fg(Color::White)),
+    ]);
+
+    let content = vec![
+        Line::from(Span::styled(
+            prompt,
+            Style::default().fg(Color::Yellow),
+        )),
+        input_line,
+        Line::from(Span::styled(
+            "Enter to confirm \u{b7} Esc to cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let widget = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Close Bead ")
+            .title_alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Red)),
+    );
+
+    f.render_widget(widget, overlay);
 }
 
 // ---------------------------------------------------------------------------
