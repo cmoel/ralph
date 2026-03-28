@@ -291,6 +291,24 @@ pub struct KanbanBoardState {
     pub defer_input: Option<DeferState>,
     /// Bead IDs with status=blocked but no actual blocking dependencies.
     pub manual_blocked_ids: HashSet<String>,
+    /// Dependency direction picker overlay state.
+    pub dep_direction: Option<DepDirectionState>,
+}
+
+/// Which direction the dependency goes.
+#[derive(Debug, Clone, Copy)]
+pub enum DepDirection {
+    /// The selected bead is blocked by the picked bead.
+    BlockedBy,
+    /// The selected bead blocks the picked bead.
+    Blocks,
+}
+
+/// State for the dependency direction picker overlay (b).
+#[derive(Debug)]
+pub struct DepDirectionState {
+    /// The bead ID we pressed 'b' on.
+    pub bead_id: String,
 }
 
 /// State for the close confirmation overlay (Shift+X).
@@ -417,6 +435,7 @@ impl KanbanBoardState {
             close_confirm: None,
             defer_input: None,
             manual_blocked_ids: HashSet::new(),
+            dep_direction: None,
             column_defs,
         }
     }
@@ -618,6 +637,33 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
         return;
     }
 
+    // If dep direction picker is open, handle its input
+    if let Some(dep_dir) = &state.dep_direction {
+        match key_code {
+            KeyCode::Esc => {
+                state.dep_direction = None;
+            }
+            KeyCode::Char('1') => {
+                app.pending_dep = Some(crate::app::PendingDep {
+                    bead_id: dep_dir.bead_id.clone(),
+                    direction: DepDirection::BlockedBy,
+                });
+                state.dep_direction = None;
+                app.open_bead_picker();
+            }
+            KeyCode::Char('2') => {
+                app.pending_dep = Some(crate::app::PendingDep {
+                    bead_id: dep_dir.bead_id.clone(),
+                    direction: DepDirection::Blocks,
+                });
+                state.dep_direction = None;
+                app.open_bead_picker();
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // If defer input is open, handle its input
     if let Some(defer) = &mut state.defer_input {
         match key_code {
@@ -796,7 +842,11 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
             }
         }
         KeyCode::Char('b') => {
-            app.open_bead_picker();
+            if let Some(card) = state.selected_card() {
+                state.dep_direction = Some(DepDirectionState {
+                    bead_id: card.id.clone(),
+                });
+            }
         }
         KeyCode::Char('h') | KeyCode::Left => {
             state.move_left();
@@ -1124,6 +1174,11 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
     if let Some(defer) = &state.defer_input {
         draw_defer_input(f, defer);
     }
+
+    // Dependency direction picker overlay
+    if let Some(dep_dir) = &state.dep_direction {
+        draw_dep_direction(f, dep_dir);
+    }
 }
 
 /// Draw the close confirmation overlay with optional reason input.
@@ -1221,6 +1276,38 @@ fn draw_defer_input(f: &mut Frame, defer: &DeferState) {
         Block::default()
             .borders(Borders::ALL)
             .title(" Defer Bead ")
+            .title_alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Cyan)),
+    );
+
+    f.render_widget(widget, overlay);
+}
+
+/// Draw the dependency direction picker overlay.
+fn draw_dep_direction(f: &mut Frame, dep_dir: &DepDirectionState) {
+    let area = f.area();
+    let overlay = centered_rect(50, 6, area);
+    f.render_widget(Clear, overlay);
+
+    let prompt = format!("Add dependency for {}", dep_dir.bead_id);
+
+    let content = vec![
+        Line::from(Span::styled(prompt, Style::default().fg(Color::Yellow))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("1", Style::default().fg(Color::Cyan)),
+            Span::styled("  This is blocked by...", Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("2", Style::default().fg(Color::Cyan)),
+            Span::styled("  This blocks...", Style::default().fg(Color::White)),
+        ]),
+    ];
+
+    let widget = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Add Dependency ")
             .title_alignment(Alignment::Center)
             .style(Style::default().fg(Color::Cyan)),
     );

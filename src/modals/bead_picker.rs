@@ -198,6 +198,7 @@ pub fn handle_bead_picker_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Esc => {
             app.show_bead_picker = false;
             app.bead_picker_state = None;
+            app.pending_dep = None;
             // No result — cancelled
         }
         KeyCode::Enter => {

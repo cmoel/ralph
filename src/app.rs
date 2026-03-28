@@ -203,6 +203,17 @@ pub struct App {
     pub bead_picker_result: Option<String>,
     /// Receiver for background bead picker data.
     pub bead_picker_rx: Option<Receiver<Result<Vec<crate::modals::BeadPickerItem>, String>>>,
+    /// Pending dependency: bead ID + direction, waiting for bead picker result.
+    pub pending_dep: Option<PendingDep>,
+}
+
+/// Tracks a pending dependency addition while the bead picker is open.
+#[derive(Debug)]
+pub struct PendingDep {
+    /// The bead we pressed 'b' on.
+    pub bead_id: String,
+    /// The direction chosen by the user.
+    pub direction: crate::modals::DepDirection,
 }
 
 impl App {
@@ -300,6 +311,7 @@ impl App {
             bead_picker_state: None,
             bead_picker_result: None,
             bead_picker_rx: None,
+            pending_dep: None,
         }
     }
 
@@ -783,6 +795,32 @@ impl App {
             let _ = tx.send(result);
         });
         self.bead_picker_rx = Some(rx);
+    }
+
+    /// If a bead was picked and a dependency is pending, run `bd dep add`.
+    pub fn poll_pending_dep(&mut self) {
+        let picked_id = match self.bead_picker_result.take() {
+            Some(id) => id,
+            None => return,
+        };
+        let dep = match self.pending_dep.take() {
+            Some(d) => d,
+            None => return,
+        };
+        let bd_path = self.config.behavior.bd_path.clone();
+        let (issue, depends_on) = match dep.direction {
+            crate::modals::DepDirection::BlockedBy => (dep.bead_id, picked_id),
+            crate::modals::DepDirection::Blocks => (picked_id, dep.bead_id),
+        };
+        std::thread::spawn(move || {
+            std::process::Command::new(&bd_path)
+                .args(["dep", "add", &issue, &depends_on])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .ok();
+        });
     }
 
     /// Stop the kanban filesystem watcher.

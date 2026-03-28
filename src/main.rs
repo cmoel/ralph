@@ -290,6 +290,7 @@ fn run_app(
         app.poll_bead_detail();
         app.poll_kanban_watcher();
         app.poll_bead_picker();
+        app.poll_pending_dep();
 
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
