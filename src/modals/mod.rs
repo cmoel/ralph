@@ -3,6 +3,7 @@
 //! Each modal lives in its own submodule with state, input handler,
 //! and draw function together.
 
+mod bead_picker;
 mod config;
 mod help;
 mod init;
@@ -11,6 +12,10 @@ mod quit;
 mod specs_panel;
 mod tool_allow;
 
+pub use bead_picker::{
+    BeadPickerItem, BeadPickerState, draw_bead_picker, fetch_bead_picker_data,
+    handle_bead_picker_input,
+};
 pub use config::{ConfigModalState, draw_config_modal, handle_config_modal_input};
 pub use help::draw_help_modal;
 pub use init::{InitModalState, draw_init_modal, handle_init_modal_input};

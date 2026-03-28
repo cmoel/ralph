@@ -31,8 +31,8 @@ use crate::cli::{Cli, Commands, ToolCommands};
 use crate::config::{LoadedConfig, load_global_config, load_project_config};
 use crate::modals::{
     ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
-    handle_config_modal_input, handle_init_modal_input, handle_kanban_input,
-    handle_specs_panel_input, handle_tool_allow_modal_input,
+    handle_bead_picker_input, handle_config_modal_input, handle_init_modal_input,
+    handle_kanban_input, handle_specs_panel_input, handle_tool_allow_modal_input,
 };
 use crate::tool_panel::SelectedPanel;
 use crate::ui::draw_ui;
@@ -289,6 +289,7 @@ fn run_app(
         app.poll_kanban_items();
         app.poll_bead_detail();
         app.poll_kanban_watcher();
+        app.poll_bead_picker();
 
         // Poll for current spec (throttled to every 2 seconds)
         app.poll_spec();
@@ -337,6 +338,14 @@ fn run_app(
                     && (key.code == KeyCode::Enter || key.code == KeyCode::Esc)
                 {
                     app.show_already_running_popup = false;
+                }
+                continue;
+            }
+
+            // Handle bead picker input
+            if app.show_bead_picker {
+                if let Event::Key(key) = event {
+                    handle_bead_picker_input(&mut app, key.code);
                 }
                 continue;
             }
@@ -478,8 +487,8 @@ fn run_app(
                             app.set_hint(err.clone());
                             continue;
                         }
-                        let board_config = crate::modals::load_board_config()
-                            .expect("already validated");
+                        let board_config =
+                            crate::modals::load_board_config().expect("already validated");
                         let column_defs = board_config.columns.clone();
                         app.show_kanban_board = true;
                         app.kanban_board_state =
@@ -487,8 +496,7 @@ fn run_app(
                         let bd_path = app.config.behavior.bd_path.clone();
                         let (tx, rx) = mpsc::channel();
                         std::thread::spawn(move || {
-                            let result =
-                                crate::modals::fetch_board_data(&bd_path, &column_defs);
+                            let result = crate::modals::fetch_board_data(&bd_path, &column_defs);
                             let _ = tx.send(result);
                         });
                         app.kanban_items_rx = Some(rx);

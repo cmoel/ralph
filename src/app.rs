@@ -195,6 +195,14 @@ pub struct App {
     pub cached_visual_line_count: Option<u16>,
     /// Error from parsing board_columns.toml (None = valid).
     pub board_config_error: Option<String>,
+    /// Whether the bead picker modal is visible.
+    pub show_bead_picker: bool,
+    /// State for the bead picker modal (when open).
+    pub bead_picker_state: Option<crate::modals::BeadPickerState>,
+    /// Result from the bead picker — callers `.take()` this after the picker closes.
+    pub bead_picker_result: Option<String>,
+    /// Receiver for background bead picker data.
+    pub bead_picker_rx: Option<Receiver<Result<Vec<crate::modals::BeadPickerItem>, String>>>,
 }
 
 impl App {
@@ -288,6 +296,10 @@ impl App {
             kanban_watcher_stop: None,
             cached_visual_line_count: None,
             board_config_error: None,
+            show_bead_picker: false,
+            bead_picker_state: None,
+            bead_picker_result: None,
+            bead_picker_rx: None,
         }
     }
 
@@ -731,6 +743,46 @@ impl App {
             });
             self.bead_detail_rx = Some(rx);
         }
+    }
+
+    /// Poll for background bead picker data.
+    pub fn poll_bead_picker(&mut self) {
+        let rx = match self.bead_picker_rx.take() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                self.dirty = true;
+                if let Some(ref mut state) = self.bead_picker_state {
+                    state.populate(result);
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.bead_picker_rx = Some(rx); // still running
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.dirty = true;
+                if let Some(ref mut state) = self.bead_picker_state {
+                    state.populate(Err("Background fetch failed".to_string()));
+                }
+            }
+        }
+    }
+
+    /// Open the bead picker modal and start background data fetch.
+    pub fn open_bead_picker(&mut self) {
+        self.show_bead_picker = true;
+        self.bead_picker_state = Some(crate::modals::BeadPickerState::new_loading());
+        self.bead_picker_result = None;
+        let bd_path = self.config.behavior.bd_path.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = crate::modals::fetch_bead_picker_data(&bd_path);
+            let _ = tx.send(result);
+        });
+        self.bead_picker_rx = Some(rx);
     }
 
     /// Stop the kanban filesystem watcher.

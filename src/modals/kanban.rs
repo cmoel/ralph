@@ -795,6 +795,9 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                 });
             }
         }
+        KeyCode::Char('b') => {
+            app.open_bead_picker();
+        }
         KeyCode::Char('h') | KeyCode::Left => {
             state.move_left();
         }
@@ -1155,10 +1158,7 @@ fn draw_close_confirm(f: &mut Frame, confirm: &CloseConfirmState) {
     ]);
 
     let content = vec![
-        Line::from(Span::styled(
-            prompt,
-            Style::default().fg(Color::Yellow),
-        )),
+        Line::from(Span::styled(prompt, Style::default().fg(Color::Yellow))),
         input_line,
         Line::from(Span::styled(
             "Enter to confirm \u{b7} Esc to cancel",
@@ -1209,10 +1209,7 @@ fn draw_defer_input(f: &mut Frame, defer: &DeferState) {
     ]);
 
     let content = vec![
-        Line::from(Span::styled(
-            prompt,
-            Style::default().fg(Color::Yellow),
-        )),
+        Line::from(Span::styled(prompt, Style::default().fg(Color::Yellow))),
         input_line,
         Line::from(Span::styled(
             "Enter to defer \u{b7} Esc to cancel",
@@ -1530,7 +1527,10 @@ pub fn watch_beads_directory(
 // ---------------------------------------------------------------------------
 
 /// Fetch board data from pipeline sources (called from background thread).
-pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<KanbanBoardData, String> {
+pub fn fetch_board_data(
+    bd_path: &str,
+    column_defs: &[ColumnDef],
+) -> Result<KanbanBoardData, String> {
     use std::thread;
 
     // Collect all (col_idx, emoji, command) tuples
@@ -1542,7 +1542,11 @@ pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<Kanb
     }
 
     // Spawn all source commands in parallel
-    type PipelineHandle = (usize, String, thread::JoinHandle<Result<Vec<serde_json::Value>, String>>);
+    type PipelineHandle = (
+        usize,
+        String,
+        thread::JoinHandle<Result<Vec<serde_json::Value>, String>>,
+    );
     let bd = bd_path.to_string();
     let handles: Vec<PipelineHandle> = tasks
         .into_iter()
@@ -1675,10 +1679,7 @@ pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<Kanb
                 + s.get("deferred_issues")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
-            let closed = s
-                .get("closed_issues")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let closed = s.get("closed_issues").and_then(|v| v.as_u64()).unwrap_or(0);
             (open, closed)
         })
         .unwrap_or((0, 0));
