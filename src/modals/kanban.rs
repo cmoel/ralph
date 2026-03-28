@@ -65,6 +65,8 @@ pub struct KanbanCard {
     pub is_epic: bool,
     /// Whether this card represents a pipeline error (non-selectable).
     pub is_error: bool,
+    /// Labels attached to this bead.
+    pub labels: Vec<String>,
 }
 
 /// Data fetched from pipeline sources for board population.
@@ -475,6 +477,15 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
                 .collect()
         })
         .unwrap_or_default();
+    let labels = item
+        .get("labels")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
     Some(KanbanCard {
         id,
         title,
@@ -483,6 +494,7 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
         emoji: emoji.to_string(),
         is_epic: false, // Set later in fetch_board_data after collecting parent IDs
         is_error: false,
+        labels,
     })
 }
 
@@ -634,6 +646,27 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode) {
                     std::process::Command::new(&bd_path)
                         .args(["update", &bead_id, "--priority"])
                         .arg(new_priority.to_string())
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .ok();
+                });
+            }
+        }
+        KeyCode::Char('H') => {
+            if let Some(card) = state.selected_card() {
+                let bead_id = card.id.clone();
+                let has_human = card.labels.contains(&"human".to_string());
+                let bd_path = app.config.behavior.bd_path.clone();
+                std::thread::spawn(move || {
+                    let flag = if has_human {
+                        "--remove-label=human"
+                    } else {
+                        "--add-label=human"
+                    };
+                    std::process::Command::new(&bd_path)
+                        .args(["update", &bead_id, flag])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -1358,6 +1391,7 @@ pub fn fetch_board_data(bd_path: &str, column_defs: &[ColumnDef]) -> Result<Kanb
                     emoji: "\u{26a0}\u{fe0f}".to_string(), // ⚠️
                     is_epic: false,
                     is_error: true,
+                    labels: Vec::new(),
                 });
             }
         }
