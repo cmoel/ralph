@@ -300,6 +300,8 @@ pub struct KanbanBoardState {
     pub redo_stack: Vec<BoardAction>,
     /// Transient status message with timestamp for auto-dismiss.
     pub status_message: Option<(String, Instant)>,
+    /// Whether the help overlay is shown.
+    pub show_help: bool,
 }
 
 /// Which direction the dependency goes.
@@ -593,6 +595,7 @@ impl KanbanBoardState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             status_message: None,
+            show_help: false,
             column_defs,
         }
     }
@@ -896,6 +899,17 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
         return;
     }
 
+    // If help overlay is open, only ? and Esc dismiss it
+    if state.show_help {
+        match key_code {
+            KeyCode::Char('?') | KeyCode::Esc => {
+                state.show_help = false;
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // If detail view is open, handle detail input
     if let Some(detail) = &mut state.detail_view {
         match key_code {
@@ -1045,6 +1059,9 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                 state.set_status(format!("Redid: {}", action.describe()));
                 state.undo_stack.push(action);
             }
+        }
+        KeyCode::Char('?') => {
+            state.show_help = true;
         }
         KeyCode::Char('h') | KeyCode::Left => {
             state.move_left();
@@ -1341,7 +1358,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             content.push(Line::from(row_spans));
         }
 
-        // Footer — show status message if fresh, otherwise default counts
+        // Footer — show status message if fresh, otherwise key hints
         let status_msg_timeout = std::time::Duration::from_secs(3);
         let active_status = state
             .status_message
@@ -1356,23 +1373,48 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::Yellow),
             )));
         } else {
-            let footer_text = format!(
-                " {} open \u{b7} {} closed \u{b7} bd list --all",
-                state.open_count, state.closed_count
-            );
-            let footer_padded = format!("{:<width$}", footer_text, width = inner_width);
-            content.push(Line::from(Span::styled(
-                footer_padded,
-                Style::default().fg(Color::DarkGray),
-            )));
+            let sep = Style::default().fg(Color::DarkGray);
+            let key = Style::default().fg(Color::Cyan);
+            let desc = Style::default().fg(Color::DarkGray);
+            content.push(Line::from(vec![
+                Span::styled(" hjkl", key),
+                Span::styled(" navigate", desc),
+                Span::styled(" \u{b7} ", sep),
+                Span::styled("Enter", key),
+                Span::styled(" view", desc),
+                Span::styled(" \u{b7} ", sep),
+                Span::styled("X", key),
+                Span::styled(" close", desc),
+                Span::styled(" \u{b7} ", sep),
+                Span::styled("b", key),
+                Span::styled(" dep", desc),
+                Span::styled(" \u{b7} ", sep),
+                Span::styled("d", key),
+                Span::styled(" defer", desc),
+                Span::styled(" \u{b7} ", sep),
+                Span::styled("+/-", key),
+                Span::styled(" pri", desc),
+                Span::styled(" \u{b7} ", sep),
+                Span::styled("H", key),
+                Span::styled(" human", desc),
+                Span::styled(" \u{b7} ", sep),
+                Span::styled("?", key),
+                Span::styled(" help", desc),
+            ]));
         }
     }
+
+    let stats_title = format!(
+        " {} open \u{b7} {} closed ",
+        state.open_count, state.closed_count
+    );
 
     let modal = Paragraph::new(content).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Work Board ")
             .title_alignment(Alignment::Center)
+            .title_top(Line::from(stats_title).right_aligned())
             .style(Style::default().fg(Color::White)),
     );
 
@@ -1391,6 +1433,11 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
     // Dependency direction picker overlay
     if let Some(dep_dir) = &state.dep_direction {
         draw_dep_direction(f, dep_dir);
+    }
+
+    // Help overlay
+    if state.show_help {
+        draw_board_help(f);
     }
 }
 
@@ -1526,6 +1573,105 @@ fn draw_dep_direction(f: &mut Frame, dep_dir: &DepDirectionState) {
     );
 
     f.render_widget(widget, overlay);
+}
+
+/// Draw the board help overlay with keybinding reference.
+fn draw_board_help(f: &mut Frame) {
+    let modal_width: u16 = 50;
+    let modal_height: u16 = 22;
+    let modal_area = centered_rect(modal_width, modal_height, f.area());
+
+    f.render_widget(Clear, modal_area);
+
+    let key_style = Style::default().fg(Color::Cyan);
+    let desc_style = Style::default().fg(Color::DarkGray);
+    let header_style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+
+    let inner_width = modal_width.saturating_sub(4) as usize;
+    let footer_text = "? or Esc to close";
+    let footer_padding = inner_width.saturating_sub(footer_text.len());
+
+    let content: Vec<Line> = vec![
+        Line::from(Span::styled("  Navigation", header_style)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("hjkl/\u{2190}\u{2191}\u{2192}\u{2193}", key_style),
+            Span::styled("  Move between cards", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Enter", key_style),
+            Span::styled("      View detail", desc_style),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Card Actions", header_style)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("X", key_style),
+            Span::styled("            Close bead", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("b", key_style),
+            Span::styled("            Add dependency", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("d", key_style),
+            Span::styled("            Defer bead", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("+/-", key_style),
+            Span::styled("          Change priority", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("H", key_style),
+            Span::styled("            Toggle human label", desc_style),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Undo/Redo", header_style)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("u", key_style),
+            Span::styled("            Undo last action", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Ctrl+r", key_style),
+            Span::styled("       Redo", desc_style),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Board", header_style)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Esc", key_style),
+            Span::styled("          Close board", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("?", key_style),
+            Span::styled("            Toggle help", desc_style),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw(" ".repeat(footer_padding)),
+            Span::styled(footer_text, desc_style),
+        ]),
+    ];
+
+    let modal = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Help ")
+            .title_alignment(Alignment::Center)
+            .style(Style::default().fg(Color::White)),
+    );
+
+    f.render_widget(modal, modal_area);
 }
 
 // ---------------------------------------------------------------------------
