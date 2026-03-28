@@ -231,6 +231,14 @@ fn check_labels_in_output(stdout: &str) -> CheckResult {
     }
 }
 
+/// Check that the embedded board column TOML parses correctly.
+pub fn check_board_toml() -> CheckResult {
+    match crate::modals::load_board_config() {
+        Ok(_) => CheckResult::pass("Board column TOML is valid"),
+        Err(e) => CheckResult::fail(format!("Board column TOML is invalid: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +437,12 @@ mod tests {
     #[test]
     fn bd_prime_hook_handles_invalid_json() {
         assert!(!settings_has_bd_prime_hook("not json"));
+    }
+
+    #[test]
+    fn board_toml_check_passes_for_embedded_toml() {
+        let result = check_board_toml();
+        assert!(result.passed);
+        assert!(result.message.contains("valid"));
     }
 }

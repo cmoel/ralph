@@ -201,6 +201,7 @@ fn run_app(
 ) -> Result<()> {
     let loaded_for_doctor = loaded_config.clone();
     let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
+    app.validate_board_config();
 
     // Sniff test: warn if PROMPT.md contains mode-mismatched content
     let prompt_path = app.config.prompt_path();
@@ -473,7 +474,12 @@ fn run_app(
                         app.work_items_rx = Some(rx);
                     }
                     KeyCode::Char('B') if app.config.behavior.mode == "beads" => {
-                        let board_config = crate::modals::load_board_config();
+                        if let Some(err) = &app.board_config_error {
+                            app.set_hint(err.clone());
+                            continue;
+                        }
+                        let board_config = crate::modals::load_board_config()
+                            .expect("already validated");
                         let column_defs = board_config.columns.clone();
                         app.show_kanban_board = true;
                         app.kanban_board_state =

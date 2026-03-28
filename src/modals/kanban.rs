@@ -43,9 +43,8 @@ pub struct SourceDef {
 }
 
 /// Load the embedded board column definitions.
-pub fn load_board_config() -> BoardConfig {
+pub fn load_board_config() -> Result<BoardConfig, toml::de::Error> {
     toml::from_str(include_str!("board_columns.toml"))
-        .expect("embedded board_columns.toml is invalid")
 }
 
 // ---------------------------------------------------------------------------

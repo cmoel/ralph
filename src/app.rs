@@ -193,6 +193,8 @@ pub struct App {
     pub kanban_watcher_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Cached visual line count (invalidated on content or width changes).
     pub cached_visual_line_count: Option<u16>,
+    /// Error from parsing board_columns.toml (None = valid).
+    pub board_config_error: Option<String>,
 }
 
 impl App {
@@ -285,6 +287,19 @@ impl App {
             kanban_fs_rx: None,
             kanban_watcher_stop: None,
             cached_visual_line_count: None,
+            board_config_error: None,
+        }
+    }
+
+    /// Validate board column TOML and store any error.
+    /// Call after construction to set the initial hint if invalid.
+    pub fn validate_board_config(&mut self) {
+        if self.config.behavior.mode == "beads"
+            && let Err(e) = crate::modals::load_board_config()
+        {
+            let msg = format!("Board TOML invalid: {e}");
+            self.board_config_error = Some(msg.clone());
+            self.set_hint(msg);
         }
     }
 

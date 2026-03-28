@@ -366,6 +366,7 @@ pub fn run_doctor() -> Result<()> {
     if cfg.behavior.mode == "beads" {
         checks.push(doctor::check_bd(cfg));
         checks.push(doctor::check_bd_prime_hook());
+        checks.push(doctor::check_board_toml());
         let dolt_check = doctor::check_dolt_status(cfg);
         let dolt_running = dolt_check.passed;
         checks.push(dolt_check);
