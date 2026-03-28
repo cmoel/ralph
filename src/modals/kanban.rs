@@ -233,6 +233,17 @@ impl BeadDetailState {
                             .collect()
                     })
                     .unwrap_or_default();
+
+                // Clamp scroll_offset so it stays within content bounds
+                let approx_lines = 4 // title + metadata + spacing
+                    + self.description.lines().count()
+                    + self.notes.lines().count()
+                    + self.design.lines().count()
+                    + self.dependencies.len();
+                let max_scroll = approx_lines.saturating_sub(1) as u16;
+                if self.scroll_offset > max_scroll {
+                    self.scroll_offset = max_scroll;
+                }
             }
             Err(e) => {
                 self.error = Some(e);

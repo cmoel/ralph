@@ -693,6 +693,44 @@ impl App {
             });
             self.kanban_items_rx = Some(rx);
         }
+
+        // Also refresh the detail modal if one is open
+        if changed
+            && self.bead_detail_rx.is_none()
+            && let Some(ref board) = self.kanban_board_state
+            && let Some(ref detail) = board.detail_view
+            && !detail.is_loading
+        {
+            let bd_path = self.config.behavior.bd_path.clone();
+            let bead_id = detail.id.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let output = std::process::Command::new(&bd_path)
+                    .args(["show", &bead_id, "--json"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output();
+                let result = match output {
+                    Ok(out) if out.status.success() => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        serde_json::from_str::<serde_json::Value>(&stdout)
+                            .map(|val| {
+                                if let Some(arr) = val.as_array() {
+                                    arr.first().cloned().unwrap_or(val)
+                                } else {
+                                    val
+                                }
+                            })
+                            .map_err(|e| e.to_string())
+                    }
+                    Ok(out) => Err(String::from_utf8_lossy(&out.stderr).to_string()),
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = tx.send(result);
+            });
+            self.bead_detail_rx = Some(rx);
+        }
     }
 
     /// Stop the kanban filesystem watcher.
