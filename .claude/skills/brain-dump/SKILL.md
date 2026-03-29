@@ -30,7 +30,9 @@ The user may paste text, use voice transcription, share files, or just start tal
 
 ### Relentless Extraction
 
-Use askUserQuestion to push the user to extract ALL ideas. Never let them off easy.
+Use AskUserQuestion to push the user to extract ALL ideas. Never let them off easy.
+
+**Exception:** Don't use AskUserQuestion for "anything else?" / "what else?" breadth sweeps. Ask those as normal conversation text so the user can naturally stop responding when they're drained.
 
 **Socratic depth** — dig into what they said:
 - "Why does this matter? What breaks if you never build it?"
@@ -101,7 +103,7 @@ Present the full list of items you're about to file. Group them logically. For e
 - One-line description
 - Any flags (epic, overlaps with existing item, unclear scope)
 
-**Get confirmation before filing.**
+**Get confirmation before filing.** Use AskUserQuestion with only the positive action (e.g., "File these 5 beads"). The built-in Other text box already lets the user redirect — don't add filler options like "Adjustments needed."
 
 ### Beads Mode
 
