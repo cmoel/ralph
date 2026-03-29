@@ -35,7 +35,7 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
         Line::from(Span::styled("  Control", header_style)),
         Line::from(vec![
             Span::raw("    "),
-            Span::styled("s", key_style),
+            Span::styled("S", key_style),
             Span::styled("  Start/Stop claude", desc_style),
         ]),
         Line::from(vec![

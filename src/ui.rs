@@ -567,9 +567,9 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     };
     let status_color = app.status.status_color();
 
-    // Build command spans: "s Start  q Quit  ? Help"
+    // Build command spans: "S Start  q Quit  ? Help"
     let command_spans = vec![
-        Span::styled("s", key_style),
+        Span::styled("S", key_style),
         Span::styled(format!(" {}  ", start_stop_label), label_style),
         Span::styled("q", key_style),
         Span::styled(" Quit  ", label_style),

@@ -438,7 +438,7 @@ fn run_app(
                             app.show_quit_modal = true;
                         }
                     }
-                    KeyCode::Char('s') => match app.status {
+                    KeyCode::Char('S') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {
                             // Start new iteration run (reads config, sets up tracking)
                             if app.start_iteration_run() {
