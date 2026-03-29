@@ -44,7 +44,6 @@ pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
             "--type=task",
             "--labels=rig:ralph",
             "--ephemeral",
-            "--no-history",
             "--json",
             "--description=Ephemeral ralph agent bead",
             &format!("--title=ralph agent {}", session_id),
@@ -295,7 +294,13 @@ fn assess_bead_specification(bd_path: &str, bead_id: &str, agent_bead_id: &str) 
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let bead: serde_json::Value = match serde_json::from_str(stdout.as_ref()) {
+    // bd show --json returns an array; extract the first element
+    let bead: serde_json::Value = match serde_json::from_str::<serde_json::Value>(stdout.as_ref())
+    {
+        Ok(serde_json::Value::Array(arr)) => match arr.into_iter().next() {
+            Some(v) => v,
+            None => return true,
+        },
         Ok(v) => v,
         Err(_) => return true,
     };
@@ -441,17 +446,11 @@ fn cleanup_agent_bead(bd_path: &str, agent_bead_id: &str) {
 
 /// Parse bead ID from bd create --json output.
 fn parse_bead_id(json_output: &str) -> Option<String> {
-    // bd create --json outputs JSON with an "id" field
-    for line in json_output.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
-            && let Some(id) = value.get("id").and_then(|v| v.as_str())
-        {
-            return Some(id.to_string());
-        }
+    // bd create --json outputs multi-line JSON with an "id" field
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_output.trim())
+        && let Some(id) = value.get("id").and_then(|v| v.as_str())
+    {
+        return Some(id.to_string());
     }
     let truncated: String = json_output.chars().take(200).collect();
     warn!(output = %truncated, "could_not_parse_bead_id");
