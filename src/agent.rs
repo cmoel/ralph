@@ -106,6 +106,10 @@ pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
 
     // Resolve worktree path (it's created at ./<name> relative to repo root)
     let worktree_path = resolve_worktree_path(&worktree_name);
+
+    // Symlink .claude/settings.local.json into worktree so permissions carry over
+    symlink_settings_local(&worktree_path);
+
     info!(
         agent_bead_id = %agent_bead_id,
         worktree_name = %worktree_name,
@@ -844,6 +848,58 @@ fn resolve_worktree_path(worktree_name: &str) -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     root.join(worktree_name)
+}
+
+/// Symlink .claude/settings.local.json from the main repo into a worktree.
+fn symlink_settings_local(worktree_path: &std::path::Path) {
+    let main_root = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| PathBuf::from(s.trim()));
+
+    let Some(main_root) = main_root else {
+        return;
+    };
+
+    let source = main_root.join(".claude").join("settings.local.json");
+    if !source.exists() {
+        return;
+    }
+
+    let target_dir = worktree_path.join(".claude");
+    if !target_dir.exists()
+        && let Err(e) = std::fs::create_dir_all(&target_dir)
+    {
+        warn!(error = %e, "settings_local_symlink_mkdir_failed");
+        return;
+    }
+
+    let target = target_dir.join("settings.local.json");
+    if target.exists() {
+        return;
+    }
+
+    match std::os::unix::fs::symlink(&source, &target) {
+        Ok(()) => info!(
+            source = %source.display(),
+            target = %target.display(),
+            "settings_local_symlinked"
+        ),
+        Err(e) => warn!(
+            error = %e,
+            source = %source.display(),
+            target = %target.display(),
+            "settings_local_symlink_failed"
+        ),
+    }
 }
 
 #[cfg(test)]
