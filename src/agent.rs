@@ -373,7 +373,7 @@ pub fn release_bead(bd_path: &str, agent_bead_id: &str, bead_id: &str) {
 /// Reset a bead's status to open so other agents can pick it up.
 fn reset_bead_to_open(bd_path: &str, bead_id: &str) {
     let result = Command::new(bd_path)
-        .args(["update", bead_id, "--status=open"])
+        .args(["update", bead_id, "--status=open", "--assignee="])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
