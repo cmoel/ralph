@@ -393,7 +393,133 @@ fn reset_bead_to_open(bd_path: &str, bead_id: &str) {
     }
 }
 
-/// Clean up agent resources: release hook, close agent bead, remove worktree.
+/// Attempt to merge the worktree branch into main from the repo root.
+/// Returns true if the merge succeeded, false if it failed (and aborts the merge).
+pub fn merge_worktree_to_main(worktree_name: &str) -> bool {
+    let repo_root = repo_root();
+    info!(worktree_name = %worktree_name, "merge_worktree_start");
+
+    let result = Command::new("git")
+        .args(["merge", worktree_name])
+        .current_dir(&repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    match result {
+        Ok(o) if o.status.success() => {
+            info!(worktree_name = %worktree_name, "merge_worktree_success");
+            true
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(stderr = %stderr.trim(), "merge_worktree_conflict");
+            // Abort the failed merge
+            let _ = Command::new("git")
+                .args(["merge", "--abort"])
+                .current_dir(&repo_root)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output();
+            false
+        }
+        Err(e) => {
+            warn!(error = %e, "merge_worktree_failed");
+            false
+        }
+    }
+}
+
+/// Remove worktree, revert .gitignore, and delete the merged branch.
+pub fn remove_merged_worktree(bd_path: &str, worktree_name: &str) {
+    let repo_root = repo_root();
+
+    // Remove the worktree directory
+    let _ = Command::new(bd_path)
+        .args(["worktree", "remove", worktree_name])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    // Revert .gitignore entry bd added
+    let _ = Command::new("git")
+        .args(["checkout", "--", ".gitignore"])
+        .current_dir(&repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    // Delete the merged branch
+    let _ = Command::new("git")
+        .args(["branch", "-d", worktree_name])
+        .current_dir(&repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    info!(worktree_name = %worktree_name, "merged_worktree_cleaned_up");
+}
+
+/// Create a fresh worktree for a new iteration, reusing the existing agent bead.
+/// Returns the new worktree name and path, or None on failure.
+pub fn create_fresh_worktree(bd_path: &str, agent_bead_id: &str) -> Option<(String, PathBuf)> {
+    let worktree_name = agent_bead_id.to_string();
+    let wt_output = Command::new(bd_path)
+        .args(["worktree", "create", &worktree_name])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    let wt_output = match wt_output {
+        Ok(o) => o,
+        Err(e) => {
+            warn!(error = %e, "fresh_worktree_create_failed");
+            return None;
+        }
+    };
+
+    if !wt_output.status.success() {
+        let stderr = String::from_utf8_lossy(&wt_output.stderr);
+        warn!(stderr = %stderr.trim(), "fresh_worktree_create_failed");
+        return None;
+    }
+
+    let worktree_path = resolve_worktree_path(&worktree_name);
+    symlink_settings_local(&worktree_path);
+
+    info!(
+        worktree_name = %worktree_name,
+        worktree_path = %worktree_path.display(),
+        "fresh_worktree_created"
+    );
+
+    Some((worktree_name, worktree_path))
+}
+
+/// Get the repo root path.
+fn repo_root() -> PathBuf {
+    Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| PathBuf::from(s.trim()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+}
+
+/// Clean up agent resources: release hook, close agent bead, merge + remove worktree.
 pub fn cleanup(bd_path: &str, agent_bead_id: &str, worktree_name: &str) {
     info!(agent_bead_id = %agent_bead_id, "agent_cleanup_start");
 
@@ -403,25 +529,12 @@ pub fn cleanup(bd_path: &str, agent_bead_id: &str, worktree_name: &str) {
     // Close the agent bead
     cleanup_agent_bead(bd_path, agent_bead_id);
 
-    // Remove the worktree
-    let result = Command::new(bd_path)
-        .args(["worktree", "remove", worktree_name])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
-
-    match result {
-        Ok(o) if o.status.success() => {
-            info!(worktree_name = %worktree_name, "worktree_removed");
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            warn!(stderr = %stderr.trim(), "worktree_remove_failed");
-        }
-        Err(e) => {
-            warn!(error = %e, "worktree_remove_failed");
-        }
+    // Try to merge worktree branch to main before removal
+    if merge_worktree_to_main(worktree_name) {
+        remove_merged_worktree(bd_path, worktree_name);
+    } else {
+        // Merge failed — leave worktree intact so user can resolve
+        warn!(worktree_name = %worktree_name, "session_end_merge_failed_worktree_preserved");
     }
 }
 
@@ -832,22 +945,7 @@ fn cutoff_time_iso(threshold_secs: u64) -> Option<String> {
 
 /// Resolve the worktree path by asking git.
 fn resolve_worktree_path(worktree_name: &str) -> PathBuf {
-    // Get the repo root, worktree is created relative to it
-    let root = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| PathBuf::from(s.trim()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-
-    root.join(worktree_name)
+    repo_root().join(worktree_name)
 }
 
 /// Symlink .claude/settings.local.json from the main repo into a worktree.

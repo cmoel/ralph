@@ -340,8 +340,8 @@ impl ConfigModalState {
     fn active_form_mut(&mut self) -> &mut TabFormState {
         match self.active_tab() {
             ConfigTab::Project => {
-                if self.project_form.is_some() {
-                    self.project_form.as_mut().unwrap()
+                if let Some(ref mut form) = self.project_form {
+                    form
                 } else {
                     &mut self.global_form
                 }

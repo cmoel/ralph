@@ -283,6 +283,41 @@ fn run_app(
         if app.auto_continue_pending {
             app.dirty = true;
             app.auto_continue_pending = false;
+
+            // Merge worktree branch to main between iterations (beads mode only)
+            if let Some(ref wt_name) = app.worktree_name {
+                if agent::merge_worktree_to_main(wt_name) {
+                    let bd_path = app.config.behavior.bd_path.clone();
+                    let wt_name = wt_name.clone();
+                    agent::remove_merged_worktree(&bd_path, &wt_name);
+
+                    // Create fresh worktree from the now-updated main
+                    if let Some(agent_id) = &app.agent_bead_id {
+                        let agent_id = agent_id.clone();
+                        if let Some((new_name, new_path)) =
+                            agent::create_fresh_worktree(&bd_path, &agent_id)
+                        {
+                            app.worktree_name = Some(new_name);
+                            app.worktree_path = Some(new_path);
+                        } else {
+                            app.add_text_line(
+                                "[Failed to create fresh worktree — stopping.]".into(),
+                            );
+                            app.reset_iteration_state();
+                            app.status = AppStatus::Stopped;
+                            continue;
+                        }
+                    }
+                } else {
+                    app.add_text_line(
+                        "[Merge conflict — stopping. Worktree preserved.]".into(),
+                    );
+                    app.reset_iteration_state();
+                    app.status = AppStatus::Stopped;
+                    continue;
+                }
+            }
+
             app.increment_iteration();
             // In beads mode, claim next bead before continuing
             if execution::claim_before_start(&mut app) {
