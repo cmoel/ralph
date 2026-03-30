@@ -290,27 +290,42 @@ fn run_app(
                     let bd_path = app.config.behavior.bd_path.clone();
                     let wt_name = wt_name.clone();
                     agent::remove_merged_worktree(&bd_path, &wt_name);
-
-                    // Create fresh worktree from the now-updated main
-                    if let Some(agent_id) = &app.agent_bead_id {
-                        let agent_id = agent_id.clone();
-                        if let Some((new_name, new_path)) =
-                            agent::create_fresh_worktree(&bd_path, &agent_id)
-                        {
-                            app.worktree_name = Some(new_name);
-                            app.worktree_path = Some(new_path);
-                        } else {
-                            app.add_text_line(
-                                "[Failed to create fresh worktree — stopping.]".into(),
-                            );
-                            app.reset_iteration_state();
-                            app.status = AppStatus::Stopped;
-                            continue;
-                        }
-                    }
+                    // Clear worktree state so a fresh one is created below
+                    app.worktree_name = None;
+                    app.worktree_path = None;
                 } else {
                     app.add_text_line(
                         "[Merge conflict — stopping. Worktree preserved.]".into(),
+                    );
+                    app.reset_iteration_state();
+                    app.status = AppStatus::Stopped;
+                    continue;
+                }
+            }
+
+            // Clear stale worktree state if path no longer exists on disk
+            if let Some(ref path) = app.worktree_path
+                && !path.exists()
+            {
+                app.worktree_name = None;
+                app.worktree_path = None;
+            }
+
+            // Create fresh worktree if needed (None after merge+cleanup,
+            // Some if worktree preserved from a failed merge — reuse it)
+            if app.worktree_path.is_none()
+                && let Some(agent_id) = &app.agent_bead_id
+            {
+                let bd_path = app.config.behavior.bd_path.clone();
+                let agent_id = agent_id.clone();
+                if let Some((new_name, new_path)) =
+                    agent::create_fresh_worktree(&bd_path, &agent_id)
+                {
+                    app.worktree_name = Some(new_name);
+                    app.worktree_path = Some(new_path);
+                } else {
+                    app.add_text_line(
+                        "[Failed to create fresh worktree — stopping.]".into(),
                     );
                     app.reset_iteration_state();
                     app.status = AppStatus::Stopped;
