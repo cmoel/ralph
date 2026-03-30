@@ -393,6 +393,173 @@ fn reset_bead_to_open(bd_path: &str, bead_id: &str) {
     }
 }
 
+/// Get list of files that differ between main and a worktree branch.
+fn get_changed_files(worktree_name: &str) -> Vec<String> {
+    let repo_root = repo_root();
+    let diff_spec = format!("main...{}", worktree_name);
+    let output = Command::new("git")
+        .args(["diff", "--name-only", &diff_spec])
+        .current_dir(&repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Search for an existing open merge-conflict bead for this branch.
+/// Returns the bead ID if found.
+pub fn find_merge_conflict_bead(bd_path: &str, worktree_name: &str) -> Option<String> {
+    let output = Command::new(bd_path)
+        .args(["list", "--json", "--status=open", "--limit=0"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).ok()?;
+
+    let prefix = format!("Merge conflict: {}", worktree_name);
+    for item in &items {
+        let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("");
+        if title.starts_with(&prefix) {
+            return item.get("id").and_then(|i| i.as_str()).map(String::from);
+        }
+    }
+
+    None
+}
+
+/// File a P0 merge-conflict bead for Claude to resolve next iteration.
+/// Returns the new bead ID on success.
+pub fn file_merge_conflict_bead(bd_path: &str, worktree_name: &str) -> Option<String> {
+    let files = get_changed_files(worktree_name);
+    let files_display = if files.is_empty() {
+        "Could not determine changed files".to_string()
+    } else {
+        files.join(", ")
+    };
+
+    let title = format!("Merge conflict: {} → main", worktree_name);
+    let description = format!(
+        "Merge main into this branch (git merge main), resolve all conflicts, \
+         commit the resolution. Work in the existing worktree.\n\n\
+         Branch: {}\n\
+         Files with changes: {}",
+        worktree_name, files_display
+    );
+
+    let output = Command::new(bd_path)
+        .args([
+            "create",
+            &format!("--title={}", title),
+            &format!("--description={}", description),
+            "--type=task",
+            "--priority=0",
+            "--json",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(stderr = %stderr.trim(), "file_merge_conflict_bead_failed");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let bead_id = parse_bead_id(&stdout)?;
+    info!(bead_id = %bead_id, worktree_name = %worktree_name, "merge_conflict_bead_filed");
+    Some(bead_id)
+}
+
+/// Escalate a merge conflict to human review.
+/// Closes the existing merge-conflict bead and files a new human-labeled bead.
+/// Returns the new human bead ID on success.
+pub fn escalate_merge_conflict(
+    bd_path: &str,
+    worktree_name: &str,
+    existing_bead_id: &str,
+) -> Option<String> {
+    // Close the existing merge-conflict bead
+    let _ = Command::new(bd_path)
+        .args([
+            "close",
+            existing_bead_id,
+            "--reason=Claude could not resolve",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    let files = get_changed_files(worktree_name);
+    let files_display = if files.is_empty() {
+        "Could not determine changed files".to_string()
+    } else {
+        files.join(", ")
+    };
+
+    let title = format!("HUMAN: Merge conflict in {}", worktree_name);
+    let description = format!(
+        "Merge conflict persists after Claude's resolution attempt.\n\n\
+         Branch: {}\n\
+         Files with changes: {}\n\n\
+         Previous bead {} was closed after Claude failed to resolve. \
+         Manual intervention needed.",
+        worktree_name, files_display, existing_bead_id
+    );
+
+    let output = Command::new(bd_path)
+        .args([
+            "create",
+            &format!("--title={}", title),
+            &format!("--description={}", description),
+            "--type=bug",
+            "--priority=0",
+            "--labels=human",
+            "--json",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(stderr = %stderr.trim(), "escalate_merge_conflict_failed");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let bead_id = parse_bead_id(&stdout)?;
+    info!(
+        bead_id = %bead_id,
+        existing_bead = %existing_bead_id,
+        worktree_name = %worktree_name,
+        "merge_conflict_escalated_to_human"
+    );
+    Some(bead_id)
+}
+
 /// Attempt to merge the worktree branch into main from the repo root.
 /// Returns true if the merge succeeded, false if it failed (and aborts the merge).
 pub fn merge_worktree_to_main(worktree_name: &str) -> bool {

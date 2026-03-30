@@ -294,12 +294,37 @@ fn run_app(
                     app.worktree_name = None;
                     app.worktree_path = None;
                 } else {
-                    app.add_text_line(
-                        "[Merge conflict — stopping. Worktree preserved.]".into(),
-                    );
-                    app.reset_iteration_state();
-                    app.status = AppStatus::Stopped;
-                    continue;
+                    let bd_path = app.config.behavior.bd_path.clone();
+                    let wt_name = wt_name.clone();
+
+                    if let Some(existing_bead_id) =
+                        agent::find_merge_conflict_bead(&bd_path, &wt_name)
+                    {
+                        // Tier 3: Claude already tried — escalate to human
+                        agent::escalate_merge_conflict(&bd_path, &wt_name, &existing_bead_id);
+                        app.add_text_line(
+                            "[Merge conflict persists after Claude attempt — filed human bead, stopping]".into(),
+                        );
+                        app.reset_iteration_state();
+                        app.status = AppStatus::Stopped;
+                        continue;
+                    } else if let Some(bead_id) =
+                        agent::file_merge_conflict_bead(&bd_path, &wt_name)
+                    {
+                        // Tier 1: First conflict — file bead, Claude resolves next iteration
+                        app.add_text_line(format!(
+                            "[Merge conflict — filed {}, Claude will resolve next iteration]",
+                            bead_id
+                        ));
+                        // Worktree preserved, fall through to claim_before_start
+                    } else {
+                        app.add_text_line(
+                            "[Merge conflict — failed to file bead, stopping]".into(),
+                        );
+                        app.reset_iteration_state();
+                        app.status = AppStatus::Stopped;
+                        continue;
+                    }
                 }
             }
 
