@@ -79,6 +79,87 @@ fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
     }
 }
 
+/// Merge the current worktree branch to main, clean up, and create a fresh worktree.
+/// Returns false if the merge failed and the loop should stop.
+fn merge_and_refresh_worktree(app: &mut App) -> bool {
+    // Merge worktree branch to main
+    if let Some(ref wt_name) = app.worktree_name {
+        if agent::merge_worktree_to_main(wt_name) {
+            let bd_path = app.config.behavior.bd_path.clone();
+            let wt_name = wt_name.clone();
+            agent::remove_merged_worktree(&bd_path, &wt_name);
+            // Clear worktree state so a fresh one is created below
+            app.worktree_name = None;
+            app.worktree_path = None;
+        } else {
+            let bd_path = app.config.behavior.bd_path.clone();
+            let wt_name = wt_name.clone();
+
+            if let Some(existing_bead_id) =
+                agent::find_merge_conflict_bead(&bd_path, &wt_name)
+            {
+                // Tier 3: Claude already tried — escalate to human
+                agent::escalate_merge_conflict(&bd_path, &wt_name, &existing_bead_id);
+                app.add_text_line(
+                    "[Merge conflict persists after Claude attempt — filed human bead, stopping]"
+                        .into(),
+                );
+                app.reset_iteration_state();
+                app.status = AppStatus::Stopped;
+                return false;
+            } else if let Some(bead_id) =
+                agent::file_merge_conflict_bead(&bd_path, &wt_name)
+            {
+                // Tier 1: First conflict — file bead, Claude resolves next iteration
+                app.add_text_line(format!(
+                    "[Merge conflict — filed {}, Claude will resolve next iteration]",
+                    bead_id
+                ));
+                // Worktree preserved, fall through to claim_before_start
+            } else {
+                app.add_text_line(
+                    "[Merge conflict — failed to file bead, stopping]".into(),
+                );
+                app.reset_iteration_state();
+                app.status = AppStatus::Stopped;
+                return false;
+            }
+        }
+    }
+
+    // Clear stale worktree state if path no longer exists on disk
+    if let Some(ref path) = app.worktree_path
+        && !path.exists()
+    {
+        app.worktree_name = None;
+        app.worktree_path = None;
+    }
+
+    // Create fresh worktree if needed (None after merge+cleanup,
+    // Some if worktree preserved from a failed merge — reuse it)
+    if app.worktree_path.is_none()
+        && let Some(agent_id) = &app.agent_bead_id
+    {
+        let bd_path = app.config.behavior.bd_path.clone();
+        let agent_id = agent_id.clone();
+        if let Some((new_name, new_path)) =
+            agent::create_fresh_worktree(&bd_path, &agent_id)
+        {
+            app.worktree_name = Some(new_name);
+            app.worktree_path = Some(new_path);
+        } else {
+            app.add_text_line(
+                "[Failed to create fresh worktree — stopping.]".into(),
+            );
+            app.reset_iteration_state();
+            app.status = AppStatus::Stopped;
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Get the modification time of a file, or None if it can't be determined.
 pub fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
@@ -258,7 +339,7 @@ fn run_app(
         }
     }
 
-    // Register agent and create worktree (beads mode only)
+    // Register agent bead (beads mode only — worktree created on first loop start)
     if app.config.behavior.mode == "beads" {
         let bd_path = app.config.behavior.bd_path.clone();
         let sid = app.session_id.clone();
@@ -267,8 +348,6 @@ fn run_app(
             let stop =
                 agent::start_heartbeat(bd_path, setup.agent_bead_id.clone(), heartbeat_interval);
             app.agent_bead_id = Some(setup.agent_bead_id);
-            app.worktree_name = Some(setup.worktree_name);
-            app.worktree_path = Some(setup.worktree_path);
             app.heartbeat_stop = Some(stop);
         } else {
             app.add_text_line("[Agent registration failed — running without worktree]".to_string());
@@ -284,78 +363,8 @@ fn run_app(
             app.dirty = true;
             app.auto_continue_pending = false;
 
-            // Merge worktree branch to main between iterations (beads mode only)
-            if let Some(ref wt_name) = app.worktree_name {
-                if agent::merge_worktree_to_main(wt_name) {
-                    let bd_path = app.config.behavior.bd_path.clone();
-                    let wt_name = wt_name.clone();
-                    agent::remove_merged_worktree(&bd_path, &wt_name);
-                    // Clear worktree state so a fresh one is created below
-                    app.worktree_name = None;
-                    app.worktree_path = None;
-                } else {
-                    let bd_path = app.config.behavior.bd_path.clone();
-                    let wt_name = wt_name.clone();
-
-                    if let Some(existing_bead_id) =
-                        agent::find_merge_conflict_bead(&bd_path, &wt_name)
-                    {
-                        // Tier 3: Claude already tried — escalate to human
-                        agent::escalate_merge_conflict(&bd_path, &wt_name, &existing_bead_id);
-                        app.add_text_line(
-                            "[Merge conflict persists after Claude attempt — filed human bead, stopping]".into(),
-                        );
-                        app.reset_iteration_state();
-                        app.status = AppStatus::Stopped;
-                        continue;
-                    } else if let Some(bead_id) =
-                        agent::file_merge_conflict_bead(&bd_path, &wt_name)
-                    {
-                        // Tier 1: First conflict — file bead, Claude resolves next iteration
-                        app.add_text_line(format!(
-                            "[Merge conflict — filed {}, Claude will resolve next iteration]",
-                            bead_id
-                        ));
-                        // Worktree preserved, fall through to claim_before_start
-                    } else {
-                        app.add_text_line(
-                            "[Merge conflict — failed to file bead, stopping]".into(),
-                        );
-                        app.reset_iteration_state();
-                        app.status = AppStatus::Stopped;
-                        continue;
-                    }
-                }
-            }
-
-            // Clear stale worktree state if path no longer exists on disk
-            if let Some(ref path) = app.worktree_path
-                && !path.exists()
-            {
-                app.worktree_name = None;
-                app.worktree_path = None;
-            }
-
-            // Create fresh worktree if needed (None after merge+cleanup,
-            // Some if worktree preserved from a failed merge — reuse it)
-            if app.worktree_path.is_none()
-                && let Some(agent_id) = &app.agent_bead_id
-            {
-                let bd_path = app.config.behavior.bd_path.clone();
-                let agent_id = agent_id.clone();
-                if let Some((new_name, new_path)) =
-                    agent::create_fresh_worktree(&bd_path, &agent_id)
-                {
-                    app.worktree_name = Some(new_name);
-                    app.worktree_path = Some(new_path);
-                } else {
-                    app.add_text_line(
-                        "[Failed to create fresh worktree — stopping.]".into(),
-                    );
-                    app.reset_iteration_state();
-                    app.status = AppStatus::Stopped;
-                    continue;
-                }
+            if !merge_and_refresh_worktree(&mut app) {
+                continue;
             }
 
             app.increment_iteration();
@@ -517,6 +526,10 @@ fn run_app(
                         AppStatus::Stopped | AppStatus::Error => {
                             // Start new iteration run (reads config, sets up tracking)
                             if app.start_iteration_run() {
+                                // Merge previous worktree to main before starting fresh
+                                if !merge_and_refresh_worktree(&mut app) {
+                                    continue;
+                                }
                                 // In beads mode, claim a bead before starting
                                 if !execution::claim_before_start(&mut app) {
                                     app.reset_iteration_state();

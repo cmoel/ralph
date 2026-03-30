@@ -8,11 +8,9 @@ use std::time::Duration;
 
 use tracing::{info, warn};
 
-/// Result of agent registration and worktree setup.
+/// Result of agent registration.
 pub struct AgentSetup {
     pub agent_bead_id: String,
-    pub worktree_name: String,
-    pub worktree_path: PathBuf,
 }
 
 /// A stale agent detected during recovery.
@@ -79,49 +77,9 @@ pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
         .stderr(std::process::Stdio::null())
         .output();
 
-    // Create worktree named after agent bead ID
-    let worktree_name = agent_bead_id.clone();
-    let wt_output = Command::new(bd_path)
-        .args(["worktree", "create", &worktree_name])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    info!(agent_bead_id = %agent_bead_id, "agent_registered");
 
-    let wt_output = match wt_output {
-        Ok(o) => o,
-        Err(e) => {
-            warn!(error = %e, "worktree_create_failed");
-            cleanup_agent_bead(bd_path, &agent_bead_id);
-            return None;
-        }
-    };
-
-    if !wt_output.status.success() {
-        let stderr = String::from_utf8_lossy(&wt_output.stderr);
-        warn!(stderr = %stderr.trim(), "worktree_create_failed");
-        cleanup_agent_bead(bd_path, &agent_bead_id);
-        return None;
-    }
-
-    // Resolve worktree path (it's created at ./<name> relative to repo root)
-    let worktree_path = resolve_worktree_path(&worktree_name);
-
-    // Symlink .claude/settings.local.json into worktree so permissions carry over
-    symlink_settings_local(&worktree_path);
-
-    info!(
-        agent_bead_id = %agent_bead_id,
-        worktree_name = %worktree_name,
-        worktree_path = %worktree_path.display(),
-        "agent_registered"
-    );
-
-    Some(AgentSetup {
-        agent_bead_id,
-        worktree_name,
-        worktree_path,
-    })
+    Some(AgentSetup { agent_bead_id })
 }
 
 /// Start a background heartbeat thread that updates the agent bead periodically.
