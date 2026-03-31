@@ -561,13 +561,23 @@ pub fn merge_worktree_to_main(worktree_name: &str) -> bool {
 pub fn remove_merged_worktree(bd_path: &str, worktree_name: &str) {
     let repo_root = repo_root();
 
-    // Remove the worktree directory
-    let _ = Command::new(bd_path)
-        .args(["worktree", "remove", worktree_name])
+    // Remove the worktree directory (--force handles untracked files like target/)
+    match Command::new(bd_path)
+        .args(["worktree", "remove", "--force", worktree_name])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .output();
+        .output()
+    {
+        Ok(o) if !o.status.success() => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(stderr = %stderr.trim(), "worktree_remove_failed");
+        }
+        Err(e) => {
+            warn!(error = %e, "worktree_remove_failed");
+        }
+        _ => {}
+    }
 
     // Revert .gitignore entry bd added
     let _ = Command::new("git")
@@ -579,13 +589,23 @@ pub fn remove_merged_worktree(bd_path: &str, worktree_name: &str) {
         .output();
 
     // Delete the merged branch
-    let _ = Command::new("git")
+    match Command::new("git")
         .args(["branch", "-d", worktree_name])
         .current_dir(&repo_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
-        .output();
+        .output()
+    {
+        Ok(o) if !o.status.success() => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            warn!(stderr = %stderr.trim(), "branch_delete_failed");
+        }
+        Err(e) => {
+            warn!(error = %e, "branch_delete_failed");
+        }
+        _ => {}
+    }
 
     info!(worktree_name = %worktree_name, "merged_worktree_cleaned_up");
 }
