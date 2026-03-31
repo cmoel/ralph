@@ -202,63 +202,88 @@ Document in BOTH the spec AND `specs/README.md`.
 Mark the spec complete in `specs/README.md`.
 "#;
 
-/// Beads-mode behavioral instructions (compiled into binary).
+/// Generate beads-mode prompt content based on claim state.
 /// Command reference is provided by `bd prime` — this only covers Ralph-specific workflow.
-pub const BEADS_MODE_MD: &str = r#"
+pub fn beads_mode_content(claimed_bead_id: Option<&str>) -> String {
+    let work_section = match claimed_bead_id {
+        Some(id) => format!(
+            r#"## Your Work
+
+Ralph claimed bead `{id}` for you. Run `bd show {id}` to read its full specification.
+
+### Assess Before Building
+
+Research the codebase and the bead before committing to build it.
+
+**Build it** if the bead is well-specified and this is the right work.
+
+**Redirect** if the bead is under-specified, wrong, or not what the project needs right now:
+1. Update with what's missing: `bd update {id} --notes="WHAT'S MISSING: [what sections are absent and what questions need answering]"`
+2. Flag for human: `bd update {id} --add-label=human`
+3. Unclaim: `bd update {id} --status=open --assignee=""`
+4. Do what the project actually needs instead"#
+        ),
+        None => "## No Claimed Work\n\n\
+            No bead was claimed for this session. Assess the project for admin work."
+            .to_string(),
+    };
+
+    let admin_intro = if claimed_bead_id.is_some() {
+        "After completing or unclaiming your bead, consider whether the project needs \
+         housekeeping. These are examples — use your judgment about what's actually needed:"
+    } else {
+        "Assess what the project needs. These are examples — use your judgment \
+         about what's actually needed:"
+    };
+
+    format!(
+        r#"
 # Beads Mode
 
-## Work Discovery
+{work_section}
 
-Find available work. Pick ONE item.
+## Confidence Protocol
 
-**Flag for human review** if a bead is under-specified, too big, or needs a decision.
+Research the codebase and beads before making decisions. Act when confident.
 
-**Mark in progress** before starting (one bead at a time).
+When not confident about a bead or decision:
+1. Update the bead with open questions — explain what's missing and why
+2. Flag it: `bd update <id> --add-label=human`
+3. Move on — the bead becomes a handoff artifact with enough context for a human to act
 
-## Assessment
+## Admin Work
 
-After selecting a bead, assess its specification before implementing:
-
-1. Run `bd show <id>` to read the full bead details
-2. A well-specified bead has structured sections. Check for:
-   - **Approach** — which files to modify, which patterns to follow, key decisions
-   - **Edge Cases** — error conditions, boundary behavior, what could go wrong
-   - **Acceptance** — specific, testable conditions for "done"
-   - **Tests** — what to test and key scenarios
-3. If the bead is missing most of these sections:
-   - Run `bd update <id> --notes="WHAT'S MISSING: [list which sections are absent and what questions need answering]"`
-   - Run `bd update <id> --add-label=human --notes="Needs shaping: missing [sections]"`
-   - Exit immediately — do not attempt to implement an under-specified bead
-4. If the bead has these sections and you understand what "done" looks like, proceed
+{admin_intro}
+- Organize orphan beads under epics: `bd orphans`
+- Flag under-specified beads: `bd update <id> --add-label=human --notes="Needs shaping: [what's missing]"`
+- Close eligible epics: `bd epic close-eligible`
+- Surface stale items: `bd stale`
 
 ## When Blocked — MANDATORY ESCALATION
 
-If ANYTHING prevents you from completing the bead — you MUST do ALL THREE of these steps:
+If ANYTHING prevents you from completing your work — you MUST do ALL THREE:
 
 1. `bd update <id> --add-label=human` — FLAG IT. This is how the human knows it needs attention.
 2. `bd update <id> --notes="BLOCKED: [what failed and why]"` — Document the blocker.
-3. Exit immediately — do NOT continue working on this bead.
+3. Exit immediately — do NOT continue working.
 
-This applies to ALL blockers, including but not limited to:
-- Git commit failures (SSH signing, GPG, permissions)
-- File permission denials
-- Missing tools or dependencies
-- Tests that fail for reasons outside the bead's scope
-- Anything you cannot resolve yourself
+This applies to ALL blockers: git failures, permission denials, missing tools, tests failing outside scope, anything you cannot resolve yourself.
 
 NEVER write a note about being blocked without ALSO adding the human label.
 A note without the human label is invisible to the user — the bead will rot in in_progress forever.
 
 ## Completing Work
 
-Close the bead when done.
-"#;
+Close any beads you complete.
+"#
+    )
+}
 
 /// Returns mode-specific prompt content for the given mode, if any.
-pub fn mode_content(mode: &str) -> Option<&'static str> {
+pub fn mode_content(mode: &str, claimed_bead_id: Option<&str>) -> Option<String> {
     match mode {
-        "specs" => Some(SPECS_MODE_MD),
-        "beads" => Some(BEADS_MODE_MD),
+        "specs" => Some(SPECS_MODE_MD.to_string()),
+        "beads" => Some(beads_mode_content(claimed_bead_id)),
         _ => None,
     }
 }

@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn assemble_prompt_default_mode_includes_prompt_and_mode_file() {
         let config = crate::config::Config::default();
-        let command = execution::assemble_prompt(&config).unwrap();
+        let command = execution::assemble_prompt(&config, None).unwrap();
 
         // Should pipe PROMPT.md and mode content through Claude CLI
         assert!(command.contains("PROMPT.md"));
@@ -848,7 +848,7 @@ mod tests {
     fn assemble_prompt_unknown_mode_omits_mode_file() {
         let mut config = crate::config::Config::default();
         config.behavior.mode = "nonexistent-mode".to_string();
-        let command = execution::assemble_prompt(&config).unwrap();
+        let command = execution::assemble_prompt(&config, None).unwrap();
 
         // Should only have PROMPT.md, no mode temp file
         assert!(command.contains("PROMPT.md"));

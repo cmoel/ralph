@@ -16,14 +16,17 @@ use crate::wake_lock;
 ///
 /// Reads PROMPT.md and optional mode-specific content, writes a temp file for mode
 /// content if needed, and returns the full shell command to pipe into Claude.
-pub fn assemble_prompt(config: &crate::config::Config) -> Result<String> {
+pub fn assemble_prompt(
+    config: &crate::config::Config,
+    claimed_bead_id: Option<&str>,
+) -> Result<String> {
     let prompt_path = config.prompt_path();
     let claude_path = config.claude_path();
     const CLAUDE_ARGS: &str =
         "--output-format=stream-json --verbose --print --include-partial-messages";
 
     let mode = &config.behavior.mode;
-    let mode_temp_path = if let Some(content) = templates::mode_content(mode) {
+    let mode_temp_path = if let Some(content) = templates::mode_content(mode, claimed_bead_id) {
         let path = std::env::temp_dir().join("ralph-mode.md");
         std::fs::write(&path, content)?;
         Some(path)
@@ -159,7 +162,7 @@ pub fn start_command(app: &mut App) -> Result<()> {
     app.content_blocks.clear();
     app.current_line.clear();
 
-    let command = assemble_prompt(&app.config)?;
+    let command = assemble_prompt(&app.config, app.hooked_bead_id.as_deref())?;
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(&command)
