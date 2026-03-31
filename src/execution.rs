@@ -57,11 +57,10 @@ pub fn assemble_prompt(
 /// In beads mode, claim the next available bead before starting claude.
 /// Reclaims stale beads first (priority over new claims), then falls through
 /// to claiming a new bead if nothing was reclaimed.
-/// Returns true if we should proceed with start_command (claimed or non-beads mode).
-/// Returns false if claiming failed (no work available).
-pub fn claim_before_start(app: &mut App) -> bool {
+/// Always proceeds — if no bead is claimed, Claude starts claimless for admin work.
+pub fn claim_before_start(app: &mut App) {
     if app.config.behavior.mode != "beads" {
-        return true;
+        return;
     }
     // Release any previously hooked bead before claiming a new one.
     // Without this, auto-continue overwrites hooked_bead_id and orphans
@@ -70,7 +69,7 @@ pub fn claim_before_start(app: &mut App) -> bool {
 
     let agent_id = match &app.agent_bead_id {
         Some(id) => id.clone(),
-        None => return true, // no agent registered, skip claiming
+        None => return, // no agent registered, skip claiming
     };
 
     // Auto-reclaim stale beads (priority over new claims)
@@ -97,7 +96,7 @@ pub fn claim_before_start(app: &mut App) -> bool {
                         stale.hooked_bead_id, stale.hooked_bead_title
                     ));
                 }
-                return true;
+                return;
             }
             agent::ResumeResult::EscalatedToHuman => {
                 app.add_text_line(format!(
@@ -124,11 +123,9 @@ pub fn claim_before_start(app: &mut App) -> bool {
         Some((bead_id, title)) => {
             app.add_text_line(format!("[Claimed: {} {}]", bead_id, title));
             app.hooked_bead_id = Some(bead_id);
-            true
         }
         None => {
-            app.add_text_line("[No beads available to claim]".to_string());
-            false
+            app.add_text_line("[No beads available to claim — starting claimless]".to_string());
         }
     }
 }

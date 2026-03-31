@@ -338,12 +338,8 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
 
             app.increment_iteration();
             // In beads mode, claim next bead before continuing
-            if execution::claim_before_start(app) {
-                execution::start_command(app)?;
-            } else {
-                app.reset_iteration_state();
-                app.status = AppStatus::Stopped;
-            }
+            execution::claim_before_start(app);
+            execution::start_command(app)?;
         }
 
         // Poll for background work source operations
@@ -498,11 +494,8 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                                     continue;
                                 }
                                 // In beads mode, claim a bead before starting
-                                if !execution::claim_before_start(app) {
-                                    app.reset_iteration_state();
-                                } else {
-                                    execution::start_command(app)?;
-                                }
+                                execution::claim_before_start(app);
+                                execution::start_command(app)?;
                             }
                             // If start_iteration_run returns false, iterations = 0, no-op
                         }
