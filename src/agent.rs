@@ -833,7 +833,19 @@ pub fn find_stale_agents(
         // Get labels via bd show to find the hook state
         let hook_bead_id = match get_hook_from_labels(bd_path, agent_id) {
             Some(id) => id,
-            None => continue, // No hook or hook:none
+            None => {
+                // No hook — agent finished work but session ended without cleanup.
+                // Close the agent bead and remove its worktree.
+                cleanup_agent_bead(bd_path, agent_id);
+                let _ = Command::new(bd_path)
+                    .args(["worktree", "remove", "--force", agent_id])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output();
+                info!(agent_id = %agent_id, "hookless_stale_agent_cleaned_up");
+                continue;
+            }
         };
 
         // Get the hooked bead's title
