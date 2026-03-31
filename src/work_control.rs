@@ -20,6 +20,11 @@ impl App {
         // Release wake lock when process ends (drop releases it)
         self.wake_lock = None;
 
+        // Merge worktree to main on successful completion (before auto-continue check)
+        if exit_code == Some(0) {
+            self.merge_current_worktree();
+        }
+
         // Determine next state based on exit code and iteration control
         match exit_code {
             Some(0) if self.should_auto_continue() => {

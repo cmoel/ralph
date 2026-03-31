@@ -891,6 +891,58 @@ impl App {
             .toggle(&self.config.behavior.bd_path, &self.config.behavior.mode);
     }
 
+    /// Merge the current worktree branch to main and clean up.
+    /// Returns true if merge succeeded (or no worktree to merge).
+    /// Returns false if a merge conflict stopped the loop.
+    pub fn merge_current_worktree(&mut self) -> bool {
+        let Some(ref wt_name) = self.worktree_name else {
+            return true;
+        };
+
+        if crate::agent::merge_worktree_to_main(wt_name) {
+            let bd_path = self.config.behavior.bd_path.clone();
+            let wt_name = wt_name.clone();
+            crate::agent::remove_merged_worktree(&bd_path, &wt_name);
+            self.worktree_name = None;
+            self.worktree_path = None;
+            true
+        } else {
+            let bd_path = self.config.behavior.bd_path.clone();
+            let wt_name = wt_name.clone();
+
+            if let Some(existing_bead_id) =
+                crate::agent::find_merge_conflict_bead(&bd_path, &wt_name)
+            {
+                // Tier 2: Claude already tried — escalate to human
+                crate::agent::escalate_merge_conflict(&bd_path, &wt_name, &existing_bead_id);
+                self.add_text_line(
+                    "[Merge conflict persists after Claude attempt — filed human bead, stopping]"
+                        .into(),
+                );
+                self.reset_iteration_state();
+                self.status = AppStatus::Stopped;
+                false
+            } else if let Some(bead_id) =
+                crate::agent::file_merge_conflict_bead(&bd_path, &wt_name)
+            {
+                // Tier 1: First conflict — file bead, Claude resolves next iteration
+                self.add_text_line(format!(
+                    "[Merge conflict — filed {}, Claude will resolve next iteration]",
+                    bead_id
+                ));
+                // Worktree preserved
+                true
+            } else {
+                self.add_text_line(
+                    "[Merge conflict — failed to file bead, stopping]".into(),
+                );
+                self.reset_iteration_state();
+                self.status = AppStatus::Stopped;
+                false
+            }
+        }
+    }
+
     /// Clean up agent resources on quit (beads mode only).
     /// Full teardown: release bead, stop heartbeat, remove worktree, close agent.
     pub fn cleanup_agent(&mut self) {

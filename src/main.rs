@@ -82,49 +82,8 @@ fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
 /// Merge the current worktree branch to main, clean up, and create a fresh worktree.
 /// Returns false if the merge failed and the loop should stop.
 fn merge_and_refresh_worktree(app: &mut App) -> bool {
-    // Merge worktree branch to main
-    if let Some(ref wt_name) = app.worktree_name {
-        if agent::merge_worktree_to_main(wt_name) {
-            let bd_path = app.config.behavior.bd_path.clone();
-            let wt_name = wt_name.clone();
-            agent::remove_merged_worktree(&bd_path, &wt_name);
-            // Clear worktree state so a fresh one is created below
-            app.worktree_name = None;
-            app.worktree_path = None;
-        } else {
-            let bd_path = app.config.behavior.bd_path.clone();
-            let wt_name = wt_name.clone();
-
-            if let Some(existing_bead_id) =
-                agent::find_merge_conflict_bead(&bd_path, &wt_name)
-            {
-                // Tier 3: Claude already tried — escalate to human
-                agent::escalate_merge_conflict(&bd_path, &wt_name, &existing_bead_id);
-                app.add_text_line(
-                    "[Merge conflict persists after Claude attempt — filed human bead, stopping]"
-                        .into(),
-                );
-                app.reset_iteration_state();
-                app.status = AppStatus::Stopped;
-                return false;
-            } else if let Some(bead_id) =
-                agent::file_merge_conflict_bead(&bd_path, &wt_name)
-            {
-                // Tier 1: First conflict — file bead, Claude resolves next iteration
-                app.add_text_line(format!(
-                    "[Merge conflict — filed {}, Claude will resolve next iteration]",
-                    bead_id
-                ));
-                // Worktree preserved, fall through to claim_before_start
-            } else {
-                app.add_text_line(
-                    "[Merge conflict — failed to file bead, stopping]".into(),
-                );
-                app.reset_iteration_state();
-                app.status = AppStatus::Stopped;
-                return false;
-            }
-        }
+    if !app.merge_current_worktree() {
+        return false;
     }
 
     // Clear stale worktree state if path no longer exists on disk
@@ -354,23 +313,33 @@ fn run_app(
         }
     }
 
+    let result = run_event_loop(&mut app, &mut terminal);
+
+    // Always clean up agent resources, regardless of how we exited
+    app.kill_child();
+    app.cleanup_agent();
+
+    result
+}
+
+fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
     loop {
         // Poll for output from child process
-        output::poll_output(&mut app);
+        output::poll_output(app);
 
         // Handle auto-continue if pending
         if app.auto_continue_pending {
             app.dirty = true;
             app.auto_continue_pending = false;
 
-            if !merge_and_refresh_worktree(&mut app) {
+            if !merge_and_refresh_worktree(app) {
                 continue;
             }
 
             app.increment_iteration();
             // In beads mode, claim next bead before continuing
-            if execution::claim_before_start(&mut app) {
-                execution::start_command(&mut app)?;
+            if execution::claim_before_start(app) {
+                execution::start_command(app)?;
             } else {
                 app.reset_iteration_state();
                 app.status = AppStatus::Stopped;
@@ -408,7 +377,7 @@ fn run_app(
 
         // Draw UI only when state changed
         if app.dirty {
-            terminal.draw(|f| draw_ui(f, &mut app))?;
+            terminal.draw(|f| draw_ui(f, app))?;
             app.dirty = false;
         }
 
@@ -440,7 +409,7 @@ fn run_app(
             // Handle bead picker input
             if app.show_bead_picker {
                 if let Event::Key(key) = event {
-                    handle_bead_picker_input(&mut app, key.code);
+                    handle_bead_picker_input(app, key.code);
                 }
                 continue;
             }
@@ -448,7 +417,7 @@ fn run_app(
             // Handle config modal input
             if app.show_config_modal {
                 if let Event::Key(key) = event {
-                    handle_config_modal_input(&mut app, key.code, key.modifiers);
+                    handle_config_modal_input(app, key.code, key.modifiers);
                 }
                 continue;
             }
@@ -456,7 +425,7 @@ fn run_app(
             // Handle specs panel input
             if app.show_specs_panel {
                 if let Event::Key(key) = event {
-                    handle_specs_panel_input(&mut app, key.code);
+                    handle_specs_panel_input(app, key.code);
                 }
                 continue;
             }
@@ -464,7 +433,7 @@ fn run_app(
             // Handle kanban board input
             if app.show_kanban_board {
                 if let Event::Key(key) = event {
-                    handle_kanban_input(&mut app, key.code, key.modifiers);
+                    handle_kanban_input(app, key.code, key.modifiers);
                 }
                 continue;
             }
@@ -472,7 +441,7 @@ fn run_app(
             // Handle init modal input
             if app.show_init_modal {
                 if let Event::Key(key) = event {
-                    handle_init_modal_input(&mut app, key.code);
+                    handle_init_modal_input(app, key.code);
                 }
                 continue;
             }
@@ -482,8 +451,6 @@ fn run_app(
                 if let Event::Key(key) = event {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
-                            app.kill_child();
-                            app.cleanup_agent();
                             return Ok(());
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
@@ -508,7 +475,7 @@ fn run_app(
             // Handle tool allow modal input
             if app.show_tool_allow_modal {
                 if let Event::Key(key) = event {
-                    handle_tool_allow_modal_input(&mut app, key.code, key.modifiers);
+                    handle_tool_allow_modal_input(app, key.code, key.modifiers);
                 }
                 continue;
             }
@@ -527,14 +494,14 @@ fn run_app(
                             // Start new iteration run (reads config, sets up tracking)
                             if app.start_iteration_run() {
                                 // Merge previous worktree to main before starting fresh
-                                if !merge_and_refresh_worktree(&mut app) {
+                                if !merge_and_refresh_worktree(app) {
                                     continue;
                                 }
                                 // In beads mode, claim a bead before starting
-                                if !execution::claim_before_start(&mut app) {
+                                if !execution::claim_before_start(app) {
                                     app.reset_iteration_state();
                                 } else {
-                                    execution::start_command(&mut app)?;
+                                    execution::start_command(app)?;
                                 }
                             }
                             // If start_iteration_run returns false, iterations = 0, no-op
@@ -647,35 +614,35 @@ fn run_app(
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        scroll_panel(&mut app, ScrollDirection::Up, 1);
+                        scroll_panel(app, ScrollDirection::Up, 1);
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        scroll_panel(&mut app, ScrollDirection::Down, 1);
+                        scroll_panel(app, ScrollDirection::Down, 1);
                     }
                     KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         let half_page = app.main_pane_height / 2;
-                        scroll_panel(&mut app, ScrollDirection::Up, half_page);
+                        scroll_panel(app, ScrollDirection::Up, half_page);
                     }
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         let half_page = app.main_pane_height / 2;
-                        scroll_panel(&mut app, ScrollDirection::Down, half_page);
+                        scroll_panel(app, ScrollDirection::Down, half_page);
                     }
                     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         let full_page = app.main_pane_height;
-                        scroll_panel(&mut app, ScrollDirection::Up, full_page);
+                        scroll_panel(app, ScrollDirection::Up, full_page);
                     }
                     KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         let full_page = app.main_pane_height;
-                        scroll_panel(&mut app, ScrollDirection::Down, full_page);
+                        scroll_panel(app, ScrollDirection::Down, full_page);
                     }
                     _ => {}
                 },
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollUp => {
-                        scroll_panel(&mut app, ScrollDirection::Up, 3);
+                        scroll_panel(app, ScrollDirection::Up, 3);
                     }
                     MouseEventKind::ScrollDown => {
-                        scroll_panel(&mut app, ScrollDirection::Down, 3);
+                        scroll_panel(app, ScrollDirection::Down, 3);
                     }
                     _ => {}
                 },
