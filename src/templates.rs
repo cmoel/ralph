@@ -220,12 +220,16 @@ Find available work. Pick ONE item.
 After selecting a bead, assess its specification before implementing:
 
 1. Run `bd show <id>` to read the full bead details
-2. Check: Does it have clear acceptance criteria? Do you understand what "done" looks like?
-3. If the bead is under-specified:
-   - Run `bd update <id> --notes="WHAT'S MISSING: [list what's unclear]\nQUESTIONS: [list questions that need answering]"`
-   - Run `bd update <id> --add-label=human --notes="[brief explanation of what's needed]"`
+2. A well-specified bead has structured sections. Check for:
+   - **Approach** — which files to modify, which patterns to follow, key decisions
+   - **Edge Cases** — error conditions, boundary behavior, what could go wrong
+   - **Acceptance** — specific, testable conditions for "done"
+   - **Tests** — what to test and key scenarios
+3. If the bead is missing most of these sections:
+   - Run `bd update <id> --notes="WHAT'S MISSING: [list which sections are absent and what questions need answering]"`
+   - Run `bd update <id> --add-label=human --notes="Needs shaping: missing [sections]"`
    - Exit immediately — do not attempt to implement an under-specified bead
-4. If the bead is clear enough to implement, proceed with the work
+4. If the bead has these sections and you understand what "done" looks like, proceed
 
 ## When Blocked — MANDATORY ESCALATION
 

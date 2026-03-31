@@ -233,6 +233,27 @@ pub fn check_bead_specification(bead: &serde_json::Value) -> Option<String> {
         );
     }
 
+    // Reject descriptions too brief for autonomous execution
+    if description.trim().len() < 100 {
+        return Some(
+            "Under-specified: description too brief for autonomous execution. \
+             Shape this bead with Approach, Edge Cases, and Acceptance sections."
+                .to_string(),
+        );
+    }
+
+    // Reject descriptions without structured sections (## headings).
+    // Well-shaped beads have sections like ## Approach, ## Edge Cases, ## Acceptance (child tasks)
+    // or ## Problem, ## Solution Shape, ## Boundaries (epics).
+    let has_sections = description.contains("\n## ") || description.starts_with("## ");
+    if !has_sections {
+        return Some(
+            "Under-specified: missing structured sections. \
+             Shape this bead with Approach, Edge Cases, and Acceptance sections."
+                .to_string(),
+        );
+    }
+
     None
 }
 
@@ -1163,11 +1184,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn check_bead_specification_passes_with_description() {
+    fn check_bead_specification_passes_with_structured_description() {
         let bead = json!({
             "id": "ralph-abc",
             "title": "Some feature",
-            "description": "Build a thing that does X. Done when Y works."
+            "description": "Implement the widget renderer.\n\n## Approach\nModify src/widget.rs to add render() method following the existing Panel pattern.\n\n## Edge Cases\nHandle empty widget list gracefully.\n\n## Acceptance\n- Widget renders in the TUI"
+        });
+        assert!(check_bead_specification(&bead).is_none());
+    }
+
+    #[test]
+    fn check_bead_specification_passes_with_epic_structure() {
+        let bead = json!({
+            "id": "ralph-abc",
+            "title": "Some epic",
+            "description": "## Problem\nUsers cannot see dependencies between beads.\n\n## Solution Shape\nAdd a graph view that renders bd graph output.\n\n## Boundaries\n- In scope: static render\n- No-go: interactive editing"
         });
         assert!(check_bead_specification(&bead).is_none());
     }
@@ -1199,5 +1230,29 @@ mod tests {
             "title": "Some feature"
         });
         assert!(check_bead_specification(&bead).is_some());
+    }
+
+    #[test]
+    fn check_bead_specification_rejects_brief_description() {
+        let bead = json!({
+            "id": "ralph-abc",
+            "title": "Some feature",
+            "description": "Build a thing that does X. Done when Y works."
+        });
+        let reason = check_bead_specification(&bead);
+        assert!(reason.is_some());
+        assert!(reason.unwrap().contains("too brief"));
+    }
+
+    #[test]
+    fn check_bead_specification_rejects_long_but_unstructured() {
+        let bead = json!({
+            "id": "ralph-abc",
+            "title": "Some feature",
+            "description": "This is a longer description that explains what needs to happen in some detail but does not include any structured sections with markdown headings so it should still be rejected by the specification check."
+        });
+        let reason = check_bead_specification(&bead);
+        assert!(reason.is_some());
+        assert!(reason.unwrap().contains("structured sections"));
     }
 }
