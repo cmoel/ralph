@@ -144,7 +144,7 @@ When there's genuine uncertainty about whether something will *work* (not just "
 When designing how components interact — user flows, data flow, system wiring. Map affordances (what the user/system can do) and wiring (how components connect). Use when interactions are non-obvious.
 
 ### Adding Direction
-For slices that need light guidance. Point to relevant code, note constraints, suggest an approach. Keep it lean — a scope name, what "done" looks like, and a pointer to where to start. Not step-by-step instructions.
+For slices that need guidance before autonomous execution. Point to relevant code, note constraints, suggest an approach. Include edge cases and error conditions — leaving these out makes the agent need to guess, which leads to bugs. Keep it lean but complete: an agent should be able to verify "done" without asking questions.
 
 ---
 
@@ -188,16 +188,31 @@ If the epic already exists, use `bd update <id>` instead.
 
 #### Child Beads (Vertical Slices)
 
-Create child beads for each discovered slice. Each child gets:
+Child beads are what the autonomous loop actually executes. They must be self-contained — an agent working from a child bead cannot ask clarifying questions. If any of these sections have gaps, dig deep into the codebase to ground the spec in reality, and surface open questions to the user for their judgment.
+
+Each child gets:
 - A **scope name** as the title — this becomes the shared vocabulary for the project
-- A **one-liner** about what "done" looks like
-- Optionally, a **pointer** to relevant code or files if it helps the builder start
+- **What done looks like** — specific enough that an agent can verify completion
+- **Approach** — which files to modify, which patterns to follow, key decisions
+- **Edge cases** — error conditions, boundary behavior, what could go wrong
+- **Acceptance criteria** — at least one specific, testable condition
+- **Tests** — new behavior needs test coverage. See `TESTING.md` for the project's testing philosophy. Only omit tests when the behavior is genuinely impractical to test (e.g., terminal rendering, signal handling); that should be the exception, not the default
 
 ```bash
 bd create --title="Scope name" --type=task --parent=<epic-id> --description="$(cat <<'EOF'
-[One-liner: what done looks like for this slice]
+[What done looks like for this slice]
 
-[Optional: relevant files or starting points]
+## Approach
+[Files to modify, patterns to follow, key decisions]
+
+## Edge Cases
+[Error conditions, boundary behavior, what could go wrong]
+
+## Acceptance
+- [Specific, testable condition]
+
+## Tests
+[What to test, key scenarios. Omit only when genuinely impractical.]
 EOF
 )" --priority=2
 ```
