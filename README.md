@@ -87,27 +87,8 @@ Override config values for scripting and CI:
 |----------|-------------|
 | `RALPH_CLAUDE_PATH` | Path to Claude CLI |
 | `RALPH_PROMPT_PATH` | Path to prompt file |
-| `RALPH_MODE` | Work source mode (`beads` or `specs`) |
-| `RALPH_BD_PATH` | Path to `bd` CLI (beads mode) |
-| `RALPH_SPECS_DIR` | Path to specs directory (specs mode) |
+| `RALPH_BD_PATH` | Path to `bd` CLI |
 | `RALPH_LOG` | Log level (debug, info, warn, error) |
-
-<details>
-<summary>Using specs mode instead of beads</summary>
-
-Ralph also supports a specs-based workflow where work items are tracked as markdown files.
-
-Set the mode to `specs` via the config panel or `RALPH_MODE=specs`.
-
-**You provide:**
-
-1. `PROMPT.md` — Instructions for Claude (what to build, constraints, workflow)
-2. `specs/*.md` — Individual feature specifications
-3. `specs/README.md` — Index of all specs with status (Ready, In Progress, Done, Blocked)
-
-Ralph will loop until all specs are marked Done.
-
-</details>
 
 ## Contributing
 

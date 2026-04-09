@@ -1,17 +1,7 @@
-//! Pluggable work source abstraction.
-//!
-//! Defines the `WorkSource` trait that decouples ralph's core loop from
-//! the specific system that provides work items (specs, beads, etc.).
+//! Beads-based work source for ralph's core loop.
 
-use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-
-use ratatui::style::Color;
-use tracing::warn;
-
-use crate::specs::{self, SpecStatus, SpecsRemaining};
 
 /// Result of checking if there's remaining work.
 #[derive(Debug, PartialEq)]
@@ -24,60 +14,23 @@ pub enum WorkRemaining {
     NeedsShaping(usize),
     /// All ready beads are for humans only (human label).
     HumanOnly(usize),
-    /// Work source is missing (e.g., README not found).
-    Missing,
     /// Error reading the work source.
     ReadError(String),
 }
 
 /// Status of a work item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
 pub enum WorkItemStatus {
     Blocked,
-    NeedsShaping,
     Ready,
     InProgress,
     Done,
 }
 
-impl WorkItemStatus {
-    /// Get the display color for this status.
-    pub fn color(&self) -> Color {
-        match self {
-            Self::Blocked => Color::Red,
-            Self::NeedsShaping => Color::Yellow,
-            Self::Ready => Color::Cyan,
-            Self::InProgress => Color::Green,
-            Self::Done => Color::DarkGray,
-        }
-    }
-
-    /// Get the display label for this status.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Blocked => "Blocked",
-            Self::NeedsShaping => "Needs Shaping",
-            Self::Ready => "Ready",
-            Self::InProgress => "In Progress",
-            Self::Done => "Done",
-        }
-    }
-}
-
-impl From<SpecStatus> for WorkItemStatus {
-    fn from(s: SpecStatus) -> Self {
-        match s {
-            SpecStatus::Blocked => Self::Blocked,
-            SpecStatus::NeedsShaping => Self::NeedsShaping,
-            SpecStatus::Ready => Self::Ready,
-            SpecStatus::InProgress => Self::InProgress,
-            SpecStatus::Done => Self::Done,
-        }
-    }
-}
-
 /// A single work item from a work source.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WorkItem {
     /// Name of the work item.
     pub name: String,
@@ -85,75 +38,6 @@ pub struct WorkItem {
     pub status: WorkItemStatus,
     /// Timestamp for sorting.
     pub timestamp: Option<SystemTime>,
-}
-
-/// Trait for pluggable work sources.
-///
-/// Implementations provide work items to ralph's core loop.
-/// Methods are synchronous but callers run them on background threads
-/// to avoid blocking the TUI event loop.
-pub trait WorkSource: Send + Sync {
-    /// Check if there's remaining work (for auto-continue decisions).
-    fn check_remaining(&self) -> WorkRemaining;
-
-    /// Detect the currently active work item name (for status bar display).
-    fn detect_current(&self) -> Option<String>;
-
-    /// List all work items with status (for the work panel).
-    fn list_items(&self) -> Result<Vec<WorkItem>, String>;
-
-    /// Label for this work source (e.g., "Specs", "Beads").
-    fn label(&self) -> &'static str;
-
-    /// Label for the "all complete" message.
-    fn complete_message(&self) -> &'static str;
-}
-
-/// Work source backed by spec files in a specs directory.
-pub struct SpecsWorkSource {
-    specs_dir: PathBuf,
-}
-
-impl SpecsWorkSource {
-    pub fn new(specs_dir: PathBuf) -> Self {
-        Self { specs_dir }
-    }
-}
-
-impl WorkSource for SpecsWorkSource {
-    fn check_remaining(&self) -> WorkRemaining {
-        match specs::check_specs_remaining(&self.specs_dir) {
-            SpecsRemaining::Yes => WorkRemaining::Yes,
-            SpecsRemaining::No => WorkRemaining::No,
-            SpecsRemaining::Missing => WorkRemaining::Missing,
-            SpecsRemaining::ReadError(e) => WorkRemaining::ReadError(e),
-        }
-    }
-
-    fn detect_current(&self) -> Option<String> {
-        specs::detect_current_spec(&self.specs_dir)
-    }
-
-    fn list_items(&self) -> Result<Vec<WorkItem>, String> {
-        specs::parse_specs_readme(&self.specs_dir).map(|entries| {
-            entries
-                .into_iter()
-                .map(|e| WorkItem {
-                    name: e.name,
-                    status: e.status.into(),
-                    timestamp: e.timestamp,
-                })
-                .collect()
-        })
-    }
-
-    fn label(&self) -> &'static str {
-        "Specs"
-    }
-
-    fn complete_message(&self) -> &'static str {
-        "ALL SPECS COMPLETE"
-    }
 }
 
 /// Work source backed by the `bd` CLI for bead-based workflows.
@@ -232,17 +116,17 @@ impl BeadsWorkSource {
             _ => WorkItemStatus::Ready,
         }
     }
-}
 
-impl WorkSource for BeadsWorkSource {
-    fn check_remaining(&self) -> WorkRemaining {
+    /// Check if there's remaining work (for auto-continue decisions).
+    pub fn check_remaining(&self) -> WorkRemaining {
         match self.run_bd(&["ready", "--json"]) {
             Ok(stdout) => parse_ready_output(&stdout),
             Err(e) => WorkRemaining::ReadError(e),
         }
     }
 
-    fn detect_current(&self) -> Option<String> {
+    /// Detect the currently active work item name (for status bar display).
+    pub fn detect_current(&self) -> Option<String> {
         let stdout = self
             .run_bd(&["list", "--json", "--status", "in_progress"])
             .ok()?;
@@ -254,7 +138,8 @@ impl WorkSource for BeadsWorkSource {
         Some(format!("{} {}", id, title))
     }
 
-    fn list_items(&self) -> Result<Vec<WorkItem>, String> {
+    /// List all work items with status (for the work panel).
+    pub fn list_items(&self) -> Result<Vec<WorkItem>, String> {
         let stdout = self.run_bd(&["list", "--json"])?;
         let items: serde_json::Value = serde_json::from_str(&stdout)
             .map_err(|e| format!("failed to parse bd output: {}", e))?;
@@ -284,24 +169,9 @@ impl WorkSource for BeadsWorkSource {
             .collect())
     }
 
-    fn label(&self) -> &'static str {
-        "Beads"
-    }
-
-    fn complete_message(&self) -> &'static str {
+    /// Label for the "all complete" message.
+    pub fn complete_message(&self) -> &'static str {
         "ALL BEADS COMPLETE"
-    }
-}
-
-/// Construct a work source from a mode string and config.
-pub fn create_work_source(mode: &str, specs_dir: PathBuf, bd_path: &str) -> Arc<dyn WorkSource> {
-    match mode {
-        "specs" => Arc::new(SpecsWorkSource::new(specs_dir)),
-        "beads" => Arc::new(BeadsWorkSource::new(bd_path.to_string())),
-        other => {
-            warn!(mode = other, "unknown_mode_falling_back_to_specs");
-            Arc::new(SpecsWorkSource::new(specs_dir))
-        }
     }
 }
 

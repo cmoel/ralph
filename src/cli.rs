@@ -181,11 +181,6 @@ pub fn run_ready(verbose: bool) -> Result<()> {
     let loaded_config = config::load_config();
     let cfg = &loaded_config.config;
 
-    if cfg.behavior.mode != "beads" {
-        eprintln!("Error: ralph ready requires beads mode");
-        std::process::exit(1);
-    }
-
     let output = Command::new(&cfg.behavior.bd_path)
         .args(["ready", "--json"])
         .stdin(Stdio::null())
@@ -363,19 +358,15 @@ pub fn run_doctor() -> Result<()> {
         doctor::check_prompt(cfg),
     ];
 
-    if cfg.behavior.mode == "beads" {
-        checks.push(doctor::check_bd(cfg));
-        checks.push(doctor::check_bd_prime_hook());
-        checks.push(doctor::check_board_toml());
-        let dolt_check = doctor::check_dolt_status(cfg);
-        let dolt_running = dolt_check.passed;
-        checks.push(dolt_check);
-        if dolt_running {
-            checks.push(doctor::check_work_items(cfg));
-            checks.push(doctor::check_unrecognized_labels(cfg));
-        }
-    } else {
+    checks.push(doctor::check_bd(cfg));
+    checks.push(doctor::check_bd_prime_hook());
+    checks.push(doctor::check_board_toml());
+    let dolt_check = doctor::check_dolt_status(cfg);
+    let dolt_running = dolt_check.passed;
+    checks.push(dolt_check);
+    if dolt_running {
         checks.push(doctor::check_work_items(cfg));
+        checks.push(doctor::check_unrecognized_labels(cfg));
     }
 
     let mut all_passed = true;

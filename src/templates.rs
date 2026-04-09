@@ -83,125 +83,6 @@ After committing ONE vertical slice, exit immediately. Do not start another task
 This workflow follows Shape Up methodology — appetite-driven, vertically-sliced, with clear boundaries. For deeper context, see https://www.ryansinger.co/posts/
 "#;
 
-/// Specs README template with status key and empty table.
-pub const SPECS_README_MD: &str = r#"# Specs
-
-Single source of truth for specification status.
-
-## Status Key
-
-- **Needs Shaping** — Captured but not yet shaped — needs refinement via /shape
-- **Ready** — Shaped and ready for implementation
-- **In Progress** — Currently being worked on
-- **Done** — Complete
-- **Blocked** — Cannot proceed (see spec for details)
-
-## Specs
-
-| Spec | Status | Summary | Depends On |
-|------|--------|---------|------------|
-
-## Notes
-
-When picking work:
-- Choose specs marked **Ready**
-- Respect dependencies (don't start until dependencies are Done)
-"#;
-
-/// Spec template with authoring guidelines.
-pub const SPECS_TEMPLATE_MD: &str = r#"# Spec Guidelines
-
-These are guidelines, not a rigid template. Shape each spec to fit its content.
-
-## What Every Spec Needs
-
-**User-facing behavior** — What can the user do when this is complete? Be concrete.
-
-**Acceptance criteria** — Checkboxes that define done. For multi-slice specs, group criteria by slice.
-
-**Technical constraints** — Architecture decisions, patterns to follow, things to avoid.
-
-**Error cases** — How should the system behave when things go wrong? Be comprehensive.
-
-## Optional Sections
-
-**Out of scope** — Include when boundaries might be unclear to prevent scope creep.
-
-**Dependencies** — If this spec depends on another spec being complete.
-
-## Slices
-
-A slice is the smallest unit of work that delivers user value. When a spec has multiple slices:
-
-- Each slice should be completable in one agent session
-- Group acceptance criteria under slice headings
-- Slices can have dependencies on each other
-- Prefer slices that are **core** (central to the concept), **small** (completable quickly), and **novel** (reduce uncertainty)
-
-## Example Structure
-
-```markdown
-# Feature Name
-
-One-line description of what the user can do.
-
-## Slice 1: [Name]
-
-### User Behavior
-What the user experiences.
-
-### Acceptance Criteria
-- [ ] Criterion one
-- [ ] Criterion two
-
-### Technical Constraints
-How to build it.
-
-### Error Cases
-- When X happens, show Y
-- When Z fails, do W
-
-## Slice 2: [Name]
-(depends on Slice 1)
-
-...
-```
-
-## Living Document
-
-Specs evolve. Agents may update specs as they learn—adding discovered requirements, refining criteria, or documenting blockers.
-"#;
-
-/// Specs-mode work discovery instructions (compiled into binary).
-pub const SPECS_MODE_MD: &str = r#"
-# Specs Mode
-
-## Work Discovery
-
-Read `specs/README.md` to find specs marked **Ready**.
-
-**To flag:** Note issues in the spec file or README.
-
-**To mark in progress:** Update status to **In Progress** in `specs/README.md` and commit.
-
-## Details
-
-Read the spec file for acceptance criteria, technical constraints, and error cases.
-
-## Progress Tracking
-
-- Mark completed items in the spec with `[x]`
-- Keep `specs/README.md` status accurate
-
-## When Blocked
-
-Document in BOTH the spec AND `specs/README.md`.
-
-## Completing Work
-
-Mark the spec complete in `specs/README.md`.
-"#;
-
 /// Generate beads-mode prompt content based on claim state.
 /// Command reference is provided by `bd prime` — this only covers Ralph-specific workflow.
 pub fn beads_mode_content(claimed_bead_id: Option<&str>) -> String {
@@ -279,13 +160,9 @@ Close any beads you complete.
     )
 }
 
-/// Returns mode-specific prompt content for the given mode, if any.
-pub fn mode_content(mode: &str, claimed_bead_id: Option<&str>) -> Option<String> {
-    match mode {
-        "specs" => Some(SPECS_MODE_MD.to_string()),
-        "beads" => Some(beads_mode_content(claimed_bead_id)),
-        _ => None,
-    }
+/// Returns prompt content for the beads workflow.
+pub fn mode_content(claimed_bead_id: Option<&str>) -> String {
+    beads_mode_content(claimed_bead_id)
 }
 
 /// Brain dump skill (with YAML frontmatter).
@@ -300,14 +177,7 @@ Drain ideas from the user's head through intense, relentless questioning, then f
 
 ## Setup
 
-**Detect mode** by checking the project directory. If a `.beads/` directory exists, it's beads mode. Otherwise, specs mode (default).
-
-- **Beads mode**: Run `bd list --json` to see existing beads for deduplication context.
-- **Specs mode** (default): Read `specs/README.md` to see existing specs for deduplication context.
-
-**Announce the mode:** Tell the user which mode you detected. Example: *"I see this project uses beads mode, so I'll file ideas as beads. Let me know if you'd prefer specs instead."*
-
-If the user wants to override the detected mode, respect their choice.
+Run `bd list --json` to see existing beads for deduplication context.
 
 ---
 
@@ -371,9 +241,7 @@ Don't do full shaping here — that's what /shape is for. Just enough structure 
 
 ### Deduplication
 
-Before filing, check against existing items:
-- **Beads mode:** Compare against `bd list --json` results from setup
-- **Specs mode:** Compare against `specs/README.md` entries
+Before filing, check against existing items from `bd list --json` results from setup.
 
 If an idea overlaps with something existing, surface it: "This sounds similar to [existing item]. Should we merge them, keep them separate, or skip this one?"
 
@@ -393,8 +261,6 @@ Present the full list of items you're about to file. Group them logically. For e
 - Any flags (epic, overlaps with existing item, unclear scope)
 
 **Get confirmation before filing.**
-
-### Beads Mode
 
 Create beads using `bd create` for each item:
 
@@ -416,34 +282,11 @@ Why this matters and what prompted it.
 - Always add `needs-shaping` label — these items need /shape before implementation
 - For epics: create the epic bead noting it will need children, but don't prescribe what children should be
 
-### Specs Mode
-
-Create rough spec files for each item:
-
-1. **Create** `specs/[name].md` with rough content:
-
-```markdown
-# Item Title
-
-One-line description of what this solves.
-
-## Context
-Why this matters and what prompted it.
-
-## Open Questions
-- Things that need investigation during shaping
-```
-
-2. **Update** `specs/README.md`:
-   - Add each spec to the table
-   - Set status to **Needs Shaping**
-   - Write one-line summary
-
 ### Session End
 
 After filing, present a summary:
 - How many items filed
-- List of titles with their IDs (beads mode) or filenames (specs mode)
+- List of titles with their IDs
 - Any items flagged as epics or needing special attention
 - Suggest running /shape on the most important items next
 
@@ -462,11 +305,8 @@ After filing, present a summary:
 
 ## Start
 
-1. Detect mode (`.beads/` dir → beads, otherwise → specs)
-2. **Beads mode:** Run `bd list --json` to see existing beads
-3. **Specs mode:** Read `specs/README.md` to see existing specs
-4. Announce the detected mode to the user
-5. Ask: **"What's on your mind?"**
+1. Run `bd list --json` to see existing beads
+2. Ask: **"What's on your mind?"**
 "#;
 
 /// Shape skill (with YAML frontmatter).
@@ -481,14 +321,7 @@ Deeply refine rough work items into fully shaped, implementation-ready specifica
 
 ## Setup
 
-**Detect mode** by checking the project directory. If a `.beads/` directory exists, it's beads mode. Otherwise, specs mode (default).
-
-- **Beads mode**: Run `bd list --json` to see existing beads for context.
-- **Specs mode** (default): Read `specs/README.md` and `specs/TEMPLATE.md` before starting.
-
-**Announce the mode:** Tell the user which mode you detected. Example: *"I see this project uses beads mode, so I'll shape beads in place. Let me know if you'd prefer specs instead."*
-
-If the user wants to override the detected mode, respect their choice.
+Run `bd list --json` to see existing beads for context.
 
 ---
 
@@ -498,17 +331,15 @@ Support all three ways to start a shaping session:
 
 ### 1. Standalone
 
-The user specifies a bead ID or spec name directly (e.g., "shape ralph-a12" or "shape the auth spec").
+The user specifies a bead ID directly (e.g., "shape ralph-a12").
 
-- **Beads mode:** Run `bd show <id>` to load the item
-- **Specs mode:** Read `specs/<name>.md` to load the item
+Run `bd show <id>` to load the item.
 
 ### 2. Continuation
 
 The user says something like "shape the beads I just dumped" or "shape what we just captured."
 
-- **Beads mode:** Run `bd list --json --labels needs-shaping` to find recent `needs-shaping` items
-- **Specs mode:** Read `specs/README.md` and look for items with "Needs Shaping" status
+Run `bd list --json --labels needs-shaping` to find recent `needs-shaping` items.
 
 Present the list and let the user pick which to shape, or shape them all if they're related.
 
@@ -516,8 +347,7 @@ Present the list and let the user pick which to shape, or shape them all if they
 
 If no item is specified, query for items that need shaping:
 
-- **Beads mode:** Run `bd list --json --labels needs-shaping`
-- **Specs mode:** Read `specs/README.md` and find "Needs Shaping" entries
+Run `bd list --json --labels needs-shaping`.
 
 Present the list and ask which item(s) to shape. If only one exists, offer to start with it.
 
@@ -668,8 +498,7 @@ Don't accept hand-waving. Push for concrete answers.
 ### Phase 10: Dependencies
 
 **Check with subagents:**
-- **Beads mode:** Run `bd list --json` to check for dependencies on existing beads
-- **Specs mode:** Review `specs/README.md` for dependencies on other specs
+- Run `bd list --json` to check for dependencies on existing beads
 - Identify which slices depend on other slices
 
 **Propose an order:** "Based on dependencies, I suggest: Slice 1 → Slice 2 → Slice 3. Does this make sense?"
@@ -688,8 +517,6 @@ Present the full shaped output and confirm with the user before writing:
 - Vertical slices in order
 - Error handling decisions
 - Dependencies
-
-### Beads Mode
 
 Update the bead in place using `bd update <id>` to enrich the description with shaping artifacts:
 
@@ -728,15 +555,6 @@ bd label remove <id> needs-shaping
 
 If `bd update` fails, surface the error and don't lose the shaping work — present the content to the user so they can capture it.
 
-### Specs Mode
-
-Enrich the spec file content at `specs/<name>.md` with the shaping artifacts.
-
-Update `specs/README.md`:
-- Change status from "Needs Shaping" to **Ready**
-
-Commit the changes after getting user approval.
-
 ---
 
 ## Shaping Multiple Related Items
@@ -751,7 +569,7 @@ When shaping multiple items in one session:
 
 ## Error Handling
 
-- **Bead/spec not found:** Surface clearly, offer to list available items
+- **Bead not found:** Surface clearly, offer to list available items
 - **bd update failures:** Surface the error, present the shaped content to the user so nothing is lost
 - **Already-shaped items:** Note that the item appears already shaped, ask if the user wants to reshape it
 
@@ -771,13 +589,10 @@ When shaping multiple items in one session:
 
 ## Start
 
-1. Detect mode (`.beads/` dir → beads, otherwise → specs)
-2. **Beads mode:** Run `bd list --json` to see existing beads
-3. **Specs mode:** Read `specs/README.md` and `specs/TEMPLATE.md`
-4. Determine entry point:
+1. Run `bd list --json` to see existing beads
+2. Determine entry point:
    - If the user specified an item → load it (standalone)
    - If the user mentioned recent items → find `needs-shaping` items (continuation)
    - If neither → query for `needs-shaping` items and present the list (auto-discover)
-5. Announce the detected mode
-6. Summarize what you see in the item, then begin the shaping conversation
+3. Summarize what you see in the item, then begin the shaping conversation
 "#;

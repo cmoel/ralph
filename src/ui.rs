@@ -13,7 +13,7 @@ use ratatui::widgets::{
 use crate::app::{App, AppStatus, DoltServerState};
 use crate::modals::{
     draw_bead_picker, draw_config_modal, draw_help_modal, draw_init_modal, draw_kanban_board,
-    draw_quit_modal, draw_specs_panel, draw_tool_allow_modal, draw_workers_stream,
+    draw_quit_modal, draw_tool_allow_modal, draw_workers_stream,
 };
 use crate::tool_panel::{SelectedPanel, ToolCallStatus};
 
@@ -476,7 +476,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         None
     };
 
-    // Top title: session ID (left), spec name (right)
+    // Top title: session ID (left), bead name (right)
     let output_border_color = if app.tool_panel.selected_panel == SelectedPanel::Main {
         Color::White
     } else {
@@ -495,8 +495,8 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
             .left_aligned(),
         );
 
-    if let Some(spec) = &app.current_spec {
-        output_block = output_block.title(Line::from(format!(" {} ", spec)).right_aligned());
+    if let Some(bead) = &app.current_bead {
+        output_block = output_block.title(Line::from(format!(" {} ", bead)).right_aligned());
     }
 
     // Bottom title: iteration count (left), cumulative tokens (right)
@@ -578,33 +578,29 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         Span::styled(" Help", label_style),
     ];
 
-    // Dolt server indicator (beads mode only)
-    let dolt_spans: Vec<Span> = if app.config.behavior.mode == "beads" {
-        let dim = Style::default().fg(Color::DarkGray);
-        match app.dolt.state {
-            DoltServerState::On => vec![
-                Span::styled("Dolt ", dim),
-                Span::styled("● ", Style::default().fg(Color::Green)),
-                Span::styled("│ ", dim),
-            ],
-            DoltServerState::Off => vec![
-                Span::styled("Dolt ", dim),
-                Span::styled("○ ", dim),
-                Span::styled("│ ", dim),
-            ],
-            DoltServerState::Starting | DoltServerState::Stopping => vec![
-                Span::styled("Dolt ", dim),
-                Span::styled("… ", Style::default().fg(Color::Yellow)),
-                Span::styled("│ ", dim),
-            ],
-            DoltServerState::Unknown => vec![
-                Span::styled("Dolt ", dim),
-                Span::styled("? ", dim),
-                Span::styled("│ ", dim),
-            ],
-        }
-    } else {
-        vec![]
+    // Dolt server indicator
+    let dim = Style::default().fg(Color::DarkGray);
+    let dolt_spans: Vec<Span> = match app.dolt.state {
+        DoltServerState::On => vec![
+            Span::styled("Dolt ", dim),
+            Span::styled("● ", Style::default().fg(Color::Green)),
+            Span::styled("│ ", dim),
+        ],
+        DoltServerState::Off => vec![
+            Span::styled("Dolt ", dim),
+            Span::styled("○ ", dim),
+            Span::styled("│ ", dim),
+        ],
+        DoltServerState::Starting | DoltServerState::Stopping => vec![
+            Span::styled("Dolt ", dim),
+            Span::styled("… ", Style::default().fg(Color::Yellow)),
+            Span::styled("│ ", dim),
+        ],
+        DoltServerState::Unknown => vec![
+            Span::styled("Dolt ", dim),
+            Span::styled("? ", dim),
+            Span::styled("│ ", dim),
+        ],
     };
     let dolt_len: usize = dolt_spans.iter().map(|s| s.content.len()).sum();
 
@@ -680,11 +676,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Config modal
     if app.show_config_modal {
         draw_config_modal(f, app);
-    }
-
-    // Specs panel modal
-    if app.show_specs_panel {
-        draw_specs_panel(f, app);
     }
 
     // Kanban board modal

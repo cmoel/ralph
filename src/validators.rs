@@ -83,40 +83,6 @@ pub fn validate_file_exists(path: &str) -> Option<String> {
     }
 }
 
-/// Check if metadata indicates a valid directory (pure function).
-/// Returns an error message if validation fails, None if valid.
-fn check_directory_metadata(is_dir: bool) -> Option<String> {
-    if !is_dir {
-        Some("Path is not a directory".to_string())
-    } else {
-        None
-    }
-}
-
-/// Convert an I/O error to an appropriate error message for directory validation.
-fn directory_error_message(error: &std::io::Error) -> String {
-    match error.kind() {
-        std::io::ErrorKind::NotFound => "Directory not found".to_string(),
-        std::io::ErrorKind::PermissionDenied => "Cannot access directory".to_string(),
-        _ => "Invalid path".to_string(),
-    }
-}
-
-/// Validate that a path points to an existing directory.
-/// Returns an error message if validation fails, None if valid.
-pub fn validate_directory_exists(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return Some("Path cannot be empty".to_string());
-    }
-
-    let expanded = Config::expand_tilde(path);
-
-    match std::fs::metadata(&expanded) {
-        Ok(metadata) => check_directory_metadata(metadata.is_dir()),
-        Err(e) => Some(directory_error_message(&e)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,20 +141,6 @@ mod tests {
         assert_eq!(result, Some("Path is not a file".to_string()));
     }
 
-    // Tests for check_directory_metadata (pure function)
-
-    #[test]
-    fn test_check_directory_metadata_valid_directory() {
-        let result = check_directory_metadata(true);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_check_directory_metadata_not_a_directory() {
-        let result = check_directory_metadata(false);
-        assert_eq!(result, Some("Path is not a directory".to_string()));
-    }
-
     // Tests for file_error_message (pure function)
 
     #[test]
@@ -209,23 +161,4 @@ mod tests {
         assert_eq!(file_error_message(&error), "Invalid path");
     }
 
-    // Tests for directory_error_message (pure function)
-
-    #[test]
-    fn test_directory_error_message_not_found() {
-        let error = std::io::Error::new(std::io::ErrorKind::NotFound, "not found");
-        assert_eq!(directory_error_message(&error), "Directory not found");
-    }
-
-    #[test]
-    fn test_directory_error_message_permission_denied() {
-        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
-        assert_eq!(directory_error_message(&error), "Cannot access directory");
-    }
-
-    #[test]
-    fn test_directory_error_message_other_error() {
-        let error = std::io::Error::new(std::io::ErrorKind::Other, "other");
-        assert_eq!(directory_error_message(&error), "Invalid path");
-    }
 }

@@ -77,22 +77,8 @@ impl InitModalState {
     /// Create a new init modal state by checking file existence.
     pub fn new(config: &Config) -> Self {
         let prompt_path = config.prompt_path();
-        let specs_path = config.specs_path();
 
-        // Build list of files to check — mode-agnostic files always,
-        // specs-specific files only in specs mode
         let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
-
-        if config.behavior.mode == "specs" {
-            files_to_check.push((
-                format!("{}/README.md", config.paths.specs),
-                specs_path.join("README.md"),
-            ));
-            files_to_check.push((
-                format!("{}/TEMPLATE.md", config.paths.specs),
-                specs_path.join("TEMPLATE.md"),
-            ));
-        }
 
         files_to_check.push((
             ".claude/skills/brain-dump/SKILL.md".to_string(),
@@ -102,16 +88,15 @@ impl InitModalState {
             ".claude/skills/shape/SKILL.md".to_string(),
             PathBuf::from(".claude/skills/shape/SKILL.md"),
         ));
-        let mode = &config.behavior.mode;
         let files = files_to_check
             .into_iter()
             .map(|(display, full)| {
                 let status = if !full.exists() {
                     InitFileStatus::WillCreate
                 } else if display.ends_with("PROMPT.md") {
-                    // Check if PROMPT.md contains stale mode-specific content
+                    // Check if PROMPT.md contains stale specs-mode content
                     if let Ok(content) = std::fs::read_to_string(&full) {
-                        if !prompt_sniff::sniff_prompt(&content, mode).is_empty() {
+                        if !prompt_sniff::sniff_prompt(&content).is_empty() {
                             InitFileStatus::Stale
                         } else {
                             InitFileStatus::Exists
@@ -183,20 +168,8 @@ impl InitModalState {
     /// existing files as `WillRegenerate` instead of `Exists`.
     pub fn new_reinit(config: &Config) -> Self {
         let prompt_path = config.prompt_path();
-        let specs_path = config.specs_path();
 
         let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
-
-        if config.behavior.mode == "specs" {
-            files_to_check.push((
-                format!("{}/README.md", config.paths.specs),
-                specs_path.join("README.md"),
-            ));
-            files_to_check.push((
-                format!("{}/TEMPLATE.md", config.paths.specs),
-                specs_path.join("TEMPLATE.md"),
-            ));
-        }
 
         files_to_check.push((
             ".claude/skills/brain-dump/SKILL.md".to_string(),
@@ -256,10 +229,6 @@ impl InitModalState {
             let content =
                 if file.display_path.ends_with("PROMPT.md") || file.display_path == "./PROMPT.md" {
                     templates::PROMPT_MD
-                } else if file.display_path.ends_with("README.md") {
-                    templates::SPECS_README_MD
-                } else if file.display_path.ends_with("TEMPLATE.md") {
-                    templates::SPECS_TEMPLATE_MD
                 } else if file.display_path.contains("brain-dump") {
                     templates::BRAIN_DUMP_SKILL_MD
                 } else if file.display_path.contains("shape") {
@@ -469,15 +438,9 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
 mod tests {
     use super::*;
 
-    fn config_with_mode(mode: &str) -> Config {
-        let mut config = Config::default();
-        config.behavior.mode = mode.to_string();
-        config
-    }
-
     #[test]
-    fn test_init_specs_mode_includes_specs_files() {
-        let config = config_with_mode("specs");
+    fn test_init_includes_prompt_and_skills() {
+        let config = Config::default();
         let state = InitModalState::new(&config);
 
         let paths: Vec<&str> = state
@@ -485,51 +448,14 @@ mod tests {
             .iter()
             .map(|f| f.display_path.as_str())
             .collect();
-        assert!(paths.iter().any(|p| p.ends_with("README.md")));
-        assert!(paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
+        assert!(paths.iter().any(|p| p.ends_with("PROMPT.md")));
+        assert!(paths.iter().any(|p| p.contains("brain-dump")));
+        assert!(paths.iter().any(|p| p.contains("shape")));
     }
 
     #[test]
-    fn test_init_beads_mode_excludes_specs_files() {
-        let config = config_with_mode("beads");
-        let state = InitModalState::new(&config);
-
-        let paths: Vec<&str> = state
-            .files
-            .iter()
-            .map(|f| f.display_path.as_str())
-            .collect();
-        assert!(!paths.iter().any(|p| p.ends_with("README.md")));
-        assert!(!paths.iter().any(|p| p.ends_with("TEMPLATE.md")));
-    }
-
-    #[test]
-    fn test_init_both_modes_include_prompt_and_skills() {
-        for mode in &["specs", "beads"] {
-            let config = config_with_mode(mode);
-            let state = InitModalState::new(&config);
-
-            let paths: Vec<&str> = state
-                .files
-                .iter()
-                .map(|f| f.display_path.as_str())
-                .collect();
-            assert!(paths.iter().any(|p| p.ends_with("PROMPT.md")));
-            assert!(paths.iter().any(|p| p.contains("brain-dump")));
-            assert!(paths.iter().any(|p| p.contains("shape")));
-        }
-    }
-
-    #[test]
-    fn test_init_specs_mode_has_five_files() {
-        let config = config_with_mode("specs");
-        let state = InitModalState::new(&config);
-        assert_eq!(state.files.len(), 5);
-    }
-
-    #[test]
-    fn test_init_beads_mode_has_three_files() {
-        let config = config_with_mode("beads");
+    fn test_init_has_three_files() {
+        let config = Config::default();
         let state = InitModalState::new(&config);
         assert_eq!(state.files.len(), 3);
     }

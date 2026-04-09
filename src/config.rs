@@ -45,14 +45,12 @@ impl Default for ClaudeConfig {
 #[serde(default)]
 pub struct PathsConfig {
     pub prompt: String,
-    pub specs: String,
 }
 
 impl Default for PathsConfig {
     fn default() -> Self {
         Self {
             prompt: "./PROMPT.md".to_string(),
-            specs: "./specs".to_string(),
         }
     }
 }
@@ -77,7 +75,7 @@ impl Default for LoggingConfig {
 #[serde(default)]
 pub struct BehaviorConfig {
     /// Number of iterations to run:
-    /// - Negative (-1): Infinite mode, continues until user stops or specs complete
+    /// - Negative (-1): Infinite mode, continues until user stops or all beads complete
     /// - Zero (0): Stopped mode, pressing 's' has no effect
     /// - Positive (N): Runs exactly N iterations then stops
     pub iterations: i32,
@@ -85,9 +83,7 @@ pub struct BehaviorConfig {
     /// When true, the system won't sleep while claude is running.
     /// Display may still sleep. Default: true.
     pub keep_awake: bool,
-    /// Work source mode: "specs" (default) or "beads".
-    pub mode: String,
-    /// Path to the `bd` CLI binary (for beads mode). Default: "bd".
+    /// Path to the `bd` CLI binary. Default: "bd".
     pub bd_path: String,
     /// How often to send agent heartbeats (seconds). Default: 30.
     pub heartbeat_interval: u64,
@@ -106,7 +102,6 @@ impl Default for BehaviorConfig {
         Self {
             iterations: -1,   // Infinite mode by default
             keep_awake: true, // Prevent system sleep by default
-            mode: "specs".to_string(),
             bd_path: "bd".to_string(),
             heartbeat_interval: 30,
             stale_threshold: 180,
@@ -176,10 +171,6 @@ impl Config {
         Self::expand_tilde(&self.paths.prompt)
     }
 
-    /// Get the expanded specs directory path
-    pub fn specs_path(&self) -> PathBuf {
-        Self::expand_tilde(&self.paths.specs)
-    }
 }
 
 /// Partial Claude CLI configuration for project overrides.
@@ -196,8 +187,6 @@ pub struct PartialClaudeConfig {
 pub struct PartialPathsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub specs: Option<String>,
 }
 
 /// Partial logging configuration for project overrides.
@@ -216,8 +205,6 @@ pub struct PartialBehaviorConfig {
     pub iterations: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_awake: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bd_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,7 +235,7 @@ fn is_partial_claude_empty(c: &PartialClaudeConfig) -> bool {
 }
 
 fn is_partial_paths_empty(p: &PartialPathsConfig) -> bool {
-    p.prompt.is_none() && p.specs.is_none()
+    p.prompt.is_none()
 }
 
 fn is_partial_logging_empty(l: &PartialLoggingConfig) -> bool {
@@ -258,7 +245,6 @@ fn is_partial_logging_empty(l: &PartialLoggingConfig) -> bool {
 fn is_partial_behavior_empty(b: &PartialBehaviorConfig) -> bool {
     b.iterations.is_none()
         && b.keep_awake.is_none()
-        && b.mode.is_none()
         && b.bd_path.is_none()
         && b.heartbeat_interval.is_none()
         && b.stale_threshold.is_none()
@@ -283,11 +269,6 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .prompt
                 .clone()
                 .unwrap_or_else(|| global.paths.prompt.clone()),
-            specs: project
-                .paths
-                .specs
-                .clone()
-                .unwrap_or_else(|| global.paths.specs.clone()),
         },
         logging: LoggingConfig {
             level: project
@@ -305,11 +286,6 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .behavior
                 .keep_awake
                 .unwrap_or(global.behavior.keep_awake),
-            mode: project
-                .behavior
-                .mode
-                .clone()
-                .unwrap_or_else(|| global.behavior.mode.clone()),
             bd_path: project
                 .behavior
                 .bd_path
@@ -691,19 +667,9 @@ fn apply_env_overrides(mut config: Config) -> Config {
         config.paths.prompt = path;
     }
 
-    if let Ok(path) = env::var("RALPH_SPECS_DIR") {
-        debug!("Overriding paths.specs from RALPH_SPECS_DIR");
-        config.paths.specs = path;
-    }
-
     if let Ok(level) = env::var("RALPH_LOG") {
         debug!("Overriding logging.level from RALPH_LOG");
         config.logging.level = level;
-    }
-
-    if let Ok(mode) = env::var("RALPH_MODE") {
-        debug!("Overriding behavior.mode from RALPH_MODE");
-        config.behavior.mode = mode;
     }
 
     if let Ok(path) = env::var("RALPH_BD_PATH") {
@@ -724,7 +690,6 @@ mod tests {
         assert_eq!(config.claude.path, "~/.claude/local/claude");
         assert!(config.claude.args.is_none());
         assert_eq!(config.paths.prompt, "./PROMPT.md");
-        assert_eq!(config.paths.specs, "./specs");
         assert_eq!(config.logging.level, "info");
     }
 
@@ -748,7 +713,6 @@ path = "/custom/claude"
 
 [paths]
 prompt = "./custom-prompt.md"
-specs = "./custom-specs"
 
 [logging]
 level = "debug"
@@ -758,7 +722,6 @@ level = "debug"
         assert_eq!(config.claude.path, "/custom/claude");
         assert!(config.claude.args.is_none());
         assert_eq!(config.paths.prompt, "./custom-prompt.md");
-        assert_eq!(config.paths.specs, "./custom-specs");
         assert_eq!(config.logging.level, "debug");
     }
 
@@ -903,7 +866,6 @@ keep_awake = false
         let partial: PartialConfig = toml::from_str(toml_str).unwrap();
         assert!(partial.claude.path.is_none());
         assert!(partial.paths.prompt.is_none());
-        assert!(partial.paths.specs.is_none());
         assert!(partial.logging.level.is_none());
         assert!(partial.behavior.iterations.is_none());
         assert!(partial.behavior.keep_awake.is_none());
@@ -922,7 +884,6 @@ iterations = 3
         let partial: PartialConfig = toml::from_str(toml_str).unwrap();
         assert!(partial.claude.path.is_none());
         assert_eq!(partial.paths.prompt, Some("./custom-prompt.md".to_string()));
-        assert!(partial.paths.specs.is_none());
         assert_eq!(partial.behavior.iterations, Some(3));
         assert!(partial.behavior.keep_awake.is_none());
     }
@@ -958,7 +919,6 @@ foo = "bar"
 
         assert_eq!(merged.claude.path, global.claude.path);
         assert_eq!(merged.paths.prompt, global.paths.prompt);
-        assert_eq!(merged.paths.specs, global.paths.specs);
         assert_eq!(merged.logging.level, global.logging.level);
         assert_eq!(merged.behavior.iterations, global.behavior.iterations);
         assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
@@ -973,7 +933,6 @@ foo = "bar"
             },
             paths: PartialPathsConfig {
                 prompt: Some("./proj-prompt.md".to_string()),
-                specs: Some("./proj-specs".to_string()),
             },
             logging: PartialLoggingConfig {
                 level: Some("debug".to_string()),
@@ -981,7 +940,6 @@ foo = "bar"
             behavior: PartialBehaviorConfig {
                 iterations: Some(5),
                 keep_awake: Some(false),
-                mode: None,
                 bd_path: None,
                 heartbeat_interval: None,
                 stale_threshold: None,
@@ -992,7 +950,6 @@ foo = "bar"
 
         assert_eq!(merged.claude.path, "/custom/claude");
         assert_eq!(merged.paths.prompt, "./proj-prompt.md");
-        assert_eq!(merged.paths.specs, "./proj-specs");
         assert_eq!(merged.logging.level, "debug");
         assert_eq!(merged.behavior.iterations, 5);
         assert!(!merged.behavior.keep_awake);
@@ -1019,7 +976,6 @@ iterations = 3
 
         // Inherited fields
         assert_eq!(merged.claude.path, global.claude.path);
-        assert_eq!(merged.paths.specs, global.paths.specs);
         assert_eq!(merged.logging.level, global.logging.level);
         assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
     }
@@ -1063,13 +1019,11 @@ iterations = 3
             },
             paths: PartialPathsConfig {
                 prompt: Some("./p.md".to_string()),
-                specs: None,
             },
             logging: PartialLoggingConfig { level: None },
             behavior: PartialBehaviorConfig {
                 iterations: Some(5),
                 keep_awake: None,
-                mode: None,
                 bd_path: None,
                 heartbeat_interval: None,
                 stale_threshold: None,
@@ -1081,7 +1035,6 @@ iterations = 3
 
         assert_eq!(deserialized.claude.path, Some("/custom/claude".to_string()));
         assert_eq!(deserialized.paths.prompt, Some("./p.md".to_string()));
-        assert!(deserialized.paths.specs.is_none());
         assert!(deserialized.logging.level.is_none());
         assert_eq!(deserialized.behavior.iterations, Some(5));
         assert!(deserialized.behavior.keep_awake.is_none());

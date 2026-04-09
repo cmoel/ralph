@@ -14,13 +14,10 @@ use crate::app::App;
 use crate::config::{Config, PartialConfig, save_config, save_partial_config};
 use crate::get_file_mtime;
 use crate::ui::centered_rect;
-use crate::validators::{
-    validate_directory_exists, validate_executable_path, validate_file_exists,
-};
+use crate::validators::{validate_executable_path, validate_file_exists};
 
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
-pub const MODE_OPTIONS: &[&str] = &["specs", "beads"];
 
 /// Which tab is active in the config modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,11 +31,9 @@ pub enum ConfigTab {
 pub struct TabFormState {
     pub claude_path: String,
     pub prompt_file: String,
-    pub specs_dir: String,
     pub log_level_index: usize,
     pub iterations: i32,
     pub keep_awake: bool,
-    pub mode_index: usize,
     pub cursor_pos: usize,
     pub error: Option<String>,
     pub validation_errors: HashMap<ConfigModalField, String>,
@@ -51,11 +46,9 @@ pub struct TabFormState {
 pub enum ConfigModalField {
     ClaudePath,
     PromptFile,
-    SpecsDirectory,
     LogLevel,
     Iterations,
     KeepAwake,
-    Mode,
     SaveButton,
     CancelButton,
 }
@@ -64,12 +57,10 @@ impl ConfigModalField {
     pub fn next(self) -> Self {
         match self {
             Self::ClaudePath => Self::PromptFile,
-            Self::PromptFile => Self::SpecsDirectory,
-            Self::SpecsDirectory => Self::LogLevel,
+            Self::PromptFile => Self::LogLevel,
             Self::LogLevel => Self::Iterations,
             Self::Iterations => Self::KeepAwake,
-            Self::KeepAwake => Self::Mode,
-            Self::Mode => Self::SaveButton,
+            Self::KeepAwake => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
         }
@@ -79,12 +70,10 @@ impl ConfigModalField {
         match self {
             Self::ClaudePath => Self::CancelButton,
             Self::PromptFile => Self::ClaudePath,
-            Self::SpecsDirectory => Self::PromptFile,
-            Self::LogLevel => Self::SpecsDirectory,
+            Self::LogLevel => Self::PromptFile,
             Self::Iterations => Self::LogLevel,
             Self::KeepAwake => Self::Iterations,
-            Self::Mode => Self::KeepAwake,
-            Self::SaveButton => Self::Mode,
+            Self::SaveButton => Self::KeepAwake,
             Self::CancelButton => Self::SaveButton,
         }
     }
@@ -113,19 +102,12 @@ impl TabFormState {
             .position(|&l| l == config.logging.level)
             .unwrap_or(2);
 
-        let mode_index = MODE_OPTIONS
-            .iter()
-            .position(|&m| m == config.behavior.mode)
-            .unwrap_or(0);
-
         Self {
             claude_path: config.claude.path.clone(),
             prompt_file: config.paths.prompt.clone(),
-            specs_dir: config.paths.specs.clone(),
             log_level_index,
             iterations: config.behavior.iterations,
             keep_awake: config.behavior.keep_awake,
-            mode_index,
             cursor_pos: config.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -144,9 +126,6 @@ impl TabFormState {
         if partial.paths.prompt.is_some() {
             explicit_fields.insert(ConfigModalField::PromptFile);
         }
-        if partial.paths.specs.is_some() {
-            explicit_fields.insert(ConfigModalField::SpecsDirectory);
-        }
         if partial.logging.level.is_some() {
             explicit_fields.insert(ConfigModalField::LogLevel);
         }
@@ -156,9 +135,6 @@ impl TabFormState {
         if partial.behavior.keep_awake.is_some() {
             explicit_fields.insert(ConfigModalField::KeepAwake);
         }
-        if partial.behavior.mode.is_some() {
-            explicit_fields.insert(ConfigModalField::Mode);
-        }
 
         // Display merged values (so inherited fields show their effective value)
         let log_level_index = LOG_LEVELS
@@ -166,19 +142,12 @@ impl TabFormState {
             .position(|&l| l == merged.logging.level)
             .unwrap_or(2);
 
-        let mode_index = MODE_OPTIONS
-            .iter()
-            .position(|&m| m == merged.behavior.mode)
-            .unwrap_or(0);
-
         Self {
             claude_path: merged.claude.path.clone(),
             prompt_file: merged.paths.prompt.clone(),
-            specs_dir: merged.paths.specs.clone(),
             log_level_index,
             iterations: merged.behavior.iterations,
             keep_awake: merged.behavior.keep_awake,
-            mode_index,
             cursor_pos: merged.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -195,7 +164,6 @@ impl TabFormState {
             },
             paths: crate::config::PathsConfig {
                 prompt: self.prompt_file.clone(),
-                specs: self.specs_dir.clone(),
             },
             logging: crate::config::LoggingConfig {
                 level: self.selected_log_level().to_string(),
@@ -204,7 +172,6 @@ impl TabFormState {
         };
         config.behavior.iterations = self.iterations;
         config.behavior.keep_awake = self.keep_awake;
-        config.behavior.mode = self.selected_mode().to_string();
         config
     }
 
@@ -221,14 +188,6 @@ impl TabFormState {
             paths: crate::config::PartialPathsConfig {
                 prompt: if self.explicit_fields.contains(&ConfigModalField::PromptFile) {
                     Some(self.prompt_file.clone())
-                } else {
-                    None
-                },
-                specs: if self
-                    .explicit_fields
-                    .contains(&ConfigModalField::SpecsDirectory)
-                {
-                    Some(self.specs_dir.clone())
                 } else {
                     None
                 },
@@ -251,11 +210,6 @@ impl TabFormState {
                 } else {
                     None
                 },
-                mode: if self.explicit_fields.contains(&ConfigModalField::Mode) {
-                    Some(self.selected_mode().to_string())
-                } else {
-                    None
-                },
                 bd_path: None,
                 heartbeat_interval: None,
                 stale_threshold: None,
@@ -266,10 +220,6 @@ impl TabFormState {
 
     pub fn selected_log_level(&self) -> &'static str {
         LOG_LEVELS[self.log_level_index]
-    }
-
-    pub fn selected_mode(&self) -> &'static str {
-        MODE_OPTIONS[self.mode_index]
     }
 
     /// Check if there are any validation errors.
@@ -357,7 +307,6 @@ impl ConfigModalState {
         match self.focus {
             ConfigModalField::ClaudePath => Some(&form.claude_path),
             ConfigModalField::PromptFile => Some(&form.prompt_file),
-            ConfigModalField::SpecsDirectory => Some(&form.specs_dir),
             _ => None,
         }
     }
@@ -367,11 +316,6 @@ impl ConfigModalState {
     pub fn focus_next(&mut self) {
         let leaving_field = self.focus;
         self.focus = self.focus.next();
-        if self.focus == ConfigModalField::SpecsDirectory
-            && self.active_form().selected_mode() == "beads"
-        {
-            self.focus = self.focus.next();
-        }
         self.update_cursor_for_new_focus();
         self.validate_field(leaving_field);
     }
@@ -381,11 +325,6 @@ impl ConfigModalState {
     pub fn focus_prev(&mut self) {
         let leaving_field = self.focus;
         self.focus = self.focus.prev();
-        if self.focus == ConfigModalField::SpecsDirectory
-            && self.active_form().selected_mode() == "beads"
-        {
-            self.focus = self.focus.prev();
-        }
         self.update_cursor_for_new_focus();
         self.validate_field(leaving_field);
     }
@@ -434,16 +373,6 @@ impl ConfigModalState {
                 form.cursor_pos += 1;
                 true
             }
-            ConfigModalField::SpecsDirectory => {
-                let form = self.active_form_mut();
-                if cursor >= form.specs_dir.len() {
-                    form.specs_dir.push(c);
-                } else {
-                    form.specs_dir.insert(cursor, c);
-                }
-                form.cursor_pos += 1;
-                true
-            }
             _ => false,
         };
         if field_changed {
@@ -468,12 +397,6 @@ impl ConfigModalState {
             ConfigModalField::PromptFile => {
                 let form = self.active_form_mut();
                 form.prompt_file.remove(cursor - 1);
-                form.cursor_pos -= 1;
-                true
-            }
-            ConfigModalField::SpecsDirectory => {
-                let form = self.active_form_mut();
-                form.specs_dir.remove(cursor - 1);
                 form.cursor_pos -= 1;
                 true
             }
@@ -502,15 +425,6 @@ impl ConfigModalState {
                 let form = self.active_form_mut();
                 if cursor < form.prompt_file.len() {
                     form.prompt_file.remove(cursor);
-                    true
-                } else {
-                    false
-                }
-            }
-            ConfigModalField::SpecsDirectory => {
-                let form = self.active_form_mut();
-                if cursor < form.specs_dir.len() {
-                    form.specs_dir.remove(cursor);
                     true
                 } else {
                     false
@@ -578,28 +492,6 @@ impl ConfigModalState {
         self.mark_explicit();
     }
 
-    /// Cycle mode selection backward.
-    pub fn mode_prev(&mut self) {
-        let form = self.active_form_mut();
-        if form.mode_index > 0 {
-            form.mode_index -= 1;
-        } else {
-            form.mode_index = MODE_OPTIONS.len() - 1;
-        }
-        self.mark_explicit();
-    }
-
-    /// Cycle mode selection forward.
-    pub fn mode_next(&mut self) {
-        let form = self.active_form_mut();
-        if form.mode_index < MODE_OPTIONS.len() - 1 {
-            form.mode_index += 1;
-        } else {
-            form.mode_index = 0;
-        }
-        self.mark_explicit();
-    }
-
     /// Increment iterations value (towards positive/larger countdown).
     pub fn iterations_increment(&mut self) {
         let form = self.active_form_mut();
@@ -637,7 +529,6 @@ impl ConfigModalState {
         let error = match field {
             ConfigModalField::ClaudePath => validate_executable_path(&form.claude_path),
             ConfigModalField::PromptFile => validate_file_exists(&form.prompt_file),
-            ConfigModalField::SpecsDirectory => validate_directory_exists(&form.specs_dir),
             _ => None,
         };
 
@@ -778,9 +669,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Char(c) => {
             if matches!(
                 state.focus,
-                ConfigModalField::ClaudePath
-                    | ConfigModalField::PromptFile
-                    | ConfigModalField::SpecsDirectory
+                ConfigModalField::ClaudePath | ConfigModalField::PromptFile
             ) {
                 state.insert_char(c);
             }
@@ -799,7 +688,6 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_decrement(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
-            ConfigModalField::Mode => state.mode_prev(),
             _ => state.cursor_left(),
         },
 
@@ -807,7 +695,6 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_increment(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
-            ConfigModalField::Mode => state.mode_next(),
             _ => state.cursor_right(),
         },
 
@@ -824,7 +711,6 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_increment(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
-            ConfigModalField::Mode => state.mode_prev(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
         },
@@ -833,7 +719,6 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_decrement(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
-            ConfigModalField::Mode => state.mode_next(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
         },
@@ -949,15 +834,9 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Get active form values
     let form = state.map(|s| s.active_form());
-    let mode: &str = if let Some(f) = form {
-        f.selected_mode()
-    } else {
-        app.config.behavior.mode.as_str()
-    };
     let (
         claude_path,
         prompt_file,
-        specs_dir,
         log_level,
         iterations,
         keep_awake,
@@ -965,7 +844,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         focus,
         has_errors,
     ): (
-        &str,
         &str,
         &str,
         &str,
@@ -979,7 +857,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         (
             f.claude_path.as_str(),
             f.prompt_file.as_str(),
-            f.specs_dir.as_str(),
             f.selected_log_level(),
             f.iterations,
             f.keep_awake,
@@ -991,7 +868,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         (
             app.config.claude.path.as_str(),
             app.config.paths.prompt.as_str(),
-            app.config.paths.specs.as_str(),
             app.config.logging.level.as_str(),
             app.config.behavior.iterations,
             app.config.behavior.keep_awake,
@@ -1109,34 +985,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         )));
     }
 
-    // Specs directory field (only relevant in specs mode)
-    if mode != "beads" {
-        let specs_focused = focus == Some(ConfigModalField::SpecsDirectory);
-        let specs_inherited = is_inherited(ConfigModalField::SpecsDirectory);
-        let specs_label_style = if specs_focused {
-            focused_label_style
-        } else {
-            label_style
-        };
-        let mut specs_line = vec![Span::styled("  Specs directory: ", specs_label_style)];
-        specs_line.extend(render_field(
-            specs_dir,
-            specs_focused,
-            cursor_pos,
-            specs_inherited,
-        ));
-        if specs_inherited && !specs_focused {
-            specs_line.push(Span::styled(" (inherited)", label_style));
-        }
-        content.push(Line::from(specs_line));
-        if let Some(error) = get_field_error(ConfigModalField::SpecsDirectory) {
-            content.push(Line::from(Span::styled(
-                format!("                     \u{26a0} {}", error),
-                error_style,
-            )));
-        }
-    }
-
     // Log level dropdown
     let level_focused = focus == Some(ConfigModalField::LogLevel);
     let level_inherited = is_inherited(ConfigModalField::LogLevel);
@@ -1230,43 +1078,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     }
     content.push(Line::from(keep_awake_line));
 
-    // Mode dropdown
-    let mode_focused = focus == Some(ConfigModalField::Mode);
-    let mode_inherited = is_inherited(ConfigModalField::Mode);
-    let mode_label_style = if mode_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let mode_display = if mode_focused {
-        format!("< {} >", mode)
-    } else {
-        mode.to_string()
-    };
-    let mode_value_style = if mode_focused {
-        Style::default().fg(Color::Cyan)
-    } else if mode_inherited {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::White)
-    };
-    let mut mode_line = vec![
-        Span::styled("  Mode:              ", mode_label_style),
-        Span::styled(mode_display, mode_value_style),
-    ];
-    if mode_inherited && !mode_focused {
-        mode_line.push(Span::styled(" (inherited)", label_style));
-    }
-    content.push(Line::from(mode_line));
-
-    // Inline warning when selected mode differs from active mode
-    if mode != app.config.behavior.mode {
-        content.push(Line::from(Span::styled(
-            "                     \u{26a0} Changing mode will reset your work panel",
-            Style::default().fg(Color::Yellow),
-        )));
-    }
-
     content.push(Line::from(""));
 
     // Error message if any
@@ -1339,15 +1150,11 @@ mod tests {
         let field = field.next();
         assert_eq!(field, ConfigModalField::PromptFile);
         let field = field.next();
-        assert_eq!(field, ConfigModalField::SpecsDirectory);
-        let field = field.next();
         assert_eq!(field, ConfigModalField::LogLevel);
         let field = field.next();
         assert_eq!(field, ConfigModalField::Iterations);
         let field = field.next();
         assert_eq!(field, ConfigModalField::KeepAwake);
-        let field = field.next();
-        assert_eq!(field, ConfigModalField::Mode);
         let field = field.next();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.next();
@@ -1373,15 +1180,11 @@ mod tests {
         let field = field.prev();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.prev();
-        assert_eq!(field, ConfigModalField::Mode);
-        let field = field.prev();
         assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::Iterations);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::LogLevel);
-        let field = field.prev();
-        assert_eq!(field, ConfigModalField::SpecsDirectory);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::PromptFile);
         let field = field.prev();
@@ -1402,11 +1205,9 @@ mod tests {
         let all_fields = [
             ConfigModalField::ClaudePath,
             ConfigModalField::PromptFile,
-            ConfigModalField::SpecsDirectory,
             ConfigModalField::LogLevel,
             ConfigModalField::Iterations,
             ConfigModalField::KeepAwake,
-            ConfigModalField::Mode,
             ConfigModalField::SaveButton,
             ConfigModalField::CancelButton,
         ];

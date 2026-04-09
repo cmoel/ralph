@@ -16,27 +16,18 @@ impl App {
     pub fn handle_channel_disconnected(&mut self, worker_idx: usize, exit_code: Option<i32>) {
         self.dirty = true;
         self.workers[worker_idx].output_receiver = None;
-        self.current_spec = None;
+        self.current_bead = None;
         self.workers[worker_idx].run_start_time = None;
         // Release wake lock when no workers are active
         if !self.any_worker_active() {
             self.wake_lock = None;
         }
 
-        // Merge worktree to main on successful completion (before auto-continue check).
-        // In beads mode, skip — worktree persists across children within an epic.
-        if exit_code == Some(0) && self.config.behavior.mode != "beads" {
-            let prev = self.selected_worker;
-            self.selected_worker = worker_idx;
-            self.merge_current_worktree();
-            self.selected_worker = prev;
-        }
-
         // Determine next state based on exit code and iteration control
         match exit_code {
             Some(0) if self.workers[worker_idx].should_auto_continue() => {
-                // In beads mode, skip work check if dolt server is not running
-                if self.config.behavior.mode == "beads" && self.dolt.state != DoltServerState::On {
+                // Skip work check if dolt server is not running
+                if self.dolt.state != DoltServerState::On {
                     self.workers[worker_idx].reset_iteration_state();
                 } else {
                     // Kick off background check_remaining (non-blocking)
@@ -159,13 +150,6 @@ impl App {
                 ));
                 self.workers[w].reset_iteration_state();
                 self.update_derived_status();
-            }
-            WorkRemaining::Missing => {
-                warn!("work_source_missing");
-                self.add_text_line("[Error: work source not found]".to_string());
-                self.workers[w].reset_iteration_state();
-                self.status = AppStatus::Error;
-                self.error_at = Some(Instant::now());
             }
             WorkRemaining::ReadError(e) => {
                 warn!(error = %e, "work_source_read_error");

@@ -27,27 +27,15 @@ pub fn assemble_prompt(
     const CLAUDE_ARGS: &str =
         "--output-format=stream-json --verbose --print --include-partial-messages";
 
-    let mode = &config.behavior.mode;
     let mode_temp_path = {
-        let mut content = templates::mode_content(mode, claimed_bead_id);
+        let mut content = templates::mode_content(claimed_bead_id);
         if let Some(dirty) = dirty_context {
-            match &mut content {
-                Some(c) => {
-                    c.push('\n');
-                    c.push_str(&dirty);
-                }
-                None => {
-                    content = Some(dirty);
-                }
-            }
+            content.push('\n');
+            content.push_str(&dirty);
         }
-        if let Some(c) = content {
-            let path = std::env::temp_dir().join("ralph-mode.md");
-            std::fs::write(&path, c)?;
-            Some(path)
-        } else {
-            None
-        }
+        let path = std::env::temp_dir().join("ralph-mode.md");
+        std::fs::write(&path, &content)?;
+        Some(path)
     };
 
     let command = if let Some(ref mode_path) = mode_temp_path {
@@ -70,14 +58,11 @@ pub fn assemble_prompt(
     Ok(command)
 }
 
-/// In beads mode, claim the next available bead before starting claude.
+/// Claim the next available bead before starting claude.
 /// Reclaims stale beads first (priority over new claims), then falls through
 /// to claiming a new bead if nothing was reclaimed.
 /// Always proceeds — if no bead is claimed, Claude starts claimless for admin work.
 pub fn claim_before_start(app: &mut App) {
-    if app.config.behavior.mode != "beads" {
-        return;
-    }
     // Release any previously hooked bead before claiming a new one.
     // Without this, auto-continue overwrites hooked_bead_id and orphans
     // the old bead in in_progress status forever.

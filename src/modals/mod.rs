@@ -9,7 +9,6 @@ mod help;
 mod init;
 mod kanban;
 mod quit;
-mod specs_panel;
 mod tool_allow;
 mod workers_stream;
 
@@ -25,6 +24,5 @@ pub use kanban::{
     fetch_board_data, handle_kanban_input, load_board_config, watch_beads_directory,
 };
 pub use quit::draw_quit_modal;
-pub use specs_panel::{SpecsPanelState, draw_specs_panel, handle_specs_panel_input};
 pub use tool_allow::{ToolAllowModalState, draw_tool_allow_modal, handle_tool_allow_modal_input};
 pub use workers_stream::{WorkersStreamState, draw_workers_stream, handle_workers_stream_input};

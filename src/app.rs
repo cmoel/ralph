@@ -18,11 +18,11 @@ use crate::config::{Config, LoadedConfig, get_project_config_path};
 use crate::doctor;
 use crate::logging::ReloadHandle;
 use crate::modals::{
-    ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
+    ConfigModalState, InitModalState, KanbanBoardState, ToolAllowModalState,
 };
 use crate::output::OutputMessage;
 use crate::wake_lock::WakeLock;
-use crate::work_source::{WorkItem, WorkRemaining, WorkSource, create_work_source};
+use crate::work_source::{BeadsWorkSource, WorkRemaining};
 use crate::{get_file_mtime, logging};
 
 /// Application status states.
@@ -193,10 +193,10 @@ pub struct App {
     pub config_reload_error: Option<String>,
     /// Error message if per-project config reload failed.
     pub project_config_error: Option<String>,
-    /// Name of the currently active spec (from specs/README.md).
-    pub current_spec: Option<String>,
-    /// Last time we polled for the current spec.
-    pub last_spec_poll: Instant,
+    /// Name of the currently active bead (from bd list).
+    pub current_bead: Option<String>,
+    /// Last time we polled for the current bead.
+    pub last_bead_poll: Instant,
     /// Handle for dynamically reloading the log level.
     pub log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     /// Current log level from config (to detect changes on reload).
@@ -205,10 +205,6 @@ pub struct App {
     pub dirty: bool,
     /// State for the config modal form (when open).
     pub config_modal_state: Option<ConfigModalState>,
-    /// Whether the specs panel modal is visible.
-    pub show_specs_panel: bool,
-    /// State for the specs panel modal (when open).
-    pub specs_panel_state: Option<SpecsPanelState>,
     /// Whether the init modal is visible.
     pub show_init_modal: bool,
     /// State for the init modal (when open).
@@ -231,13 +227,11 @@ pub struct App {
     pub tool_panel: ToolPanel,
     /// Whether we're currently in an indented text block (for flush).
     pub in_indented_text: bool,
-    /// Pluggable work source (specs, beads, etc.).
-    pub work_source: Arc<dyn WorkSource>,
-    /// Receiver for background detect_current() result (poll_spec).
-    pub spec_poll_rx: Option<Receiver<Option<String>>>,
-    /// Receiver for background list_items() result (work panel modal).
-    pub work_items_rx: Option<Receiver<Result<Vec<WorkItem>, String>>>,
-    /// Dolt SQL server manager (beads mode only).
+    /// Work source for bead-based workflows.
+    pub work_source: Arc<BeadsWorkSource>,
+    /// Receiver for background detect_current() result (poll_bead).
+    pub bead_poll_rx: Option<Receiver<Option<String>>>,
+    /// Dolt SQL server manager.
     pub dolt: DoltManager,
     /// When the app entered Error state (for auto-clearing the pulsing flash).
     pub error_at: Option<Instant>,
@@ -307,11 +301,9 @@ impl App {
     ) -> Self {
         let current_log_level = loaded_config.config.logging.level.clone();
         let worker_count = loaded_config.config.behavior.workers.max(1) as usize;
-        let work_source = create_work_source(
-            &loaded_config.config.behavior.mode,
-            loaded_config.config.specs_path(),
-            &loaded_config.config.behavior.bd_path,
-        );
+        let work_source = Arc::new(BeadsWorkSource::new(
+            loaded_config.config.behavior.bd_path.clone(),
+        ));
         Self {
             status: AppStatus::Stopped,
             scroll_offset: 0,
@@ -336,15 +328,13 @@ impl App {
             config_reloaded_at: None,
             config_reload_error: None,
             project_config_error: None,
-            current_spec: None,
+            current_bead: None,
             // Initialize to "long ago" so we poll immediately on start
-            last_spec_poll: Instant::now() - Duration::from_secs(10),
+            last_bead_poll: Instant::now() - Duration::from_secs(10),
             log_level_handle,
             current_log_level,
             dirty: true,
             config_modal_state: None,
-            show_specs_panel: false,
-            specs_panel_state: None,
             show_init_modal: false,
             init_modal_state: None,
             show_help_modal: false,
@@ -357,8 +347,7 @@ impl App {
             tool_panel: ToolPanel::new(),
             in_indented_text: false,
             work_source,
-            spec_poll_rx: None,
-            work_items_rx: None,
+            bead_poll_rx: None,
             dolt: DoltManager::new(),
             error_at: None,
             doctor_rx: None,
@@ -402,9 +391,7 @@ impl App {
     /// Validate board column TOML and store any error.
     /// Call after construction to set the initial hint if invalid.
     pub fn validate_board_config(&mut self) {
-        if self.config.behavior.mode == "beads"
-            && let Err(e) = crate::modals::load_board_config()
-        {
+        if let Err(e) = crate::modals::load_board_config() {
             let msg = format!("Board TOML invalid: {e}");
             self.board_config_error = Some(msg.clone());
             self.set_hint(msg);
@@ -546,7 +533,7 @@ impl App {
             self.release_worker_hooked_bead(w);
         }
         self.status = AppStatus::Stopped;
-        self.current_spec = None;
+        self.current_bead = None;
     }
 
     /// Release the currently hooked bead for the selected worker.
@@ -564,16 +551,16 @@ impl App {
         }
     }
 
-    pub fn poll_spec(&mut self) {
+    pub fn poll_bead(&mut self) {
         // Check for completed background detect_current
-        if let Some(rx) = self.spec_poll_rx.take() {
+        if let Some(rx) = self.bead_poll_rx.take() {
             match rx.try_recv() {
                 Ok(result) => {
-                    self.current_spec = result;
+                    self.current_bead = result;
                     self.dirty = true;
                 }
                 Err(TryRecvError::Empty) => {
-                    self.spec_poll_rx = Some(rx); // still running
+                    self.bead_poll_rx = Some(rx); // still running
                     return;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -587,17 +574,17 @@ impl App {
             return;
         }
 
-        // In beads mode, skip if dolt server is not confirmed running
-        if self.config.behavior.mode == "beads" && self.dolt.state != DoltServerState::On {
+        // Skip if dolt server is not confirmed running
+        if self.dolt.state != DoltServerState::On {
             return;
         }
 
         // Throttle: poll every 2 seconds
-        if self.last_spec_poll.elapsed() < Duration::from_secs(2) {
+        if self.last_bead_poll.elapsed() < Duration::from_secs(2) {
             return;
         }
 
-        self.last_spec_poll = Instant::now();
+        self.last_bead_poll = Instant::now();
 
         // Kick off background detect_current
         let (tx, rx) = mpsc::channel();
@@ -605,7 +592,7 @@ impl App {
         std::thread::spawn(move || {
             let _ = tx.send(ws.detect_current());
         });
-        self.spec_poll_rx = Some(rx);
+        self.bead_poll_rx = Some(rx);
     }
 
     pub fn poll_config(&mut self) {
@@ -673,15 +660,10 @@ impl App {
             }
         }
 
-        // Reconstruct work source if mode or specs path changed
-        let new_mode = &reloaded.config.behavior.mode;
-        let new_specs_path = reloaded.config.specs_path();
+        // Reconstruct work source if bd_path changed
         let new_bd_path = &reloaded.config.behavior.bd_path;
-        if new_mode != &self.config.behavior.mode
-            || new_specs_path != self.config.specs_path()
-            || new_bd_path != &self.config.behavior.bd_path
-        {
-            self.work_source = create_work_source(new_mode, new_specs_path, new_bd_path);
+        if new_bd_path != &self.config.behavior.bd_path {
+            self.work_source = Arc::new(BeadsWorkSource::new(new_bd_path.clone()));
             self.clear_pending_work_ops();
         }
 
@@ -691,32 +673,6 @@ impl App {
 
         if self.config_reload_error.is_none() && self.project_config_error.is_none() {
             self.config_reloaded_at = Some(Instant::now());
-        }
-    }
-
-    /// Poll for background list_items result (work panel modal).
-    pub fn poll_work_items(&mut self) {
-        let rx = match self.work_items_rx.take() {
-            Some(rx) => rx,
-            None => return,
-        };
-
-        match rx.try_recv() {
-            Ok(result) => {
-                self.dirty = true;
-                if let Some(ref mut panel) = self.specs_panel_state {
-                    panel.populate(result);
-                }
-            }
-            Err(TryRecvError::Empty) => {
-                self.work_items_rx = Some(rx); // still running
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.dirty = true;
-                if let Some(ref mut panel) = self.specs_panel_state {
-                    panel.populate(Err("Background fetch failed".to_string()));
-                }
-            }
         }
     }
 
@@ -926,19 +882,15 @@ impl App {
 
     /// Clear all pending background work source operations.
     fn clear_pending_work_ops(&mut self) {
-        self.spec_poll_rx = None;
+        self.bead_poll_rx = None;
         let w = self.selected_worker;
         self.workers[w].pending_work_check = None;
-        self.work_items_rx = None;
         self.dolt.clear();
     }
 
-    /// Poll for Dolt server status (beads mode only, throttled).
+    /// Poll for Dolt server status (throttled).
     pub fn poll_dolt_status(&mut self) {
-        if self
-            .dolt
-            .poll_status(&self.config.behavior.bd_path, &self.config.behavior.mode)
-        {
+        if self.dolt.poll_status(&self.config.behavior.bd_path) {
             self.dirty = true;
         }
     }
@@ -975,8 +927,7 @@ impl App {
 
     /// Toggle Dolt server on/off (beads mode only).
     pub fn toggle_dolt_server(&mut self) {
-        self.dolt
-            .toggle(&self.config.behavior.bd_path, &self.config.behavior.mode);
+        self.dolt.toggle(&self.config.behavior.bd_path);
     }
 
     /// Merge the current worktree branch to main and clean up.

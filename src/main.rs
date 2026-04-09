@@ -13,7 +13,6 @@ mod logging;
 mod modals;
 mod output;
 mod prompt_sniff;
-mod specs;
 mod templates;
 mod tool_history;
 mod tool_panel;
@@ -33,10 +32,9 @@ use crate::config::{
     load_project_config,
 };
 use crate::modals::{
-    ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
-    WorkersStreamState, handle_bead_picker_input, handle_config_modal_input,
-    handle_init_modal_input, handle_kanban_input, handle_specs_panel_input,
-    handle_tool_allow_modal_input, handle_workers_stream_input,
+    ConfigModalState, InitModalState, KanbanBoardState, ToolAllowModalState, WorkersStreamState,
+    handle_bead_picker_input, handle_config_modal_input, handle_init_modal_input,
+    handle_kanban_input, handle_tool_allow_modal_input, handle_workers_stream_input,
 };
 use crate::tool_panel::SelectedPanel;
 use crate::ui::draw_ui;
@@ -308,21 +306,6 @@ fn run_app(
     let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
     app.validate_board_config();
 
-    // Deprecation warning for specs mode
-    if app.config.behavior.mode == "specs" {
-        app.add_text_line(
-            "⚠ Specs mode is deprecated and will be removed in Ralph v2.0. Switch to beads mode in the config modal (c).".to_string()
-        );
-    }
-
-    // Sniff test: warn if PROMPT.md contains mode-mismatched content
-    let prompt_path = app.config.prompt_path();
-    if let Ok(content) = std::fs::read_to_string(&prompt_path) {
-        for warning in prompt_sniff::sniff_prompt(&content, &app.config.behavior.mode) {
-            app.add_text_line(warning);
-        }
-    }
-
     // Run doctor checks asynchronously — only surface failures
     {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -333,15 +316,11 @@ fn run_app(
                 doctor::check_claude(cfg),
                 doctor::check_prompt(cfg),
             ];
-            if cfg.behavior.mode == "beads" {
-                checks.push(doctor::check_bd(cfg));
-                let dolt_check = doctor::check_dolt_status(cfg);
-                let dolt_running = dolt_check.passed;
-                checks.push(dolt_check);
-                if dolt_running {
-                    checks.push(doctor::check_work_items(cfg));
-                }
-            } else {
+            checks.push(doctor::check_bd(cfg));
+            let dolt_check = doctor::check_dolt_status(cfg);
+            let dolt_running = dolt_check.passed;
+            checks.push(dolt_check);
+            if dolt_running {
                 checks.push(doctor::check_work_items(cfg));
             }
             let _ = tx.send(checks);
@@ -360,8 +339,8 @@ fn run_app(
         }
     }
 
-    // Register agent beads for all workers (beads mode only — worktrees created on first loop start)
-    if app.config.behavior.mode == "beads" {
+    // Register agent beads for all workers (worktrees created on first loop start)
+    {
         let bd_path = app.config.behavior.bd_path.clone();
         let heartbeat_interval = app.config.behavior.heartbeat_interval;
         for w in 0..app.workers.len() {
@@ -427,7 +406,6 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
 
         // Poll for background work source operations
         app.poll_work_check();
-        app.poll_work_items();
         app.poll_kanban_items();
         app.poll_bead_detail();
         app.poll_kanban_watcher();
@@ -435,7 +413,7 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
         app.poll_pending_dep();
 
         // Poll for current spec (throttled to every 2 seconds)
-        app.poll_spec();
+        app.poll_bead();
 
         // Poll for Dolt server state (beads mode only)
         // Process toggle results first so stale status polls don't override
@@ -497,14 +475,6 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
             if app.show_config_modal {
                 if let Event::Key(key) = event {
                     handle_config_modal_input(app, key.code, key.modifiers);
-                }
-                continue;
-            }
-
-            // Handle specs panel input
-            if app.show_specs_panel {
-                if let Event::Key(key) = event {
-                    handle_specs_panel_input(app, key.code);
                 }
                 continue;
             }
@@ -627,22 +597,7 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                             Some(ConfigModalState::from_config(&app.config))
                         };
                     }
-                    KeyCode::Char('l') if app.config.behavior.mode == "specs" => {
-                        // Open specs panel (specs mode only)
-                        app.show_specs_panel = true;
-                        app.specs_panel_state = Some(SpecsPanelState::new_loading(
-                            app.work_source.label(),
-                            &app.config.specs_path(),
-                        ));
-                        // Kick off background list_items
-                        let (tx, rx) = mpsc::channel();
-                        let ws = Arc::clone(&app.work_source);
-                        std::thread::spawn(move || {
-                            let _ = tx.send(ws.list_items());
-                        });
-                        app.work_items_rx = Some(rx);
-                    }
-                    KeyCode::Char('B') if app.config.behavior.mode == "beads" => {
+                    KeyCode::Char('B') => {
                         if let Some(err) = &app.board_config_error {
                             app.set_hint(err.clone());
                             continue;
@@ -681,7 +636,7 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                         app.show_help_modal = true;
                     }
                     KeyCode::Char('D') => {
-                        // Toggle Dolt server (beads mode only)
+                        // Toggle Dolt server
                         app.toggle_dolt_server();
                     }
                     KeyCode::Tab => {
@@ -941,18 +896,6 @@ mod tests {
         assert!(command.contains("ralph-mode.md"));
         assert!(command.contains("--output-format=stream-json"));
         assert!(command.contains("--print"));
-    }
-
-    #[test]
-    fn assemble_prompt_unknown_mode_omits_mode_file() {
-        let mut config = crate::config::Config::default();
-        config.behavior.mode = "nonexistent-mode".to_string();
-        let command = execution::assemble_prompt(&config, None, None).unwrap();
-
-        // Should only have PROMPT.md, no mode temp file
-        assert!(command.contains("PROMPT.md"));
-        assert!(!command.contains("ralph-mode.md"));
-        assert!(command.contains("--output-format=stream-json"));
     }
 
     #[test]

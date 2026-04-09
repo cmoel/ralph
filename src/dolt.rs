@@ -40,11 +40,7 @@ impl DoltManager {
     }
 
     /// Poll for Dolt server status (throttled). Returns true if UI should redraw.
-    pub fn poll_status(&mut self, bd_path: &str, mode: &str) -> bool {
-        if mode != "beads" {
-            return false;
-        }
-
+    pub fn poll_status(&mut self, bd_path: &str) -> bool {
         let mut dirty = false;
 
         // Check for completed background status check
@@ -142,12 +138,8 @@ impl DoltManager {
         }
     }
 
-    /// Toggle Dolt server on/off (beads mode only).
-    pub fn toggle(&mut self, bd_path: &str, mode: &str) {
-        if mode != "beads" {
-            return;
-        }
-
+    /// Toggle Dolt server on/off.
+    pub fn toggle(&mut self, bd_path: &str) {
         match self.state {
             DoltServerState::Starting | DoltServerState::Stopping => (),
             DoltServerState::On => {

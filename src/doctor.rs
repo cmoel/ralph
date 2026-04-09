@@ -105,23 +105,15 @@ pub fn check_dolt_status(config: &Config) -> CheckResult {
 
 /// Check that work items exist.
 pub fn check_work_items(config: &Config) -> CheckResult {
-    let source = work_source::create_work_source(
-        &config.behavior.mode,
-        config.specs_path(),
-        &config.behavior.bd_path,
-    );
+    let source = work_source::BeadsWorkSource::new(config.behavior.bd_path.clone());
 
     match source.list_items() {
         Ok(items) if !items.is_empty() => {
             CheckResult::pass(format!("{} work item(s) found", items.len()))
         }
-        Ok(_) => {
-            let fix = match config.behavior.mode.as_str() {
-                "beads" => "create beads with: bd create --title=\"...\"",
-                _ => "add specs to your specs directory",
-            };
-            CheckResult::fail(format!("No work items found — {}", fix))
-        }
+        Ok(_) => CheckResult::fail(
+            "No work items found — create beads with: bd create --title=\"...\"".to_string(),
+        ),
         Err(e) => CheckResult::fail(format!("Could not list work items: {}", e)),
     }
 }
