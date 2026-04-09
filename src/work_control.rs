@@ -132,15 +132,6 @@ impl App {
                 self.workers[w].reset_iteration_state();
                 self.update_derived_status();
             }
-            WorkRemaining::NeedsShaping(count) => {
-                info!(count, "all_ready_beads_need_shaping");
-                self.add_text_line(
-                    "══════════════════ ALL READY BEADS NEED SHAPING ══════════════════"
-                        .to_string(),
-                );
-                self.workers[w].reset_iteration_state();
-                self.update_derived_status();
-            }
             WorkRemaining::HumanOnly(count) => {
                 info!(count, "all_ready_beads_human_only");
                 self.add_text_line(format!(

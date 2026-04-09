@@ -233,21 +233,19 @@ pub fn run_ready(verbose: bool) -> Result<()> {
         let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
         let labels = item.get("labels").and_then(|v| v.as_array());
 
-        let needs_shaping = labels.is_some_and(|ls| {
-            ls.iter().any(|l| {
-                l.as_str()
-                    .is_some_and(|s| work_source::is_shaping_label(s, &[]))
-            })
+        let is_human = labels.is_some_and(|ls| {
+            ls.iter()
+                .any(|l| l.as_str().is_some_and(work_source::is_human_label))
         });
 
         if verbose {
-            if needs_shaping {
-                println!("{}: SKIPPED (needs-shaping) — {}", id, title);
+            if is_human {
+                println!("{}: SKIPPED (human) — {}", id, title);
             } else {
                 println!("{}: READY — {}", id, title);
                 has_implementable = true;
             }
-        } else if !needs_shaping {
+        } else if !is_human {
             println!("{}\t{}", id, title);
             has_implementable = true;
         }
@@ -256,10 +254,10 @@ pub fn run_ready(verbose: bool) -> Result<()> {
     if !has_implementable {
         if verbose {
             println!(
-                "\nAll {} ready bead{} {} shaping.",
+                "\nAll {} ready bead{} {} for humans.",
                 items.len(),
                 if items.len() == 1 { "" } else { "s" },
-                if items.len() == 1 { "needs" } else { "need" }
+                if items.len() == 1 { "is" } else { "are" }
             );
         }
         std::process::exit(1);
@@ -366,7 +364,6 @@ pub fn run_doctor() -> Result<()> {
     checks.push(dolt_check);
     if dolt_running {
         checks.push(doctor::check_work_items(cfg));
-        checks.push(doctor::check_unrecognized_labels(cfg));
     }
 
     let mut all_passed = true;
