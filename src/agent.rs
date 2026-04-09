@@ -1394,6 +1394,26 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
     }
 }
 
+/// Build the `bd create` args for wrapping a standalone bead in an epic.
+fn wrap_create_args(title: &str, priority: i64) -> Vec<String> {
+    vec![
+        "create".into(),
+        "--type=epic".into(),
+        format!("--title={}", title),
+        format!("--priority={}", priority),
+        "--json".into(),
+    ]
+}
+
+/// Build the `bd update` args for reparenting a bead under an epic.
+fn wrap_reparent_args(bead_id: &str, epic_id: &str) -> Vec<String> {
+    vec![
+        "update".into(),
+        bead_id.into(),
+        format!("--parent={}", epic_id),
+    ]
+}
+
 /// Create a wrapper epic for a standalone bead, reparenting it.
 fn wrap_standalone_bead(
     bd_path: &str,
@@ -1401,14 +1421,9 @@ fn wrap_standalone_bead(
     bead_title: &str,
     bead_priority: i64,
 ) -> Option<String> {
+    let create_args = wrap_create_args(bead_title, bead_priority);
     let output = Command::new(bd_path)
-        .args([
-            "create",
-            "--type=epic",
-            &format!("--title={}", bead_title),
-            &format!("--priority={}", bead_priority),
-            "--json",
-        ])
+        .args(&create_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -1425,8 +1440,9 @@ fn wrap_standalone_bead(
     let epic_id = parse_bead_id(&stdout)?;
 
     // Reparent the standalone bead under the new epic
+    let reparent_args = wrap_reparent_args(bead_id, &epic_id);
     let result = Command::new(bd_path)
-        .args(["update", bead_id, &format!("--parent={}", epic_id)])
+        .args(&reparent_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -1770,6 +1786,40 @@ mod tests {
             .filter_map(|b| b.get("id").and_then(|i| i.as_str()))
             .collect();
         assert_eq!(ids, vec!["b2", "b3"]);
+    }
+
+    // --- Standalone bead wrapping command tests ---
+
+    #[test]
+    fn wrap_create_args_produces_epic_create_command() {
+        let args = wrap_create_args("Fix login bug", 1);
+        assert_eq!(
+            args,
+            vec!["create", "--type=epic", "--title=Fix login bug", "--priority=1", "--json"]
+        );
+    }
+
+    #[test]
+    fn wrap_reparent_args_produces_update_parent_command() {
+        let args = wrap_reparent_args("beads-abc", "beads-xyz");
+        assert_eq!(args, vec!["update", "beads-abc", "--parent=beads-xyz"]);
+    }
+
+    #[test]
+    fn parse_bead_id_extracts_id_from_json() {
+        let json = r#"{"id": "beads-abc", "title": "Test"}"#;
+        assert_eq!(parse_bead_id(json), Some("beads-abc".into()));
+    }
+
+    #[test]
+    fn parse_bead_id_returns_none_for_invalid_json() {
+        assert_eq!(parse_bead_id("not json"), None);
+    }
+
+    #[test]
+    fn parse_bead_id_returns_none_for_missing_id() {
+        let json = r#"{"title": "No id field"}"#;
+        assert_eq!(parse_bead_id(json), None);
     }
 
     #[test]
