@@ -58,31 +58,6 @@ pub fn validate_executable_path(path: &str) -> Option<String> {
     }
 }
 
-/// Check if metadata indicates a valid file (pure function).
-/// Returns an error message if validation fails, None if valid.
-fn check_file_metadata(is_file: bool) -> Option<String> {
-    if !is_file {
-        Some("Path is not a file".to_string())
-    } else {
-        None
-    }
-}
-
-/// Validate that a path points to an existing file.
-/// Returns an error message if validation fails, None if valid.
-pub fn validate_file_exists(path: &str) -> Option<String> {
-    if path.is_empty() {
-        return Some("Path cannot be empty".to_string());
-    }
-
-    let expanded = Config::expand_tilde(path);
-
-    match std::fs::metadata(&expanded) {
-        Ok(metadata) => check_file_metadata(metadata.is_file()),
-        Err(e) => Some(file_error_message(&e)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,20 +102,6 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    // Tests for check_file_metadata (pure function)
-
-    #[test]
-    fn test_check_file_metadata_valid_file() {
-        let result = check_file_metadata(true);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_check_file_metadata_not_a_file() {
-        let result = check_file_metadata(false);
-        assert_eq!(result, Some("Path is not a file".to_string()));
-    }
-
     // Tests for file_error_message (pure function)
 
     #[test]
@@ -160,5 +121,4 @@ mod tests {
         let error = std::io::Error::new(std::io::ErrorKind::Other, "other");
         assert_eq!(file_error_message(&error), "Invalid path");
     }
-
 }

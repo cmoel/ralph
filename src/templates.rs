@@ -160,11 +160,6 @@ Close any beads you complete.
     )
 }
 
-/// Returns prompt content for the beads workflow.
-pub fn mode_content(claimed_bead_id: Option<&str>) -> String {
-    beads_mode_content(claimed_bead_id)
-}
-
 /// Brain dump skill (with YAML frontmatter).
 pub const BRAIN_DUMP_SKILL_MD: &str = r#"---
 name: brain-dump

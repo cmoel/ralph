@@ -14,46 +14,45 @@ use crate::wake_lock;
 
 /// Assemble the prompt content and build the shell command string for Claude CLI.
 ///
-/// Reads PROMPT.md and optional mode-specific content, writes a temp file for mode
-/// content if needed, and returns the full shell command to pipe into Claude.
-/// If `dirty_context` is provided, it is appended to the mode content.
+/// Resolves PROMPT.md from the per-project config dir, falling back to the compiled-in
+/// default. Appends mode-specific content and optional dirty context, writes temp files,
+/// and returns the full shell command to pipe into Claude.
 pub fn assemble_prompt(
     config: &crate::config::Config,
     claimed_bead_id: Option<&str>,
     dirty_context: Option<String>,
 ) -> Result<String> {
-    let prompt_path = config.prompt_path();
     let claude_path = config.claude_path();
     const CLAUDE_ARGS: &str =
         "--output-format=stream-json --verbose --print --include-partial-messages";
 
-    let mode_temp_path = {
-        let mut content = templates::mode_content(claimed_bead_id);
+    // Resolve prompt: per-project config dir PROMPT.md → compiled-in default
+    let prompt_path = if let Some(path) = crate::config::resolve_prompt_path() {
+        path
+    } else {
+        let path = std::env::temp_dir().join("ralph-prompt.md");
+        std::fs::write(&path, templates::PROMPT_MD)?;
+        path
+    };
+
+    let mode_path = {
+        let mut content = templates::beads_mode_content(claimed_bead_id);
         if let Some(dirty) = dirty_context {
             content.push('\n');
             content.push_str(&dirty);
         }
         let path = std::env::temp_dir().join("ralph-mode.md");
         std::fs::write(&path, &content)?;
-        Some(path)
+        path
     };
 
-    let command = if let Some(ref mode_path) = mode_temp_path {
-        format!(
-            "cat {} {} | {} {}",
-            prompt_path.display(),
-            mode_path.display(),
-            claude_path.display(),
-            CLAUDE_ARGS
-        )
-    } else {
-        format!(
-            "cat {} | {} {}",
-            prompt_path.display(),
-            claude_path.display(),
-            CLAUDE_ARGS
-        )
-    };
+    let command = format!(
+        "cat {} {} | {} {}",
+        prompt_path.display(),
+        mode_path.display(),
+        claude_path.display(),
+        CLAUDE_ARGS
+    );
 
     Ok(command)
 }
@@ -166,15 +165,6 @@ pub fn start_command(app: &mut App) -> Result<()> {
     let w = app.selected_worker;
     if app.workers[w].child_process.is_some() {
         // This worker already has a running process
-        return Ok(());
-    }
-
-    // Check if prompt file exists (using config path)
-    let prompt_path = app.config.prompt_path();
-    if !prompt_path.exists() {
-        app.status = AppStatus::Error;
-        app.error_at = Some(std::time::Instant::now());
-        app.add_text_line(format!("Error: {} not found", prompt_path.display()));
         return Ok(());
     }
 

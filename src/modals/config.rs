@@ -14,7 +14,7 @@ use crate::app::App;
 use crate::config::{Config, PartialConfig, save_config, save_partial_config};
 use crate::get_file_mtime;
 use crate::ui::centered_rect;
-use crate::validators::{validate_executable_path, validate_file_exists};
+use crate::validators::validate_executable_path;
 
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
@@ -30,7 +30,6 @@ pub enum ConfigTab {
 #[derive(Debug, Clone)]
 pub struct TabFormState {
     pub claude_path: String,
-    pub prompt_file: String,
     pub log_level_index: usize,
     pub iterations: i32,
     pub keep_awake: bool,
@@ -45,7 +44,6 @@ pub struct TabFormState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfigModalField {
     ClaudePath,
-    PromptFile,
     LogLevel,
     Iterations,
     KeepAwake,
@@ -56,8 +54,7 @@ pub enum ConfigModalField {
 impl ConfigModalField {
     pub fn next(self) -> Self {
         match self {
-            Self::ClaudePath => Self::PromptFile,
-            Self::PromptFile => Self::LogLevel,
+            Self::ClaudePath => Self::LogLevel,
             Self::LogLevel => Self::Iterations,
             Self::Iterations => Self::KeepAwake,
             Self::KeepAwake => Self::SaveButton,
@@ -69,8 +66,7 @@ impl ConfigModalField {
     pub fn prev(self) -> Self {
         match self {
             Self::ClaudePath => Self::CancelButton,
-            Self::PromptFile => Self::ClaudePath,
-            Self::LogLevel => Self::PromptFile,
+            Self::LogLevel => Self::ClaudePath,
             Self::Iterations => Self::LogLevel,
             Self::KeepAwake => Self::Iterations,
             Self::SaveButton => Self::KeepAwake,
@@ -104,7 +100,6 @@ impl TabFormState {
 
         Self {
             claude_path: config.claude.path.clone(),
-            prompt_file: config.paths.prompt.clone(),
             log_level_index,
             iterations: config.behavior.iterations,
             keep_awake: config.behavior.keep_awake,
@@ -122,9 +117,6 @@ impl TabFormState {
 
         if partial.claude.path.is_some() {
             explicit_fields.insert(ConfigModalField::ClaudePath);
-        }
-        if partial.paths.prompt.is_some() {
-            explicit_fields.insert(ConfigModalField::PromptFile);
         }
         if partial.logging.level.is_some() {
             explicit_fields.insert(ConfigModalField::LogLevel);
@@ -144,7 +136,6 @@ impl TabFormState {
 
         Self {
             claude_path: merged.claude.path.clone(),
-            prompt_file: merged.paths.prompt.clone(),
             log_level_index,
             iterations: merged.behavior.iterations,
             keep_awake: merged.behavior.keep_awake,
@@ -162,9 +153,6 @@ impl TabFormState {
                 path: self.claude_path.clone(),
                 args: None,
             },
-            paths: crate::config::PathsConfig {
-                prompt: self.prompt_file.clone(),
-            },
             logging: crate::config::LoggingConfig {
                 level: self.selected_log_level().to_string(),
             },
@@ -181,13 +169,6 @@ impl TabFormState {
             claude: crate::config::PartialClaudeConfig {
                 path: if self.explicit_fields.contains(&ConfigModalField::ClaudePath) {
                     Some(self.claude_path.clone())
-                } else {
-                    None
-                },
-            },
-            paths: crate::config::PartialPathsConfig {
-                prompt: if self.explicit_fields.contains(&ConfigModalField::PromptFile) {
-                    Some(self.prompt_file.clone())
                 } else {
                     None
                 },
@@ -306,7 +287,6 @@ impl ConfigModalState {
         let form = self.active_form();
         match self.focus {
             ConfigModalField::ClaudePath => Some(&form.claude_path),
-            ConfigModalField::PromptFile => Some(&form.prompt_file),
             _ => None,
         }
     }
@@ -363,16 +343,6 @@ impl ConfigModalState {
                 form.cursor_pos += 1;
                 true
             }
-            ConfigModalField::PromptFile => {
-                let form = self.active_form_mut();
-                if cursor >= form.prompt_file.len() {
-                    form.prompt_file.push(c);
-                } else {
-                    form.prompt_file.insert(cursor, c);
-                }
-                form.cursor_pos += 1;
-                true
-            }
             _ => false,
         };
         if field_changed {
@@ -394,12 +364,6 @@ impl ConfigModalState {
                 form.cursor_pos -= 1;
                 true
             }
-            ConfigModalField::PromptFile => {
-                let form = self.active_form_mut();
-                form.prompt_file.remove(cursor - 1);
-                form.cursor_pos -= 1;
-                true
-            }
             _ => false,
         };
         if field_changed {
@@ -416,15 +380,6 @@ impl ConfigModalState {
                 let form = self.active_form_mut();
                 if cursor < form.claude_path.len() {
                     form.claude_path.remove(cursor);
-                    true
-                } else {
-                    false
-                }
-            }
-            ConfigModalField::PromptFile => {
-                let form = self.active_form_mut();
-                if cursor < form.prompt_file.len() {
-                    form.prompt_file.remove(cursor);
                     true
                 } else {
                     false
@@ -528,7 +483,6 @@ impl ConfigModalState {
         let form = self.active_form();
         let error = match field {
             ConfigModalField::ClaudePath => validate_executable_path(&form.claude_path),
-            ConfigModalField::PromptFile => validate_file_exists(&form.prompt_file),
             _ => None,
         };
 
@@ -667,10 +621,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
 
         // Text input handling
         KeyCode::Char(c) => {
-            if matches!(
-                state.focus,
-                ConfigModalField::ClaudePath | ConfigModalField::PromptFile
-            ) {
+            if matches!(state.focus, ConfigModalField::ClaudePath) {
                 state.insert_char(c);
             }
         }
@@ -834,17 +785,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Get active form values
     let form = state.map(|s| s.active_form());
-    let (
-        claude_path,
-        prompt_file,
-        log_level,
-        iterations,
-        keep_awake,
-        cursor_pos,
-        focus,
-        has_errors,
-    ): (
-        &str,
+    let (claude_path, log_level, iterations, keep_awake, cursor_pos, focus, has_errors): (
         &str,
         &str,
         i32,
@@ -856,7 +797,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         let f = s.active_form();
         (
             f.claude_path.as_str(),
-            f.prompt_file.as_str(),
             f.selected_log_level(),
             f.iterations,
             f.keep_awake,
@@ -867,7 +807,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     } else {
         (
             app.config.claude.path.as_str(),
-            app.config.paths.prompt.as_str(),
             app.config.logging.level.as_str(),
             app.config.behavior.iterations,
             app.config.behavior.keep_awake,
@@ -953,32 +892,6 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     }
     content.push(Line::from(path_line));
     if let Some(error) = get_field_error(ConfigModalField::ClaudePath) {
-        content.push(Line::from(Span::styled(
-            format!("                     \u{26a0} {}", error),
-            error_style,
-        )));
-    }
-
-    // Prompt file field
-    let prompt_focused = focus == Some(ConfigModalField::PromptFile);
-    let prompt_inherited = is_inherited(ConfigModalField::PromptFile);
-    let prompt_label_style = if prompt_focused {
-        focused_label_style
-    } else {
-        label_style
-    };
-    let mut prompt_line = vec![Span::styled("  Prompt file:     ", prompt_label_style)];
-    prompt_line.extend(render_field(
-        prompt_file,
-        prompt_focused,
-        cursor_pos,
-        prompt_inherited,
-    ));
-    if prompt_inherited && !prompt_focused {
-        prompt_line.push(Span::styled(" (inherited)", label_style));
-    }
-    content.push(Line::from(prompt_line));
-    if let Some(error) = get_field_error(ConfigModalField::PromptFile) {
         content.push(Line::from(Span::styled(
             format!("                     \u{26a0} {}", error),
             error_style,
@@ -1148,8 +1061,6 @@ mod tests {
     fn test_config_modal_field_next_full_cycle() {
         let field = ConfigModalField::ClaudePath;
         let field = field.next();
-        assert_eq!(field, ConfigModalField::PromptFile);
-        let field = field.next();
         assert_eq!(field, ConfigModalField::LogLevel);
         let field = field.next();
         assert_eq!(field, ConfigModalField::Iterations);
@@ -1186,8 +1097,6 @@ mod tests {
         let field = field.prev();
         assert_eq!(field, ConfigModalField::LogLevel);
         let field = field.prev();
-        assert_eq!(field, ConfigModalField::PromptFile);
-        let field = field.prev();
         assert_eq!(field, ConfigModalField::ClaudePath);
     }
 
@@ -1204,7 +1113,6 @@ mod tests {
     fn test_config_modal_field_next_prev_inverse() {
         let all_fields = [
             ConfigModalField::ClaudePath,
-            ConfigModalField::PromptFile,
             ConfigModalField::LogLevel,
             ConfigModalField::Iterations,
             ConfigModalField::KeepAwake,

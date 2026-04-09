@@ -11,8 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tracing::debug;
 
 use crate::app::App;
-use crate::config::Config;
-use crate::prompt_sniff;
+use crate::config::{self, Config};
 use crate::templates;
 use crate::ui::centered_rect;
 
@@ -23,8 +22,6 @@ pub enum InitFileStatus {
     WillCreate,
     /// File already exists (will be skipped).
     Exists,
-    /// File exists but contains stale content (will be regenerated with backup).
-    Stale,
     /// File exists and will be force-regenerated (reinit mode).
     WillRegenerate,
 }
@@ -75,37 +72,30 @@ pub struct InitModalState {
 
 impl InitModalState {
     /// Create a new init modal state by checking file existence.
-    pub fn new(config: &Config) -> Self {
-        let prompt_path = config.prompt_path();
+    pub fn new(_config: &Config) -> Self {
+        let prompt_path = config::compute_project_config_path()
+            .map(|p| p.with_file_name("PROMPT.md"))
+            .unwrap_or_else(|| PathBuf::from("PROMPT.md"));
+        let prompt_display = prompt_path.to_string_lossy().to_string();
 
-        let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
-
-        files_to_check.push((
-            ".claude/skills/brain-dump/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
-        ));
-        files_to_check.push((
-            ".claude/skills/shape/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/shape/SKILL.md"),
-        ));
+        let files_to_check = vec![
+            (prompt_display, prompt_path),
+            (
+                ".claude/skills/brain-dump/SKILL.md".to_string(),
+                PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
+            ),
+            (
+                ".claude/skills/shape/SKILL.md".to_string(),
+                PathBuf::from(".claude/skills/shape/SKILL.md"),
+            ),
+        ];
         let files = files_to_check
             .into_iter()
             .map(|(display, full)| {
-                let status = if !full.exists() {
-                    InitFileStatus::WillCreate
-                } else if display.ends_with("PROMPT.md") {
-                    // Check if PROMPT.md contains stale specs-mode content
-                    if let Ok(content) = std::fs::read_to_string(&full) {
-                        if !prompt_sniff::sniff_prompt(&content).is_empty() {
-                            InitFileStatus::Stale
-                        } else {
-                            InitFileStatus::Exists
-                        }
-                    } else {
-                        InitFileStatus::Exists
-                    }
-                } else {
+                let status = if full.exists() {
                     InitFileStatus::Exists
+                } else {
+                    InitFileStatus::WillCreate
                 };
                 InitFileEntry {
                     display_path: display,
@@ -166,19 +156,23 @@ impl InitModalState {
 
     /// Create a reinit state: same files as init but marks
     /// existing files as `WillRegenerate` instead of `Exists`.
-    pub fn new_reinit(config: &Config) -> Self {
-        let prompt_path = config.prompt_path();
+    pub fn new_reinit(_config: &Config) -> Self {
+        let prompt_path = config::compute_project_config_path()
+            .map(|p| p.with_file_name("PROMPT.md"))
+            .unwrap_or_else(|| PathBuf::from("PROMPT.md"));
+        let prompt_display = prompt_path.to_string_lossy().to_string();
 
-        let mut files_to_check = vec![(config.paths.prompt.clone(), prompt_path.clone())];
-
-        files_to_check.push((
-            ".claude/skills/brain-dump/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
-        ));
-        files_to_check.push((
-            ".claude/skills/shape/SKILL.md".to_string(),
-            PathBuf::from(".claude/skills/shape/SKILL.md"),
-        ));
+        let files_to_check = vec![
+            (prompt_display, prompt_path),
+            (
+                ".claude/skills/brain-dump/SKILL.md".to_string(),
+                PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
+            ),
+            (
+                ".claude/skills/shape/SKILL.md".to_string(),
+                PathBuf::from(".claude/skills/shape/SKILL.md"),
+            ),
+        ];
 
         let files = files_to_check
             .into_iter()
@@ -212,9 +206,8 @@ impl InitModalState {
                 continue;
             }
 
-            // Backup stale or regenerated files before overwriting
-            if file.status == InitFileStatus::Stale || file.status == InitFileStatus::WillRegenerate
-            {
+            // Backup regenerated files before overwriting
+            if file.status == InitFileStatus::WillRegenerate {
                 let backup_ext = if file.display_path.ends_with(".md") {
                     "md.bak"
                 } else {
@@ -348,11 +341,6 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
                 "—",
                 Style::default().fg(Color::DarkGray),
                 Some(" (exists, skipped)"),
-            ),
-            InitFileStatus::Stale => (
-                "↻",
-                Style::default().fg(Color::Yellow),
-                Some(" (stale, will regenerate)"),
             ),
             InitFileStatus::WillRegenerate => (
                 "↻",

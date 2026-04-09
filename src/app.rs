@@ -17,9 +17,7 @@ use crate::config::reload_config;
 use crate::config::{Config, LoadedConfig, get_project_config_path};
 use crate::doctor;
 use crate::logging::ReloadHandle;
-use crate::modals::{
-    ConfigModalState, InitModalState, KanbanBoardState, ToolAllowModalState,
-};
+use crate::modals::{ConfigModalState, InitModalState, KanbanBoardState, ToolAllowModalState};
 use crate::output::OutputMessage;
 use crate::wake_lock::WakeLock;
 use crate::work_source::{BeadsWorkSource, WorkRemaining};

@@ -76,13 +76,12 @@ pub fn check_bd(config: &Config) -> CheckResult {
     }
 }
 
-/// Check that PROMPT.md exists.
-pub fn check_prompt(config: &Config) -> CheckResult {
-    let path = config.prompt_path();
-    if path.exists() {
-        CheckResult::pass("PROMPT.md found")
+/// Check prompt resolution — per-project PROMPT.md or compiled-in default.
+pub fn check_prompt(_config: &Config) -> CheckResult {
+    if crate::config::resolve_prompt_path().is_some() {
+        CheckResult::pass("PROMPT.md found (per-project override)")
     } else {
-        CheckResult::fail("PROMPT.md not found — run: ralph init")
+        CheckResult::pass("Using compiled-in PROMPT.md")
     }
 }
 
@@ -117,7 +116,6 @@ pub fn check_work_items(config: &Config) -> CheckResult {
         Err(e) => CheckResult::fail(format!("Could not list work items: {}", e)),
     }
 }
-
 
 /// Check that a SessionStart hook running `bd prime` is installed in Claude Code settings.
 pub fn check_bd_prime_hook() -> CheckResult {
@@ -177,7 +175,6 @@ fn settings_has_bd_prime_hook(contents: &str) -> bool {
     false
 }
 
-
 /// Check that the embedded board column TOML parses correctly.
 pub fn check_board_toml() -> CheckResult {
     match crate::modals::load_board_config() {
@@ -226,12 +223,10 @@ mod tests {
     }
 
     #[test]
-    fn check_prompt_fails_when_missing() {
-        let mut config = Config::default();
-        config.paths.prompt = "/nonexistent/PROMPT.md".to_string();
+    fn check_prompt_always_passes() {
+        let config = Config::default();
         let result = check_prompt(&config);
-        assert!(!result.passed);
-        assert!(result.message.contains("ralph init"));
+        assert!(result.passed);
     }
 
     #[test]

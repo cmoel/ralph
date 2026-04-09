@@ -154,8 +154,7 @@ pub fn draw_workers_stream(f: &mut Frame, app: &mut App) {
     f.render_widget(outer_block, modal_area);
 
     if app.workers.is_empty() {
-        let msg = Paragraph::new("No workers running")
-            .style(Style::default().fg(Color::DarkGray));
+        let msg = Paragraph::new("No workers running").style(Style::default().fg(Color::DarkGray));
         f.render_widget(msg, inner_area);
         return;
     }
@@ -163,10 +162,7 @@ pub fn draw_workers_stream(f: &mut Frame, app: &mut App) {
     // Split into left (worker list) and right (output stream)
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(80),
-        ])
+        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
         .split(inner_area);
 
     draw_worker_list(f, app, chunks[0]);
@@ -195,10 +191,7 @@ fn draw_worker_list(f: &mut Frame, app: &App, area: Rect) {
             "○"
         };
 
-        let bead_title = worker
-            .hooked_bead_id
-            .as_deref()
-            .unwrap_or("idle");
+        let bead_title = worker.hooked_bead_id.as_deref().unwrap_or("idle");
 
         let max_title_len = area.width.saturating_sub(6) as usize; // icon + space + index + padding
         let truncated = if bead_title.len() > max_title_len {
@@ -224,10 +217,7 @@ fn draw_worker_list(f: &mut Frame, app: &App, area: Rect) {
             // For selected line, use inverted colors throughout
             Line::from(vec![
                 Span::styled(format!(" {status_icon} "), style),
-                Span::styled(
-                    truncated.to_string(),
-                    style,
-                ),
+                Span::styled(truncated.to_string(), style),
                 // Pad to full width for highlight effect
                 Span::styled(
                     " ".repeat(max_title_len.saturating_sub(truncated.len())),

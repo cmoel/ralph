@@ -12,7 +12,6 @@ mod execution;
 mod logging;
 mod modals;
 mod output;
-mod prompt_sniff;
 mod templates;
 mod tool_history;
 mod tool_panel;
@@ -654,9 +653,8 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                     }
                     KeyCode::Char('w') if !app.workers.is_empty() => {
                         app.show_workers_stream = true;
-                        app.workers_stream_state = Some(WorkersStreamState::new(
-                            app.selected_worker,
-                        ));
+                        app.workers_stream_state =
+                            Some(WorkersStreamState::new(app.selected_worker));
                     }
                     KeyCode::Char('A') if app.tool_panel.selected_panel == SelectedPanel::Tools => {
                         if let Some(idx) = app.tool_panel.selected
@@ -891,8 +889,8 @@ mod tests {
         let config = crate::config::Config::default();
         let command = execution::assemble_prompt(&config, None, None).unwrap();
 
-        // Should pipe PROMPT.md and mode content through Claude CLI
-        assert!(command.contains("PROMPT.md"));
+        // Should pipe prompt and mode content through Claude CLI
+        assert!(command.contains("ralph-prompt.md") || command.contains("PROMPT.md"));
         assert!(command.contains("ralph-mode.md"));
         assert!(command.contains("--output-format=stream-json"));
         assert!(command.contains("--print"));

@@ -40,21 +40,6 @@ impl Default for ClaudeConfig {
     }
 }
 
-/// Path configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PathsConfig {
-    pub prompt: String,
-}
-
-impl Default for PathsConfig {
-    fn default() -> Self {
-        Self {
-            prompt: "./PROMPT.md".to_string(),
-        }
-    }
-}
-
 /// Logging configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -137,8 +122,6 @@ pub struct Config {
     #[serde(default)]
     pub claude: ClaudeConfig,
     #[serde(default)]
-    pub paths: PathsConfig,
-    #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
     pub behavior: BehaviorConfig,
@@ -165,12 +148,6 @@ impl Config {
     pub fn claude_path(&self) -> PathBuf {
         Self::expand_tilde(&self.claude.path)
     }
-
-    /// Get the expanded prompt file path
-    pub fn prompt_path(&self) -> PathBuf {
-        Self::expand_tilde(&self.paths.prompt)
-    }
-
 }
 
 /// Partial Claude CLI configuration for project overrides.
@@ -179,14 +156,6 @@ impl Config {
 pub struct PartialClaudeConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-}
-
-/// Partial path configuration for project overrides.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct PartialPathsConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
 }
 
 /// Partial logging configuration for project overrides.
@@ -222,8 +191,6 @@ pub struct PartialBehaviorConfig {
 pub struct PartialConfig {
     #[serde(skip_serializing_if = "is_partial_claude_empty")]
     pub claude: PartialClaudeConfig,
-    #[serde(skip_serializing_if = "is_partial_paths_empty")]
-    pub paths: PartialPathsConfig,
     #[serde(skip_serializing_if = "is_partial_logging_empty")]
     pub logging: PartialLoggingConfig,
     #[serde(skip_serializing_if = "is_partial_behavior_empty")]
@@ -232,10 +199,6 @@ pub struct PartialConfig {
 
 fn is_partial_claude_empty(c: &PartialClaudeConfig) -> bool {
     c.path.is_none()
-}
-
-fn is_partial_paths_empty(p: &PartialPathsConfig) -> bool {
-    p.prompt.is_none()
 }
 
 fn is_partial_logging_empty(l: &PartialLoggingConfig) -> bool {
@@ -262,13 +225,6 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .clone()
                 .unwrap_or_else(|| global.claude.path.clone()),
             args: None,
-        },
-        paths: PathsConfig {
-            prompt: project
-                .paths
-                .prompt
-                .clone()
-                .unwrap_or_else(|| global.paths.prompt.clone()),
         },
         logging: LoggingConfig {
             level: project
@@ -356,6 +312,19 @@ pub fn compute_project_config_path() -> Option<PathBuf> {
 pub fn get_project_config_path() -> Option<PathBuf> {
     let path = compute_project_config_path()?;
     if path.exists() { Some(path) } else { None }
+}
+
+/// Resolve the per-project PROMPT.md path if the file exists.
+/// Returns the path to `<per-project-config-dir>/PROMPT.md` when present, or None
+/// (meaning the compiled-in default should be used).
+pub fn resolve_prompt_path() -> Option<PathBuf> {
+    let config_path = compute_project_config_path()?;
+    let prompt_path = config_path.with_file_name("PROMPT.md");
+    if prompt_path.exists() {
+        Some(prompt_path)
+    } else {
+        None
+    }
 }
 
 /// Load a per-project config from the given path.
@@ -662,11 +631,6 @@ fn apply_env_overrides(mut config: Config) -> Config {
         config.claude.path = path;
     }
 
-    if let Ok(path) = env::var("RALPH_PROMPT_PATH") {
-        debug!("Overriding paths.prompt from RALPH_PROMPT_PATH");
-        config.paths.prompt = path;
-    }
-
     if let Ok(level) = env::var("RALPH_LOG") {
         debug!("Overriding logging.level from RALPH_LOG");
         config.logging.level = level;
@@ -689,7 +653,6 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.claude.path, "~/.claude/local/claude");
         assert!(config.claude.args.is_none());
-        assert_eq!(config.paths.prompt, "./PROMPT.md");
         assert_eq!(config.logging.level, "info");
     }
 
@@ -711,9 +674,6 @@ mod tests {
 [claude]
 path = "/custom/claude"
 
-[paths]
-prompt = "./custom-prompt.md"
-
 [logging]
 level = "debug"
 "#;
@@ -721,7 +681,6 @@ level = "debug"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.claude.path, "/custom/claude");
         assert!(config.claude.args.is_none());
-        assert_eq!(config.paths.prompt, "./custom-prompt.md");
         assert_eq!(config.logging.level, "debug");
     }
 
@@ -737,8 +696,7 @@ path = "/custom/claude"
         assert_eq!(config.claude.path, "/custom/claude");
         // args should be None since not specified (legacy field)
         assert!(config.claude.args.is_none());
-        // paths and logging should be defaults
-        assert_eq!(config.paths.prompt, "./PROMPT.md");
+        // logging should be defaults
         assert_eq!(config.logging.level, "info");
     }
 
@@ -764,9 +722,6 @@ foo = "bar"
 [claude]
 path = "/custom/claude"
 args = "--output-format=stream-json --verbose"
-
-[paths]
-prompt = "./PROMPT.md"
 "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -776,7 +731,6 @@ prompt = "./PROMPT.md"
             config.claude.args,
             Some("--output-format=stream-json --verbose".to_string())
         );
-        assert_eq!(config.paths.prompt, "./PROMPT.md");
     }
 
     #[test]
@@ -865,7 +819,6 @@ keep_awake = false
         let toml_str = "";
         let partial: PartialConfig = toml::from_str(toml_str).unwrap();
         assert!(partial.claude.path.is_none());
-        assert!(partial.paths.prompt.is_none());
         assert!(partial.logging.level.is_none());
         assert!(partial.behavior.iterations.is_none());
         assert!(partial.behavior.keep_awake.is_none());
@@ -874,16 +827,12 @@ keep_awake = false
     #[test]
     fn test_partial_config_some_fields() {
         let toml_str = r#"
-[paths]
-prompt = "./custom-prompt.md"
-
 [behavior]
 iterations = 3
 "#;
 
         let partial: PartialConfig = toml::from_str(toml_str).unwrap();
         assert!(partial.claude.path.is_none());
-        assert_eq!(partial.paths.prompt, Some("./custom-prompt.md".to_string()));
         assert_eq!(partial.behavior.iterations, Some(3));
         assert!(partial.behavior.keep_awake.is_none());
     }
@@ -891,16 +840,11 @@ iterations = 3
     #[test]
     fn test_partial_config_unknown_keys_ignored() {
         let toml_str = r#"
-[paths]
-prompt = "./p.md"
-unknown = "ignored"
-
 [unknown_section]
 foo = "bar"
 "#;
 
-        let partial: PartialConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(partial.paths.prompt, Some("./p.md".to_string()));
+        let _partial: PartialConfig = toml::from_str(toml_str).unwrap();
     }
 
     #[test]
@@ -908,7 +852,6 @@ foo = "bar"
         let toml_str = "# Project-specific Ralph config — edit with config modal (c)\n";
         let partial: PartialConfig = toml::from_str(toml_str).unwrap();
         assert!(partial.claude.path.is_none());
-        assert!(partial.paths.prompt.is_none());
     }
 
     #[test]
@@ -918,7 +861,6 @@ foo = "bar"
         let merged = merge_config(&global, &partial);
 
         assert_eq!(merged.claude.path, global.claude.path);
-        assert_eq!(merged.paths.prompt, global.paths.prompt);
         assert_eq!(merged.logging.level, global.logging.level);
         assert_eq!(merged.behavior.iterations, global.behavior.iterations);
         assert_eq!(merged.behavior.keep_awake, global.behavior.keep_awake);
@@ -930,9 +872,6 @@ foo = "bar"
         let partial = PartialConfig {
             claude: PartialClaudeConfig {
                 path: Some("/custom/claude".to_string()),
-            },
-            paths: PartialPathsConfig {
-                prompt: Some("./proj-prompt.md".to_string()),
             },
             logging: PartialLoggingConfig {
                 level: Some("debug".to_string()),
@@ -949,7 +888,6 @@ foo = "bar"
         let merged = merge_config(&global, &partial);
 
         assert_eq!(merged.claude.path, "/custom/claude");
-        assert_eq!(merged.paths.prompt, "./proj-prompt.md");
         assert_eq!(merged.logging.level, "debug");
         assert_eq!(merged.behavior.iterations, 5);
         assert!(!merged.behavior.keep_awake);
@@ -960,9 +898,6 @@ foo = "bar"
         let global = Config::default();
         let partial: PartialConfig = toml::from_str(
             r#"
-[paths]
-prompt = "./custom-prompt.md"
-
 [behavior]
 iterations = 3
 "#,
@@ -971,7 +906,6 @@ iterations = 3
         let merged = merge_config(&global, &partial);
 
         // Overridden fields
-        assert_eq!(merged.paths.prompt, "./custom-prompt.md");
         assert_eq!(merged.behavior.iterations, 3);
 
         // Inherited fields
@@ -991,10 +925,6 @@ iterations = 3
     #[test]
     fn test_partial_config_serialize_some_fields() {
         let partial = PartialConfig {
-            paths: PartialPathsConfig {
-                prompt: Some("./custom.md".to_string()),
-                ..Default::default()
-            },
             behavior: PartialBehaviorConfig {
                 iterations: Some(3),
                 ..Default::default()
@@ -1003,10 +933,8 @@ iterations = 3
         };
         let toml_str = toml::to_string_pretty(&partial).unwrap();
         // Should contain only the set fields
-        assert!(toml_str.contains("prompt = \"./custom.md\""));
         assert!(toml_str.contains("iterations = 3"));
         // Should not contain unset fields
-        assert!(!toml_str.contains("specs"));
         assert!(!toml_str.contains("claude"));
         assert!(!toml_str.contains("keep_awake"));
     }
@@ -1016,9 +944,6 @@ iterations = 3
         let partial = PartialConfig {
             claude: PartialClaudeConfig {
                 path: Some("/custom/claude".to_string()),
-            },
-            paths: PartialPathsConfig {
-                prompt: Some("./p.md".to_string()),
             },
             logging: PartialLoggingConfig { level: None },
             behavior: PartialBehaviorConfig {
@@ -1034,7 +959,6 @@ iterations = 3
         let deserialized: PartialConfig = toml::from_str(&toml_str).unwrap();
 
         assert_eq!(deserialized.claude.path, Some("/custom/claude".to_string()));
-        assert_eq!(deserialized.paths.prompt, Some("./p.md".to_string()));
         assert!(deserialized.logging.level.is_none());
         assert_eq!(deserialized.behavior.iterations, Some(5));
         assert!(deserialized.behavior.keep_awake.is_none());
