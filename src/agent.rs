@@ -163,7 +163,7 @@ pub fn claim_next_bead(bd_path: &str, agent_bead_id: &str) -> Option<(String, St
             .is_some_and(|ls| {
                 ls.iter().any(|l| {
                     l.as_str().is_some_and(|s| {
-                        matches!(s, "needs-shaping" | "shaping-required" | "human")
+                        matches!(s, "needs-shaping" | "shaping-required" | "human" | "needs-brain-dump")
                     })
                 })
             });
@@ -298,7 +298,7 @@ fn assess_bead_specification(bd_path: &str, bead_id: &str, agent_bead_id: &str) 
             .output();
 
         let _ = Command::new(bd_path)
-            .args(["human", bead_id, "--reason", &reason])
+            .args(["human", bead_id])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -350,7 +350,32 @@ pub fn release_bead(bd_path: &str, agent_bead_id: &str, bead_id: &str) {
 }
 
 /// Reset a bead's status to open so other agents can pick it up.
+/// Skips the reset if the bead was already closed (e.g. by Claude during the iteration).
 fn reset_bead_to_open(bd_path: &str, bead_id: &str) {
+    // Check current status — don't reopen beads that Claude already closed
+    if let Ok(o) = Command::new(bd_path)
+        .args(["show", bead_id, "--json"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .and_then(|o| if o.status.success() { Ok(o) } else { Err(std::io::ErrorKind::Other.into()) })
+    {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
+            let status = val
+                .as_array()
+                .and_then(|arr| arr.first())
+                .unwrap_or(&val)
+                .get("status")
+                .and_then(|s| s.as_str());
+            if matches!(status, Some("closed")) {
+                info!(bead_id = %bead_id, "bead_already_closed_skipping_reset");
+                return;
+            }
+        }
+    }
+
     let result = Command::new(bd_path)
         .args(["update", bead_id, "--status=open", "--assignee="])
         .stdin(std::process::Stdio::null())
