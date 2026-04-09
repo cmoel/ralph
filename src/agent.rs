@@ -1325,12 +1325,15 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
         }
     }
 
-    // Score epics by priority and ready children count
+    // Score epics by priority and ready children count, skipping stuck epics
     let scored: Vec<ScoredEpic> = groups
         .iter()
         .filter_map(
             |(parent_id, children): (&Option<String>, &Vec<&serde_json::Value>)| {
                 let epic_id = parent_id.as_ref()?;
+                if children.is_empty() {
+                    return None;
+                }
                 let priority = get_bead_priority(bd_path, epic_id);
                 Some(ScoredEpic {
                     epic_id: epic_id.clone(),
@@ -1389,6 +1392,13 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
         }),
         None => {
             warn!(epic_id = %best_epic_id, "epic_claimed_but_no_children_ready");
+            // Release the epic so another agent can pick it up
+            let _ = Command::new(bd_path)
+                .args(["update", &best_epic_id, "--status=open", "--assignee="])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output();
             None
         }
     }
