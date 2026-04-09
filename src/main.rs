@@ -34,8 +34,9 @@ use crate::config::{
 };
 use crate::modals::{
     ConfigModalState, InitModalState, KanbanBoardState, SpecsPanelState, ToolAllowModalState,
-    handle_bead_picker_input, handle_config_modal_input, handle_init_modal_input,
-    handle_kanban_input, handle_specs_panel_input, handle_tool_allow_modal_input,
+    WorkersStreamState, handle_bead_picker_input, handle_config_modal_input,
+    handle_init_modal_input, handle_kanban_input, handle_specs_panel_input,
+    handle_tool_allow_modal_input, handle_workers_stream_input,
 };
 use crate::tool_panel::SelectedPanel;
 use crate::ui::draw_ui;
@@ -558,6 +559,14 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                 continue;
             }
 
+            // Handle workers stream modal input
+            if app.show_workers_stream {
+                if let Event::Key(key) = event {
+                    handle_workers_stream_input(app, key.code, key.modifiers);
+                }
+                continue;
+            }
+
             match event {
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') => {
@@ -687,6 +696,12 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                     }
                     KeyCode::Char('t') => {
                         app.tool_panel.collapsed = !app.tool_panel.collapsed;
+                    }
+                    KeyCode::Char('w') if !app.workers.is_empty() => {
+                        app.show_workers_stream = true;
+                        app.workers_stream_state = Some(WorkersStreamState::new(
+                            app.selected_worker,
+                        ));
                     }
                     KeyCode::Char('A') if app.tool_panel.selected_panel == SelectedPanel::Tools => {
                         if let Some(idx) = app.tool_panel.selected

@@ -12,7 +12,7 @@ use crate::ui::centered_rect;
 /// Draw the help modal.
 pub fn draw_help_modal(f: &mut Frame, _app: &App) {
     let modal_width: u16 = 50;
-    let modal_height: u16 = 25;
+    let modal_height: u16 = 26;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -70,6 +70,11 @@ pub fn draw_help_modal(f: &mut Frame, _app: &App) {
             Span::raw("    "),
             Span::styled("i", key_style),
             Span::styled("  Initialize project", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("w", key_style),
+            Span::styled("  Workers stream", desc_style),
         ]),
         Line::from(vec![
             Span::raw("    "),

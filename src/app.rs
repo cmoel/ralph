@@ -276,6 +276,10 @@ pub struct App {
     pub bead_picker_rx: Option<Receiver<Result<Vec<crate::modals::BeadPickerItem>, String>>>,
     /// Pending dependency: bead ID + direction, waiting for bead picker result.
     pub pending_dep: Option<PendingDep>,
+    /// Whether the workers stream modal is visible.
+    pub show_workers_stream: bool,
+    /// State for the workers stream modal (when open).
+    pub workers_stream_state: Option<crate::modals::WorkersStreamState>,
     /// Per-worker state. Currently always exactly one worker.
     pub workers: Vec<Worker>,
     /// Index into `workers` for the currently selected/active worker.
@@ -373,6 +377,8 @@ impl App {
             bead_picker_result: None,
             bead_picker_rx: None,
             pending_dep: None,
+            show_workers_stream: false,
+            workers_stream_state: None,
             workers: (0..worker_count).map(Worker::new).collect(),
             selected_worker: 0,
         }
