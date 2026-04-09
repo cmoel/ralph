@@ -56,22 +56,116 @@ impl AppStatus {
 
 use crate::tool_panel::{ContentBlockState, ToolPanel};
 
+/// Per-worker state extracted from App.
+/// App holds a Vec<Worker> — currently always exactly one.
+pub struct Worker {
+    /// Worker index (0-based). Used when N-worker support is added.
+    #[allow(dead_code)]
+    pub id: usize,
+    /// Handle to the running Claude CLI subprocess.
+    pub child_process: Option<Child>,
+    /// Channel receiving stdout/stderr from child process.
+    pub output_receiver: Option<Receiver<OutputMessage>>,
+    /// Git worktree name for this worker (beads mode only).
+    pub worktree_name: Option<String>,
+    /// Git worktree path for this worker (beads mode only).
+    pub worktree_path: Option<PathBuf>,
+    /// Agent bead ID for this worker (beads mode only).
+    pub agent_bead_id: Option<String>,
+    /// Currently hooked bead ID (the bead this worker is working on).
+    pub hooked_bead_id: Option<String>,
+    /// Handle to signal the heartbeat thread to stop.
+    pub heartbeat_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// When the current run started (for elapsed time display).
+    pub run_start_time: Option<Instant>,
+    /// Current iteration number within a run (1-indexed, 0 when stopped).
+    pub current_iteration: u32,
+    /// Total iterations configured for the current run:
+    /// - Negative (-1): Infinite mode
+    /// - Zero (0): Stopped mode (shouldn't start)
+    /// - Positive (N): Countdown mode, runs N iterations
+    pub total_iterations: i32,
+    /// Flag indicating auto-continue should be triggered on next loop iteration.
+    pub auto_continue_pending: bool,
+    /// Completed output lines to display.
+    pub output_lines: Vec<Line<'static>>,
+    /// Tracks content blocks by index during streaming.
+    pub content_blocks: HashMap<usize, ContentBlockState>,
+    /// Current line being accumulated (text that hasn't hit a newline yet).
+    pub current_line: String,
+    /// Receiver for background check_remaining() result (auto-continue).
+    pub pending_work_check: Option<Receiver<(WorkRemaining, &'static str)>>,
+    /// Currently claimed epic ID (the epic this worker is iterating through).
+    pub claimed_epic_id: Option<String>,
+}
+
+impl Worker {
+    /// Create a new worker with the given ID and default state.
+    pub fn new(id: usize) -> Self {
+        Self {
+            id,
+            child_process: None,
+            output_receiver: None,
+            worktree_name: None,
+            worktree_path: None,
+            agent_bead_id: None,
+            hooked_bead_id: None,
+            heartbeat_stop: None,
+            run_start_time: None,
+            current_iteration: 0,
+            total_iterations: 0,
+            auto_continue_pending: false,
+            output_lines: Vec::new(),
+            content_blocks: HashMap::new(),
+            current_line: String::new(),
+            pending_work_check: None,
+            claimed_epic_id: None,
+        }
+    }
+
+    /// Terminate the child process if running.
+    pub fn kill_child(&mut self) {
+        if let Some(mut child) = self.child_process.take() {
+            let pid = child.id();
+            let _ = child.kill();
+            let _ = child.wait();
+            info!(pid, "process_killed");
+        }
+        self.output_receiver = None;
+    }
+
+    /// Reset iteration state when stopping (error, manual stop, or run complete).
+    pub fn reset_iteration_state(&mut self) {
+        self.current_iteration = 0;
+        self.total_iterations = 0;
+    }
+
+    /// Increment iteration counter for auto-continue.
+    pub fn increment_iteration(&mut self) {
+        self.current_iteration += 1;
+    }
+
+    /// Whether auto-continue should fire after a successful run.
+    pub fn should_auto_continue(&self) -> bool {
+        if self.total_iterations < 0 {
+            true
+        } else if self.total_iterations > 0 {
+            self.current_iteration < self.total_iterations as u32
+        } else {
+            false
+        }
+    }
+}
+
 /// Main application state.
 pub struct App {
     pub status: AppStatus,
-    pub output_lines: Vec<Line<'static>>,
     pub scroll_offset: u16,
     pub is_auto_following: bool,
     pub show_already_running_popup: bool,
     pub show_config_modal: bool,
     pub main_pane_height: u16,
     pub main_pane_width: u16,
-    pub child_process: Option<Child>,
-    pub output_receiver: Option<Receiver<OutputMessage>>,
-    /// Tracks content blocks by index during streaming.
-    pub content_blocks: HashMap<usize, ContentBlockState>,
-    /// Current line being accumulated (text that hasn't hit a newline yet).
-    pub current_line: String,
     /// Session ID for this Ralph invocation (always populated).
     pub session_id: String,
     /// Loop counter for logging, incremented each time start_command() is called.
@@ -104,14 +198,10 @@ pub struct App {
     pub log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     /// Current log level from config (to detect changes on reload).
     pub current_log_level: String,
-    /// When the current run started (for elapsed time display).
-    pub run_start_time: Option<Instant>,
     /// Whether the UI needs to be redrawn.
     pub dirty: bool,
     /// State for the config modal form (when open).
     pub config_modal_state: Option<ConfigModalState>,
-    /// Flag indicating auto-continue should be triggered on next loop iteration.
-    pub auto_continue_pending: bool,
     /// Whether the specs panel modal is visible.
     pub show_specs_panel: bool,
     /// State for the specs panel modal (when open).
@@ -126,13 +216,6 @@ pub struct App {
     pub show_quit_modal: bool,
     /// Transient hint message displayed in the status bar (auto-clears after timeout).
     pub hint: Option<(String, Instant)>,
-    /// Current iteration number within a run (1-indexed, 0 when stopped).
-    pub current_iteration: u32,
-    /// Total iterations configured for the current run:
-    /// - Negative (-1): Infinite mode
-    /// - Zero (0): Stopped mode (shouldn't start)
-    /// - Positive (N): Countdown mode, runs N iterations
-    pub total_iterations: i32,
     /// Cumulative token count (input + output) across all exchanges in the session.
     pub cumulative_tokens: u64,
     /// Exchange counter within the current session (incremented on each Result event).
@@ -149,8 +232,6 @@ pub struct App {
     pub work_source: Arc<dyn WorkSource>,
     /// Receiver for background detect_current() result (poll_spec).
     pub spec_poll_rx: Option<Receiver<Option<String>>>,
-    /// Receiver for background check_remaining() result (auto-continue).
-    pub pending_work_check: Option<Receiver<(WorkRemaining, &'static str)>>,
     /// Receiver for background list_items() result (work panel modal).
     pub work_items_rx: Option<Receiver<Result<Vec<WorkItem>, String>>>,
     /// Dolt SQL server manager (beads mode only).
@@ -167,18 +248,6 @@ pub struct App {
     pub show_tool_allow_modal: bool,
     /// State for the tool allow modal (when open).
     pub tool_allow_modal_state: Option<ToolAllowModalState>,
-    /// Agent bead ID for this ralph instance (beads mode only).
-    pub agent_bead_id: Option<String>,
-    /// Git worktree name for this ralph instance (beads mode only).
-    pub worktree_name: Option<String>,
-    /// Git worktree path for this ralph instance (beads mode only).
-    pub worktree_path: Option<PathBuf>,
-    /// Handle to the heartbeat thread (so we can signal it to stop).
-    pub heartbeat_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
-    /// Currently hooked bead ID (the bead this agent is working on).
-    pub hooked_bead_id: Option<String>,
-    /// Currently claimed epic ID (the epic this agent is iterating through).
-    pub claimed_epic_id: Option<String>,
     /// Resolved repository path for tool history tracking.
     pub repo_path: String,
     /// Whether the kanban board modal is visible.
@@ -207,6 +276,10 @@ pub struct App {
     pub bead_picker_rx: Option<Receiver<Result<Vec<crate::modals::BeadPickerItem>, String>>>,
     /// Pending dependency: bead ID + direction, waiting for bead picker result.
     pub pending_dep: Option<PendingDep>,
+    /// Per-worker state. Currently always exactly one worker.
+    pub workers: Vec<Worker>,
+    /// Index into `workers` for the currently selected/active worker.
+    pub selected_worker: usize,
 }
 
 /// Tracks a pending dependency addition while the bead picker is open.
@@ -233,17 +306,12 @@ impl App {
         );
         Self {
             status: AppStatus::Stopped,
-            output_lines: Vec::new(),
             scroll_offset: 0,
             is_auto_following: true,
             show_already_running_popup: false,
             show_config_modal: false,
             main_pane_height: 0,
             main_pane_width: 0,
-            child_process: None,
-            output_receiver: None,
-            content_blocks: HashMap::new(),
-            current_line: String::new(),
             session_id,
             loop_count: 0,
             log_directory,
@@ -265,10 +333,8 @@ impl App {
             last_spec_poll: Instant::now() - Duration::from_secs(10),
             log_level_handle,
             current_log_level,
-            run_start_time: None,
             dirty: true,
             config_modal_state: None,
-            auto_continue_pending: false,
             show_specs_panel: false,
             specs_panel_state: None,
             show_init_modal: false,
@@ -276,8 +342,6 @@ impl App {
             show_help_modal: false,
             show_quit_modal: false,
             hint: None,
-            current_iteration: 0,
-            total_iterations: 0,
             cumulative_tokens: 0,
             exchange_count: 0,
             last_tool_used: None,
@@ -286,7 +350,6 @@ impl App {
             in_indented_text: false,
             work_source,
             spec_poll_rx: None,
-            pending_work_check: None,
             work_items_rx: None,
             dolt: DoltManager::new(),
             error_at: None,
@@ -295,12 +358,6 @@ impl App {
             tool_call_sequence: 0,
             show_tool_allow_modal: false,
             tool_allow_modal_state: None,
-            agent_bead_id: None,
-            worktree_name: None,
-            worktree_path: None,
-            heartbeat_stop: None,
-            hooked_bead_id: None,
-            claimed_epic_id: None,
             repo_path: crate::db::detect_repo_path(),
             show_kanban_board: false,
             kanban_board_state: None,
@@ -315,7 +372,21 @@ impl App {
             bead_picker_result: None,
             bead_picker_rx: None,
             pending_dep: None,
+            workers: vec![Worker::new(0)],
+            selected_worker: 0,
         }
+    }
+
+    /// Returns a reference to the currently selected worker.
+    #[allow(dead_code)]
+    pub fn worker(&self) -> &Worker {
+        &self.workers[self.selected_worker]
+    }
+
+    /// Returns a mutable reference to the currently selected worker.
+    #[allow(dead_code)]
+    pub fn worker_mut(&mut self) -> &mut Worker {
+        &mut self.workers[self.selected_worker]
     }
 
     /// Validate board column TOML and store any error.
@@ -338,9 +409,10 @@ impl App {
             return cached;
         }
         // Include both completed lines and the current partial line
-        let mut content: Vec<Line> = self.output_lines.to_vec();
-        if !self.current_line.is_empty() {
-            content.push(Line::raw(&self.current_line));
+        let w = self.selected_worker;
+        let mut content: Vec<Line> = self.workers[w].output_lines.to_vec();
+        if !self.workers[w].current_line.is_empty() {
+            content.push(Line::raw(&self.workers[w].current_line));
         }
         let paragraph = Paragraph::new(content)
             .block(Block::default().borders(Borders::ALL))
@@ -377,7 +449,8 @@ impl App {
 
     /// Adds a styled line to the output.
     pub fn add_line(&mut self, line: Line<'static>) {
-        self.output_lines.push(line);
+        let w = self.selected_worker;
+        self.workers[w].output_lines.push(line);
         self.cached_visual_line_count = None;
         if self.is_auto_following {
             self.scroll_to_bottom();
@@ -393,13 +466,14 @@ impl App {
     /// Used for assistant text which should be indented under the header.
     pub fn append_indented_text(&mut self, text: &str) {
         self.in_indented_text = true;
+        let w = self.selected_worker;
         for ch in text.chars() {
             if ch == '\n' {
                 // Flush current line to output (with indentation prefix)
-                let line = std::mem::take(&mut self.current_line);
+                let line = std::mem::take(&mut self.workers[w].current_line);
                 self.add_text_line(format!("  {}", line));
             } else {
-                self.current_line.push(ch);
+                self.workers[w].current_line.push(ch);
             }
         }
         // Update display with partial line if auto-following
@@ -411,8 +485,9 @@ impl App {
     /// Flushes any remaining text in current_line to output.
     /// Uses indentation if we're in an indented text block.
     pub fn flush_current_line(&mut self) {
-        if !self.current_line.is_empty() {
-            let line = std::mem::take(&mut self.current_line);
+        let w = self.selected_worker;
+        if !self.workers[w].current_line.is_empty() {
+            let line = std::mem::take(&mut self.workers[w].current_line);
             self.cached_visual_line_count = None;
             if self.in_indented_text {
                 self.add_text_line(format!("  {}", line));
@@ -421,16 +496,6 @@ impl App {
             }
         }
         self.in_indented_text = false;
-    }
-
-    pub fn kill_child(&mut self) {
-        if let Some(mut child) = self.child_process.take() {
-            let pid = child.id();
-            let _ = child.kill();
-            let _ = child.wait();
-            info!(pid, "process_killed");
-        }
-        self.output_receiver = None;
     }
 
     /// Auto-revert from Error to Stopped after a timeout.
@@ -465,17 +530,20 @@ impl App {
             return;
         }
         info!("manual_stop");
-        self.kill_child();
+        let w = self.selected_worker;
+        self.workers[w].kill_child();
         self.release_hooked_bead();
         self.status = AppStatus::Stopped;
         self.current_spec = None;
-        self.run_start_time = None;
+        self.workers[w].run_start_time = None;
     }
 
     /// Release the currently hooked bead (clear hook, reset to open).
     /// Used during stop between iterations. Does not touch agent, worktree, or heartbeat.
     pub fn release_hooked_bead(&mut self) {
-        if let (Some(agent_id), Some(bead_id)) = (&self.agent_bead_id, self.hooked_bead_id.take()) {
+        let w = self.selected_worker;
+        let bead_id = self.workers[w].hooked_bead_id.take();
+        if let (Some(agent_id), Some(bead_id)) = (&self.workers[w].agent_bead_id, bead_id) {
             crate::agent::release_bead(&self.config.behavior.bd_path, agent_id, &bead_id);
         }
     }
@@ -843,7 +911,8 @@ impl App {
     /// Clear all pending background work source operations.
     fn clear_pending_work_ops(&mut self) {
         self.spec_poll_rx = None;
-        self.pending_work_check = None;
+        let w = self.selected_worker;
+        self.workers[w].pending_work_check = None;
         self.work_items_rx = None;
         self.dolt.clear();
     }
@@ -898,7 +967,8 @@ impl App {
     /// Returns true if merge succeeded (or no worktree to merge).
     /// Returns false if a merge conflict stopped the loop.
     pub fn merge_current_worktree(&mut self) -> bool {
-        let Some(ref wt_name) = self.worktree_name else {
+        let w = self.selected_worker;
+        let Some(ref wt_name) = self.workers[w].worktree_name else {
             return true;
         };
 
@@ -906,8 +976,8 @@ impl App {
             let bd_path = self.config.behavior.bd_path.clone();
             let wt_name = wt_name.clone();
             crate::agent::remove_merged_worktree(&bd_path, &wt_name);
-            self.worktree_name = None;
-            self.worktree_path = None;
+            self.workers[w].worktree_name = None;
+            self.workers[w].worktree_path = None;
             true
         } else {
             let bd_path = self.config.behavior.bd_path.clone();
@@ -922,7 +992,7 @@ impl App {
                     "[Merge conflict persists after Claude attempt — filed human bead, stopping]"
                         .into(),
                 );
-                self.reset_iteration_state();
+                self.workers[w].reset_iteration_state();
                 self.status = AppStatus::Stopped;
                 false
             } else if let Some(bead_id) = crate::agent::file_merge_conflict_bead(&bd_path, &wt_name)
@@ -936,7 +1006,7 @@ impl App {
                 true
             } else {
                 self.add_text_line("[Merge conflict — failed to file bead, stopping]".into());
-                self.reset_iteration_state();
+                self.workers[w].reset_iteration_state();
                 self.status = AppStatus::Stopped;
                 false
             }
@@ -949,19 +1019,22 @@ impl App {
         // Release hooked bead first (clear hook + reset to open)
         self.release_hooked_bead();
 
+        let w = self.selected_worker;
         // Signal heartbeat thread to stop
-        if let Some(stop) = &self.heartbeat_stop {
+        if let Some(stop) = &self.workers[w].heartbeat_stop {
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
         }
 
-        if let (Some(agent_id), Some(wt_name)) = (&self.agent_bead_id, &self.worktree_name) {
+        if let (Some(agent_id), Some(wt_name)) =
+            (&self.workers[w].agent_bead_id, &self.workers[w].worktree_name)
+        {
             crate::agent::cleanup(&self.config.behavior.bd_path, agent_id, wt_name);
         }
 
-        self.agent_bead_id = None;
-        self.worktree_name = None;
-        self.worktree_path = None;
-        self.heartbeat_stop = None;
-        self.claimed_epic_id = None;
+        self.workers[w].agent_bead_id = None;
+        self.workers[w].worktree_name = None;
+        self.workers[w].worktree_path = None;
+        self.workers[w].heartbeat_stop = None;
+        self.workers[w].claimed_epic_id = None;
     }
 }

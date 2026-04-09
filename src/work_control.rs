@@ -14,9 +14,10 @@ impl App {
     /// Handle poll_output logic, returning whether auto-continue should be pending.
     pub fn handle_channel_disconnected(&mut self, exit_code: Option<i32>) {
         self.dirty = true;
-        self.output_receiver = None;
+        let w = self.selected_worker;
+        self.workers[w].output_receiver = None;
         self.current_spec = None;
-        self.run_start_time = None;
+        self.workers[w].run_start_time = None;
         // Release wake lock when process ends (drop releases it)
         self.wake_lock = None;
 
@@ -28,10 +29,10 @@ impl App {
 
         // Determine next state based on exit code and iteration control
         match exit_code {
-            Some(0) if self.should_auto_continue() => {
+            Some(0) if self.workers[self.selected_worker].should_auto_continue() => {
                 // In beads mode, skip work check if dolt server is not running
                 if self.config.behavior.mode == "beads" && self.dolt.state != DoltServerState::On {
-                    self.reset_iteration_state();
+                    self.workers[self.selected_worker].reset_iteration_state();
                     self.status = AppStatus::Stopped;
                 } else {
                     // Kick off background check_remaining (non-blocking)
@@ -41,25 +42,25 @@ impl App {
                     std::thread::spawn(move || {
                         let _ = tx.send((ws.check_remaining(), complete_msg));
                     });
-                    self.pending_work_check = Some(rx);
+                    self.workers[self.selected_worker].pending_work_check = Some(rx);
                     self.status = AppStatus::Stopped;
                 }
             }
             Some(0) => {
                 // Countdown exhausted or iterations = 0, just stop
-                self.reset_iteration_state();
+                self.workers[self.selected_worker].reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
             Some(code) => {
                 // Non-zero exit code → Error state
-                self.reset_iteration_state();
+                self.workers[self.selected_worker].reset_iteration_state();
                 self.add_text_line(format!("[Error: process exited with code {}]", code));
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
             }
             None => {
                 // Killed by signal (manual stop) → Stopped state
-                self.reset_iteration_state();
+                self.workers[self.selected_worker].reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
         }
@@ -67,7 +68,8 @@ impl App {
 
     /// Poll for background check_remaining result (auto-continue decision).
     pub fn poll_work_check(&mut self) {
-        let rx = match self.pending_work_check.take() {
+        let w = self.selected_worker;
+        let rx = match self.workers[w].pending_work_check.take() {
             Some(rx) => rx,
             None => return,
         };
@@ -82,7 +84,7 @@ impl App {
                 self.handle_work_remaining(result, complete_msg);
             }
             Err(TryRecvError::Empty) => {
-                self.pending_work_check = Some(rx); // still running
+                self.workers[w].pending_work_check = Some(rx); // still running
             }
             Err(TryRecvError::Disconnected) => {
                 self.handle_work_remaining(
@@ -95,17 +97,18 @@ impl App {
 
     /// Process a check_remaining result for auto-continue decisions.
     fn handle_work_remaining(&mut self, result: WorkRemaining, complete_msg: &str) {
+        let w = self.selected_worker;
         match result {
             WorkRemaining::Yes => {
                 info!(
-                    current = self.current_iteration,
-                    total = self.total_iterations,
+                    current = self.workers[w].current_iteration,
+                    total = self.workers[w].total_iterations,
                     "auto_continue"
                 );
                 self.add_text_line(
                     "══════════════════ AUTO-CONTINUING ══════════════════".to_string(),
                 );
-                self.auto_continue_pending = true;
+                self.workers[w].auto_continue_pending = true;
                 // Don't clear tasks during auto-continue
             }
             WorkRemaining::No => {
@@ -114,7 +117,7 @@ impl App {
                     "══════════════════ {} ══════════════════",
                     complete_msg
                 ));
-                self.reset_iteration_state();
+                self.workers[w].reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
             WorkRemaining::NeedsShaping(count) => {
@@ -123,7 +126,7 @@ impl App {
                     "══════════════════ ALL READY BEADS NEED SHAPING ══════════════════"
                         .to_string(),
                 );
-                self.reset_iteration_state();
+                self.workers[w].reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
             WorkRemaining::HumanOnly(count) => {
@@ -133,47 +136,24 @@ impl App {
                     count,
                     if count == 1 { "bead" } else { "beads" }
                 ));
-                self.reset_iteration_state();
+                self.workers[w].reset_iteration_state();
                 self.status = AppStatus::Stopped;
             }
             WorkRemaining::Missing => {
                 warn!("work_source_missing");
                 self.add_text_line("[Error: work source not found]".to_string());
-                self.reset_iteration_state();
+                self.workers[w].reset_iteration_state();
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
             }
             WorkRemaining::ReadError(e) => {
                 warn!(error = %e, "work_source_read_error");
                 self.add_text_line(format!("[Error reading work source: {}]", e));
-                self.reset_iteration_state();
+                self.workers[w].reset_iteration_state();
                 self.status = AppStatus::Error;
                 self.error_at = Some(Instant::now());
             }
         }
-    }
-
-    /// Whether auto-continue should fire after a successful run:
-    /// - Infinite mode (total_iterations < 0): always continue
-    /// - Countdown mode (total_iterations > 0): continue if current < total
-    /// - Stopped mode (total_iterations = 0): never continue
-    fn should_auto_continue(&self) -> bool {
-        if self.total_iterations < 0 {
-            // Infinite mode
-            true
-        } else if self.total_iterations > 0 {
-            // Countdown mode
-            self.current_iteration < self.total_iterations as u32
-        } else {
-            // Stopped mode (shouldn't happen if we got here, but be safe)
-            false
-        }
-    }
-
-    /// Reset iteration state when stopping (error, manual stop, or run complete).
-    pub fn reset_iteration_state(&mut self) {
-        self.current_iteration = 0;
-        self.total_iterations = 0;
     }
 
     /// Start a new iteration run, reading config and setting up iteration tracking.
@@ -186,13 +166,9 @@ impl App {
             return false;
         }
 
-        self.total_iterations = iterations;
-        self.current_iteration = 1;
+        let w = self.selected_worker;
+        self.workers[w].total_iterations = iterations;
+        self.workers[w].current_iteration = 1;
         true
-    }
-
-    /// Increment iteration counter for auto-continue.
-    pub fn increment_iteration(&mut self) {
-        self.current_iteration += 1;
     }
 }

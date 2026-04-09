@@ -84,10 +84,11 @@ fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
 /// Returns false if the merge failed and the loop should stop.
 fn merge_and_refresh_worktree(app: &mut App) -> bool {
     let bd_path = app.config.behavior.bd_path.clone();
+    let w = app.selected_worker;
 
-    let has_epic = app.claimed_epic_id.is_some();
+    let has_epic = app.workers[w].claimed_epic_id.is_some();
     let has_children = has_epic
-        && app
+        && app.workers[w]
             .claimed_epic_id
             .as_ref()
             .is_some_and(|eid| has_ready_children(&bd_path, eid));
@@ -95,12 +96,12 @@ fn merge_and_refresh_worktree(app: &mut App) -> bool {
     match agent::decide_iteration_action(has_epic, has_children) {
         agent::IterationAction::ContinueInEpic => return true,
         agent::IterationAction::CompleteEpicAndMerge => {
-            let epic_id = app.claimed_epic_id.clone().unwrap();
-            let agent_id = app.agent_bead_id.clone().unwrap_or_default();
+            let epic_id = app.workers[w].claimed_epic_id.clone().unwrap();
+            let agent_id = app.workers[w].agent_bead_id.clone().unwrap_or_default();
 
             app.add_text_line(format!("[Completing epic: {}]", epic_id));
             agent::complete_epic(&bd_path, &epic_id);
-            app.claimed_epic_id = None;
+            app.workers[w].claimed_epic_id = None;
 
             let _ = std::process::Command::new(&bd_path)
                 .args(["set-state", &agent_id, "epic=none"])
@@ -118,11 +119,12 @@ fn merge_and_refresh_worktree(app: &mut App) -> bool {
     }
 
     // Clear stale worktree state if path no longer exists on disk
-    if let Some(ref path) = app.worktree_path
+    let w = app.selected_worker;
+    if let Some(ref path) = app.workers[w].worktree_path
         && !path.exists()
     {
-        app.worktree_name = None;
-        app.worktree_path = None;
+        app.workers[w].worktree_name = None;
+        app.workers[w].worktree_path = None;
     }
 
     // Worktree will be created after claim_before_start selects a new epic
@@ -132,13 +134,14 @@ fn merge_and_refresh_worktree(app: &mut App) -> bool {
 /// Ensure a worktree exists for the current epic.
 /// Called after claim_before_start selects an epic, since worktree name = epic_id.
 fn ensure_worktree(app: &mut App) -> bool {
-    if app.worktree_path.is_some() {
+    let w = app.selected_worker;
+    if app.workers[w].worktree_path.is_some() {
         return true;
     }
 
-    let worktree_name = if let Some(ref epic_id) = app.claimed_epic_id {
+    let worktree_name = if let Some(ref epic_id) = app.workers[w].claimed_epic_id {
         epic_id.clone()
-    } else if let Some(ref agent_id) = app.agent_bead_id {
+    } else if let Some(ref agent_id) = app.workers[w].agent_bead_id {
         agent_id.clone()
     } else {
         return true;
@@ -146,12 +149,12 @@ fn ensure_worktree(app: &mut App) -> bool {
 
     let bd_path = app.config.behavior.bd_path.clone();
     if let Some((new_name, new_path)) = agent::create_or_reuse_worktree(&bd_path, &worktree_name) {
-        app.worktree_name = Some(new_name);
-        app.worktree_path = Some(new_path);
+        app.workers[w].worktree_name = Some(new_name);
+        app.workers[w].worktree_path = Some(new_path);
         true
     } else {
         app.add_text_line("[Failed to create worktree — stopping.]".into());
-        app.reset_iteration_state();
+        app.workers[w].reset_iteration_state();
         app.status = AppStatus::Stopped;
         false
     }
@@ -364,8 +367,9 @@ fn run_app(
             let heartbeat_interval = app.config.behavior.heartbeat_interval;
             let stop =
                 agent::start_heartbeat(bd_path, setup.agent_bead_id.clone(), heartbeat_interval);
-            app.agent_bead_id = Some(setup.agent_bead_id);
-            app.heartbeat_stop = Some(stop);
+            let w = app.selected_worker;
+            app.workers[w].agent_bead_id = Some(setup.agent_bead_id);
+            app.workers[w].heartbeat_stop = Some(stop);
         } else {
             app.add_text_line("[Agent registration failed — running without worktree]".to_string());
         }
@@ -374,7 +378,7 @@ fn run_app(
     let result = run_event_loop(&mut app, &mut terminal);
 
     // Always clean up agent resources, regardless of how we exited
-    app.kill_child();
+    app.workers[app.selected_worker].kill_child();
     app.cleanup_agent();
 
     result
@@ -386,15 +390,15 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
         output::poll_output(app);
 
         // Handle auto-continue if pending
-        if app.auto_continue_pending {
+        if app.workers[app.selected_worker].auto_continue_pending {
             app.dirty = true;
-            app.auto_continue_pending = false;
+            app.workers[app.selected_worker].auto_continue_pending = false;
 
             if !merge_and_refresh_worktree(app) {
                 continue;
             }
 
-            app.increment_iteration();
+            app.workers[app.selected_worker].increment_iteration();
             // In beads mode, claim next bead before continuing
             execution::claim_before_start(app);
             if !ensure_worktree(app) {

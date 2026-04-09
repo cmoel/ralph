@@ -35,7 +35,8 @@ pub fn poll_output(app: &mut App) {
     let mut messages: Vec<OutputMessage> = Vec::new();
     let mut channel_disconnected = false;
 
-    if let Some(rx) = &app.output_receiver {
+    let w = app.selected_worker;
+    if let Some(rx) = &app.workers[w].output_receiver {
         loop {
             match rx.try_recv() {
                 Ok(msg) => messages.push(msg),
@@ -61,9 +62,10 @@ pub fn poll_output(app: &mut App) {
     if channel_disconnected {
         debug!("channel_disconnected");
 
+        let w = app.selected_worker;
         // Try to get exit status from child process
         let (exit_code, exit_status): (Option<i32>, Option<String>) =
-            if let Some(mut child) = app.child_process.take() {
+            if let Some(mut child) = app.workers[w].child_process.take() {
                 match child.try_wait() {
                     Ok(Some(status)) => {
                         if let Some(code) = status.code() {
@@ -91,7 +93,7 @@ pub fn poll_output(app: &mut App) {
                     }
                     Ok(None) => {
                         // Still running, put it back (shouldn't happen if channel disconnected)
-                        app.child_process = Some(child);
+                        app.workers[w].child_process = Some(child);
                         return;
                     }
                     Err(_) => (None, None),
@@ -292,11 +294,12 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
 
 /// Process inner streaming events (unwrapped from stream_event).
 fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
+    let w = app.selected_worker;
     match event {
         StreamInnerEvent::MessageStart(msg) => {
             debug!(?msg, "Message start");
             // Clear content blocks for new message
-            app.content_blocks.clear();
+            app.workers[w].content_blocks.clear();
             // Clear pending tool calls (new assistant turn)
             app.tool_panel.pending_calls.clear();
         }
@@ -314,7 +317,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                 }
             }
 
-            app.content_blocks.insert(index, state);
+            app.workers[w].content_blocks.insert(index, state);
             debug!(index, "Content block started");
         }
         StreamInnerEvent::ContentBlockDelta(delta_event) => {
@@ -323,7 +326,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             match delta_event.delta {
                 Delta::TextDelta { text } => {
                     // Check if we need to show the header (without holding mutable borrow)
-                    let needs_header = app
+                    let needs_header = app.workers[w]
                         .content_blocks
                         .get(&index)
                         .map(|s| !s.header_shown)
@@ -335,7 +338,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
 
                     // Update state in a separate scope to release the borrow
                     {
-                        let state = app.content_blocks.entry(index).or_default();
+                        let state = app.workers[w].content_blocks.entry(index).or_default();
                         state.header_shown = true;
                         state.text.push_str(&text);
                     }
@@ -344,7 +347,7 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
                     app.append_indented_text(&text);
                 }
                 Delta::InputJsonDelta { partial_json } => {
-                    let state = app.content_blocks.entry(index).or_default();
+                    let state = app.workers[w].content_blocks.entry(index).or_default();
                     state.input_json.push_str(&partial_json);
                 }
             }
@@ -354,15 +357,19 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             // Flush any pending text (uses indentation flag automatically)
             app.flush_current_line();
             // Extract data from content block state before mutating app
-            let block_data = app.content_blocks.get(&stop.index).and_then(|state| {
-                state.tool_name.as_ref().map(|name| {
-                    (
-                        name.clone(),
-                        state.tool_use_id.clone(),
-                        state.input_json.clone(),
-                    )
-                })
-            });
+            let block_data =
+                app.workers[w]
+                    .content_blocks
+                    .get(&stop.index)
+                    .and_then(|state| {
+                        state.tool_name.as_ref().map(|name| {
+                            (
+                                name.clone(),
+                                state.tool_use_id.clone(),
+                                state.input_json.clone(),
+                            )
+                        })
+                    });
             // Then process tool_use blocks
             if let Some((tool_name, tool_use_id, input_json)) = block_data {
                 // Register tool_use_id → tool_name mapping for result correlation

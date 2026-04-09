@@ -451,20 +451,21 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     }
 
     // === Stream Panel ===
-    let mut content: Vec<Line> = app.output_lines.to_vec();
-    if !app.current_line.is_empty() {
-        content.push(Line::raw(&app.current_line));
+    let w = app.selected_worker;
+    let mut content: Vec<Line> = app.workers[w].output_lines.to_vec();
+    if !app.workers[w].current_line.is_empty() {
+        content.push(Line::raw(&app.workers[w].current_line));
     }
 
     // Build iteration progress display for bottom title
-    let iteration_display = if app.current_iteration == 0 {
+    let iteration_display = if app.workers[w].current_iteration == 0 {
         None
-    } else if app.total_iterations < 0 {
-        Some(format!("{}/∞", app.current_iteration))
+    } else if app.workers[w].total_iterations < 0 {
+        Some(format!("{}/∞", app.workers[w].current_iteration))
     } else {
         Some(format!(
             "{}/{}",
-            app.current_iteration, app.total_iterations
+            app.workers[w].current_iteration, app.workers[w].total_iterations
         ))
     };
 
@@ -486,7 +487,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         .border_type(app.status.border_type())
         .border_style(Style::default().fg(output_border_color))
         .title(
-            Line::from(if let Some(wt) = &app.worktree_name {
+            Line::from(if let Some(wt) = &app.workers[w].worktree_name {
                 format!(" {} | {} ", app.session_id, wt)
             } else {
                 format!(" {} ", app.session_id)
@@ -551,14 +552,14 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let status_text = match app.status {
         AppStatus::Stopped => "IDLE".to_string(),
         AppStatus::Running => {
-            if let Some(start_time) = app.run_start_time {
+            if let Some(start_time) = app.workers[w].run_start_time {
                 format_elapsed(start_time.elapsed())
             } else {
                 "RUNNING".to_string()
             }
         }
         AppStatus::Error => {
-            if let Some(start_time) = app.run_start_time {
+            if let Some(start_time) = app.workers[w].run_start_time {
                 format_elapsed(start_time.elapsed())
             } else {
                 "ERROR".to_string()

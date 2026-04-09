@@ -83,7 +83,8 @@ pub fn claim_before_start(app: &mut App) {
     // the old bead in in_progress status forever.
     app.release_hooked_bead();
 
-    let agent_id = match &app.agent_bead_id {
+    let w = app.selected_worker;
+    let agent_id = match &app.workers[w].agent_bead_id {
         Some(id) => id.clone(),
         None => return, // no agent registered, skip claiming
     };
@@ -103,7 +104,7 @@ pub fn claim_before_start(app: &mut App) {
                     "[Auto-reclaimed: {} \"{}\"]",
                     first.hooked_bead_id, first.hooked_bead_title
                 ));
-                app.hooked_bead_id = Some(first.hooked_bead_id.clone());
+                app.workers[w].hooked_bead_id = Some(first.hooked_bead_id.clone());
                 // Release remaining stale agents back to open
                 for stale in stale_agents.iter().skip(1) {
                     agent::release_stale_bead(&bd_path, stale);
@@ -136,7 +137,7 @@ pub fn claim_before_start(app: &mut App) {
     }
 
     // If we have an active epic, claim the next child within it
-    if let Some(epic_id) = &app.claimed_epic_id {
+    if let Some(epic_id) = &app.workers[w].claimed_epic_id {
         let epic_id = epic_id.clone();
         match agent::claim_next_child(&bd_path, &agent_id, &epic_id) {
             Some((child_id, child_title)) => {
@@ -144,7 +145,7 @@ pub fn claim_before_start(app: &mut App) {
                     "[Claimed child: {} {} (epic: {})]",
                     child_id, child_title, epic_id
                 ));
-                app.hooked_bead_id = Some(child_id);
+                app.workers[w].hooked_bead_id = Some(child_id);
                 return;
             }
             None => {
@@ -166,8 +167,8 @@ pub fn claim_before_start(app: &mut App) {
                 "[Claimed epic: {} → child: {} {}]",
                 claim.epic_id, claim.child_bead_id, claim.child_title
             ));
-            app.claimed_epic_id = Some(claim.epic_id);
-            app.hooked_bead_id = Some(claim.child_bead_id);
+            app.workers[w].claimed_epic_id = Some(claim.epic_id);
+            app.workers[w].hooked_bead_id = Some(claim.child_bead_id);
         }
         None => {
             app.add_text_line("[No beads available to claim — starting claimless]".to_string());
@@ -195,23 +196,29 @@ pub fn start_command(app: &mut App) -> Result<()> {
     app.loop_count += 1;
     info!(loop_number = app.loop_count, "loop_start");
 
+    let w = app.selected_worker;
+
     // Add divider if not first run
-    if !app.output_lines.is_empty() {
+    if !app.workers[w].output_lines.is_empty() {
         app.add_text_line("─".repeat(40));
     }
 
     // Reset streaming state for new command
-    app.content_blocks.clear();
-    app.current_line.clear();
+    app.workers[w].content_blocks.clear();
+    app.workers[w].current_line.clear();
 
     // Check for dirty worktree (uncommitted changes from previous session)
-    let dirty_context = app
+    let dirty_context = app.workers[w]
         .worktree_path
         .as_deref()
         .and_then(agent::check_worktree_dirty)
         .map(|(status, diff)| agent::build_dirty_worktree_context(&status, &diff));
 
-    let command = assemble_prompt(&app.config, app.hooked_bead_id.as_deref(), dirty_context)?;
+    let command = assemble_prompt(
+        &app.config,
+        app.workers[w].hooked_bead_id.as_deref(),
+        dirty_context,
+    )?;
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(&command)
@@ -219,7 +226,7 @@ pub fn start_command(app: &mut App) -> Result<()> {
         .stderr(Stdio::piped());
 
     // In beads mode, run claude in the worktree directory
-    if let Some(ref wt_path) = app.worktree_path {
+    if let Some(ref wt_path) = app.workers[w].worktree_path {
         cmd.current_dir(wt_path);
     }
 
@@ -279,10 +286,10 @@ pub fn start_command(app: &mut App) -> Result<()> {
                 });
             }
 
-            app.child_process = Some(child);
-            app.output_receiver = Some(rx);
+            app.workers[w].child_process = Some(child);
+            app.workers[w].output_receiver = Some(rx);
             app.status = AppStatus::Running;
-            app.run_start_time = Some(std::time::Instant::now());
+            app.workers[w].run_start_time = Some(std::time::Instant::now());
         }
         Err(e) => {
             app.status = AppStatus::Error;
