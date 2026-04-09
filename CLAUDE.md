@@ -28,10 +28,6 @@ Never use `rm`. To delete a file:
 - Messages are typed enums (exhaustive match required)
 - Logging via tracing with file rotation
 
-## Specs
-
-Read `specs/README.md` before implementing any feature.
-
 ## Testing
 
 See `TESTING.md` for testing philosophy.
