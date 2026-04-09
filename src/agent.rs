@@ -1805,7 +1805,13 @@ mod tests {
         let args = wrap_create_args("Fix login bug", 1);
         assert_eq!(
             args,
-            vec!["create", "--type=epic", "--title=Fix login bug", "--priority=1", "--json"]
+            vec![
+                "create",
+                "--type=epic",
+                "--title=Fix login bug",
+                "--priority=1",
+                "--json"
+            ]
         );
     }
 

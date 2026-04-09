@@ -29,13 +29,23 @@ fn indent_line(line: Line<'static>) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Poll for output from the child process.
+/// Poll for output from all workers' child processes.
 pub fn poll_output(app: &mut App) {
+    let display_worker = app.selected_worker;
+    for w_idx in 0..app.workers.len() {
+        // Temporarily set selected_worker so process_line adds output to the right worker
+        app.selected_worker = w_idx;
+        poll_worker_output(app, w_idx);
+    }
+    app.selected_worker = display_worker;
+}
+
+/// Poll output for a single worker.
+fn poll_worker_output(app: &mut App, w: usize) {
     // First, collect all pending messages
     let mut messages: Vec<OutputMessage> = Vec::new();
     let mut channel_disconnected = false;
 
-    let w = app.selected_worker;
     if let Some(rx) = &app.workers[w].output_receiver {
         loop {
             match rx.try_recv() {
@@ -60,9 +70,8 @@ pub fn poll_output(app: &mut App) {
 
     // Check if the channel disconnected (all senders dropped = readers finished)
     if channel_disconnected {
-        debug!("channel_disconnected");
+        debug!(worker = w, "channel_disconnected");
 
-        let w = app.selected_worker;
         // Try to get exit status from child process
         let (exit_code, exit_status): (Option<i32>, Option<String>) =
             if let Some(mut child) = app.workers[w].child_process.take() {
@@ -70,7 +79,7 @@ pub fn poll_output(app: &mut App) {
                     Ok(Some(status)) => {
                         if let Some(code) = status.code() {
                             if code != 0 {
-                                warn!(exit_code = code, "process_exit_nonzero");
+                                warn!(worker = w, exit_code = code, "process_exit_nonzero");
                             }
                             (Some(code), Some(format!("exit_code={}", code)))
                         } else {
@@ -79,7 +88,7 @@ pub fn poll_output(app: &mut App) {
                             {
                                 use std::os::unix::process::ExitStatusExt;
                                 if let Some(signal) = status.signal() {
-                                    info!(signal, "process_killed_by_signal");
+                                    info!(worker = w, signal, "process_killed_by_signal");
                                     (None, Some(format!("signal={}", signal)))
                                 } else {
                                     (None, Some("unknown".to_string()))
@@ -105,12 +114,13 @@ pub fn poll_output(app: &mut App) {
         // Log loop_end with exit status
         let status_str = exit_status.unwrap_or_else(|| "unknown".to_string());
         info!(
+            worker = w,
             loop_number = app.loop_count,
             exit_status = %status_str,
             "loop_end"
         );
 
-        app.handle_channel_disconnected(exit_code);
+        app.handle_channel_disconnected(w, exit_code);
     }
 }
 
@@ -357,19 +367,18 @@ fn process_stream_event(app: &mut App, event: StreamInnerEvent) {
             // Flush any pending text (uses indentation flag automatically)
             app.flush_current_line();
             // Extract data from content block state before mutating app
-            let block_data =
-                app.workers[w]
-                    .content_blocks
-                    .get(&stop.index)
-                    .and_then(|state| {
-                        state.tool_name.as_ref().map(|name| {
-                            (
-                                name.clone(),
-                                state.tool_use_id.clone(),
-                                state.input_json.clone(),
-                            )
-                        })
-                    });
+            let block_data = app.workers[w]
+                .content_blocks
+                .get(&stop.index)
+                .and_then(|state| {
+                    state.tool_name.as_ref().map(|name| {
+                        (
+                            name.clone(),
+                            state.tool_use_id.clone(),
+                            state.input_json.clone(),
+                        )
+                    })
+                });
             // Then process tool_use blocks
             if let Some((tool_name, tool_use_id, input_json)) = block_data {
                 // Register tool_use_id → tool_name mapping for result correlation

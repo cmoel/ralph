@@ -93,6 +93,8 @@ pub struct BehaviorConfig {
     pub heartbeat_interval: u64,
     /// How long before an agent is considered stale (seconds). Default: 180.
     pub stale_threshold: u64,
+    /// Number of concurrent Claude Code workers to spawn on S press. Default: 1.
+    pub workers: u32,
     /// Legacy field - converted to iterations on load.
     /// `true` becomes `-1` (infinite), `false` becomes `0` (stopped).
     #[serde(skip_serializing, default)]
@@ -108,6 +110,7 @@ impl Default for BehaviorConfig {
             bd_path: "bd".to_string(),
             heartbeat_interval: 30,
             stale_threshold: 180,
+            workers: 1,
             auto_continue: None,
         }
     }
@@ -124,6 +127,11 @@ impl BehaviorConfig {
             // but that's an edge case. Just document that iterations takes precedence.
             // For simplicity, always apply legacy field if present (old configs won't have iterations)
             self.iterations = if auto_continue { -1 } else { 0 };
+        }
+        // Clamp workers to at least 1
+        if self.workers == 0 {
+            tracing::warn!("workers=0 in config, treating as 1");
+            self.workers = 1;
         }
     }
 }
@@ -216,6 +224,8 @@ pub struct PartialBehaviorConfig {
     pub heartbeat_interval: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stale_threshold: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workers: Option<u32>,
 }
 
 /// Project-specific configuration where every field is optional.
@@ -252,6 +262,7 @@ fn is_partial_behavior_empty(b: &PartialBehaviorConfig) -> bool {
         && b.bd_path.is_none()
         && b.heartbeat_interval.is_none()
         && b.stale_threshold.is_none()
+        && b.workers.is_none()
 }
 
 /// Merge a global config with a project-level partial config.
@@ -312,6 +323,7 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .behavior
                 .stale_threshold
                 .unwrap_or(global.behavior.stale_threshold),
+            workers: project.behavior.workers.unwrap_or(global.behavior.workers),
             auto_continue: None,
         },
     }
@@ -324,6 +336,19 @@ pub struct LoadedConfig {
     pub config_path: PathBuf,
     pub project_config_path: Option<PathBuf>,
     pub status: ConfigLoadStatus,
+}
+
+impl LoadedConfig {
+    /// Create a minimal LoadedConfig for tests (no side effects).
+    #[cfg(test)]
+    pub fn default_for_test() -> Self {
+        Self {
+            config: Config::default(),
+            config_path: PathBuf::from("/tmp/test-config.toml"),
+            project_config_path: None,
+            status: ConfigLoadStatus::Created,
+        }
+    }
 }
 
 /// Get the platform-appropriate config directory
@@ -960,6 +985,7 @@ foo = "bar"
                 bd_path: None,
                 heartbeat_interval: None,
                 stale_threshold: None,
+                workers: None,
             },
         };
         let merged = merge_config(&global, &partial);
@@ -1047,6 +1073,7 @@ iterations = 3
                 bd_path: None,
                 heartbeat_interval: None,
                 stale_threshold: None,
+                workers: None,
             },
         };
         let toml_str = toml::to_string_pretty(&partial).unwrap();
@@ -1078,5 +1105,75 @@ iterations = 3
             assert!(path_str.ends_with("config.toml"));
         }
         // If None, config dir can't be determined (CI env) — that's ok
+    }
+
+    #[test]
+    fn workers_default_is_one() {
+        let config = BehaviorConfig::default();
+        assert_eq!(config.workers, 1);
+    }
+
+    #[test]
+    fn workers_parsed_from_toml() {
+        let toml_str = r#"
+[behavior]
+workers = 4
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.behavior.workers, 4);
+    }
+
+    #[test]
+    fn workers_explicit_values() {
+        for n in [1, 2, 4, 8] {
+            let toml_str = format!("[behavior]\nworkers = {}", n);
+            let config: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(config.behavior.workers, n);
+        }
+    }
+
+    #[test]
+    fn workers_zero_normalized_to_one() {
+        let toml_str = r#"
+[behavior]
+workers = 0
+"#;
+        let mut config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.behavior.workers, 0);
+        config.normalize();
+        assert_eq!(config.behavior.workers, 1);
+    }
+
+    #[test]
+    fn workers_missing_defaults_to_one() {
+        let toml_str = r#"
+[behavior]
+iterations = -1
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.behavior.workers, 1);
+    }
+
+    #[test]
+    fn workers_merge_project_overrides_global() {
+        let global = Config::default();
+        let partial = PartialConfig {
+            behavior: PartialBehaviorConfig {
+                workers: Some(3),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let merged = merge_config(&global, &partial);
+        assert_eq!(merged.behavior.workers, 3);
+    }
+
+    #[test]
+    fn workers_merge_project_none_inherits_global() {
+        let mut global = Config::default();
+        global.behavior.workers = 2;
+        let partial = PartialConfig::default();
+        let merged = merge_config(&global, &partial);
+        assert_eq!(merged.behavior.workers, 2);
     }
 }

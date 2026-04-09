@@ -299,6 +299,7 @@ impl App {
         log_level_handle: Option<Arc<Mutex<ReloadHandle>>>,
     ) -> Self {
         let current_log_level = loaded_config.config.logging.level.clone();
+        let worker_count = loaded_config.config.behavior.workers.max(1) as usize;
         let work_source = create_work_source(
             &loaded_config.config.behavior.mode,
             loaded_config.config.specs_path(),
@@ -372,7 +373,7 @@ impl App {
             bead_picker_result: None,
             bead_picker_rx: None,
             pending_dep: None,
-            workers: vec![Worker::new(0)],
+            workers: (0..worker_count).map(Worker::new).collect(),
             selected_worker: 0,
         }
     }
@@ -530,18 +531,24 @@ impl App {
             return;
         }
         info!("manual_stop");
-        let w = self.selected_worker;
-        self.workers[w].kill_child();
-        self.release_hooked_bead();
+        for w in 0..self.workers.len() {
+            self.workers[w].kill_child();
+            self.workers[w].run_start_time = None;
+            self.release_worker_hooked_bead(w);
+        }
         self.status = AppStatus::Stopped;
         self.current_spec = None;
-        self.workers[w].run_start_time = None;
     }
 
-    /// Release the currently hooked bead (clear hook, reset to open).
+    /// Release the currently hooked bead for the selected worker.
     /// Used during stop between iterations. Does not touch agent, worktree, or heartbeat.
     pub fn release_hooked_bead(&mut self) {
         let w = self.selected_worker;
+        self.release_worker_hooked_bead(w);
+    }
+
+    /// Release the hooked bead for a specific worker by index.
+    pub fn release_worker_hooked_bead(&mut self, w: usize) {
         let bead_id = self.workers[w].hooked_bead_id.take();
         if let (Some(agent_id), Some(bead_id)) = (&self.workers[w].agent_bead_id, bead_id) {
             crate::agent::release_bead(&self.config.behavior.bd_path, agent_id, &bead_id);
@@ -1016,25 +1023,124 @@ impl App {
     /// Clean up agent resources on quit (beads mode only).
     /// Full teardown: release bead, stop heartbeat, remove worktree, close agent.
     pub fn cleanup_agent(&mut self) {
-        // Release hooked bead first (clear hook + reset to open)
-        self.release_hooked_bead();
+        for w in 0..self.workers.len() {
+            // Release hooked bead first (clear hook + reset to open)
+            self.release_worker_hooked_bead(w);
 
-        let w = self.selected_worker;
-        // Signal heartbeat thread to stop
-        if let Some(stop) = &self.workers[w].heartbeat_stop {
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            // Signal heartbeat thread to stop
+            if let Some(stop) = &self.workers[w].heartbeat_stop {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+
+            if let (Some(agent_id), Some(wt_name)) = (
+                &self.workers[w].agent_bead_id,
+                &self.workers[w].worktree_name,
+            ) {
+                crate::agent::cleanup(&self.config.behavior.bd_path, agent_id, wt_name);
+            }
+
+            self.workers[w].agent_bead_id = None;
+            self.workers[w].worktree_name = None;
+            self.workers[w].worktree_path = None;
+            self.workers[w].heartbeat_stop = None;
+            self.workers[w].claimed_epic_id = None;
         }
+    }
 
-        if let (Some(agent_id), Some(wt_name)) =
-            (&self.workers[w].agent_bead_id, &self.workers[w].worktree_name)
-        {
-            crate::agent::cleanup(&self.config.behavior.bd_path, agent_id, wt_name);
+    /// Returns true if any worker has a running process or pending output.
+    pub fn any_worker_active(&self) -> bool {
+        self.workers
+            .iter()
+            .any(|w| w.child_process.is_some() || w.output_receiver.is_some())
+    }
+
+    /// Update app status based on aggregate worker state.
+    /// Does not override Error state (auto-clears via timeout).
+    pub fn update_derived_status(&mut self) {
+        if self.status == AppStatus::Error {
+            return;
         }
+        self.status = if self.any_worker_active() {
+            AppStatus::Running
+        } else {
+            AppStatus::Stopped
+        };
+    }
+}
 
-        self.workers[w].agent_bead_id = None;
-        self.workers[w].worktree_name = None;
-        self.workers[w].worktree_path = None;
-        self.workers[w].heartbeat_stop = None;
-        self.workers[w].claimed_epic_id = None;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to build a minimal App with N workers (no side effects).
+    fn app_with_workers(n: u32) -> App {
+        use crate::config::LoadedConfig;
+        let mut loaded = LoadedConfig::default_for_test();
+        loaded.config.behavior.workers = n.max(1);
+        App::new("test".into(), None, loaded, None)
+    }
+
+    #[test]
+    fn worker_count_matches_config() {
+        for n in [1, 2, 4] {
+            let app = app_with_workers(n);
+            assert_eq!(app.workers.len(), n as usize);
+        }
+    }
+
+    #[test]
+    fn worker_ids_are_sequential() {
+        let app = app_with_workers(3);
+        for (i, w) in app.workers.iter().enumerate() {
+            assert_eq!(w.id, i);
+        }
+    }
+
+    #[test]
+    fn default_single_worker() {
+        let app = app_with_workers(1);
+        assert_eq!(app.workers.len(), 1);
+        assert_eq!(app.selected_worker, 0);
+    }
+
+    #[test]
+    fn status_derivation_all_stopped() {
+        let mut app = app_with_workers(3);
+        app.status = AppStatus::Stopped;
+        app.update_derived_status();
+        assert_eq!(app.status, AppStatus::Stopped);
+    }
+
+    #[test]
+    fn status_derivation_one_running() {
+        let mut app = app_with_workers(3);
+        // Simulate one worker having a receiver (active)
+        let (_tx, rx) = std::sync::mpsc::channel::<crate::output::OutputMessage>();
+        app.workers[1].output_receiver = Some(rx);
+        app.status = AppStatus::Stopped;
+        app.update_derived_status();
+        assert_eq!(app.status, AppStatus::Running);
+    }
+
+    #[test]
+    fn status_derivation_does_not_override_error() {
+        let mut app = app_with_workers(2);
+        app.status = AppStatus::Error;
+        app.update_derived_status();
+        assert_eq!(app.status, AppStatus::Error);
+    }
+
+    #[test]
+    fn any_worker_active_false_when_all_idle() {
+        let app = app_with_workers(3);
+        assert!(!app.any_worker_active());
+    }
+
+    #[test]
+    fn any_worker_active_true_with_receiver() {
+        let mut app = app_with_workers(3);
+        let (_tx, rx) = std::sync::mpsc::channel::<crate::output::OutputMessage>();
+        app.workers[2].output_receiver = Some(rx);
+        assert!(app.any_worker_active());
     }
 }

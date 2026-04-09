@@ -359,26 +359,39 @@ fn run_app(
         }
     }
 
-    // Register agent bead (beads mode only — worktree created on first loop start)
+    // Register agent beads for all workers (beads mode only — worktrees created on first loop start)
     if app.config.behavior.mode == "beads" {
         let bd_path = app.config.behavior.bd_path.clone();
-        let sid = app.session_id.clone();
-        if let Some(setup) = agent::register(&bd_path, &sid) {
-            let heartbeat_interval = app.config.behavior.heartbeat_interval;
-            let stop =
-                agent::start_heartbeat(bd_path, setup.agent_bead_id.clone(), heartbeat_interval);
-            let w = app.selected_worker;
-            app.workers[w].agent_bead_id = Some(setup.agent_bead_id);
-            app.workers[w].heartbeat_stop = Some(stop);
-        } else {
-            app.add_text_line("[Agent registration failed — running without worktree]".to_string());
+        let heartbeat_interval = app.config.behavior.heartbeat_interval;
+        for w in 0..app.workers.len() {
+            let sid = if app.workers.len() > 1 {
+                format!("{}-w{}", app.session_id, w)
+            } else {
+                app.session_id.clone()
+            };
+            if let Some(setup) = agent::register(&bd_path, &sid) {
+                let stop = agent::start_heartbeat(
+                    bd_path.clone(),
+                    setup.agent_bead_id.clone(),
+                    heartbeat_interval,
+                );
+                app.workers[w].agent_bead_id = Some(setup.agent_bead_id);
+                app.workers[w].heartbeat_stop = Some(stop);
+            } else {
+                app.add_text_line(format!(
+                    "[Worker {} agent registration failed — running without worktree]",
+                    w
+                ));
+            }
         }
     }
 
     let result = run_event_loop(&mut app, &mut terminal);
 
-    // Always clean up agent resources, regardless of how we exited
-    app.workers[app.selected_worker].kill_child();
+    // Always clean up agent resources for all workers, regardless of how we exited
+    for w in 0..app.workers.len() {
+        app.workers[w].kill_child();
+    }
     app.cleanup_agent();
 
     result
@@ -389,23 +402,27 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
         // Poll for output from child process
         output::poll_output(app);
 
-        // Handle auto-continue if pending
-        if app.workers[app.selected_worker].auto_continue_pending {
-            app.dirty = true;
-            app.workers[app.selected_worker].auto_continue_pending = false;
+        // Handle auto-continue for all workers
+        for w_idx in 0..app.workers.len() {
+            if app.workers[w_idx].auto_continue_pending {
+                app.dirty = true;
+                app.workers[w_idx].auto_continue_pending = false;
+                app.selected_worker = w_idx;
 
-            if !merge_and_refresh_worktree(app) {
-                continue;
-            }
+                if !merge_and_refresh_worktree(app) {
+                    continue;
+                }
 
-            app.workers[app.selected_worker].increment_iteration();
-            // In beads mode, claim next bead before continuing
-            execution::claim_before_start(app);
-            if !ensure_worktree(app) {
-                continue;
+                app.workers[w_idx].increment_iteration();
+                execution::claim_before_start(app);
+                if !ensure_worktree(app) {
+                    continue;
+                }
+                execution::start_command(app)?;
+                app.update_derived_status();
             }
-            execution::start_command(app)?;
         }
+        app.selected_worker = 0;
 
         // Poll for background work source operations
         app.poll_work_check();
@@ -552,20 +569,26 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                     }
                     KeyCode::Char('S') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {
-                            // Start new iteration run (reads config, sets up tracking)
+                            // Start new iteration run for all workers
                             if app.start_iteration_run() {
-                                // Merge previous worktree to main before starting fresh
-                                if !merge_and_refresh_worktree(app) {
-                                    continue;
+                                let worker_count = app.workers.len();
+                                for w in 0..worker_count {
+                                    app.selected_worker = w;
+                                    if !merge_and_refresh_worktree(app) {
+                                        continue;
+                                    }
+                                    execution::claim_before_start(app);
+                                    if !ensure_worktree(app) {
+                                        continue;
+                                    }
+                                    execution::start_command(app)?;
                                 }
-                                // In beads mode, claim a bead before starting
-                                execution::claim_before_start(app);
-                                if !ensure_worktree(app) {
-                                    continue;
+                                app.selected_worker = 0;
+                                // Set status after starting all workers
+                                if app.any_worker_active() {
+                                    app.status = AppStatus::Running;
                                 }
-                                execution::start_command(app)?;
                             }
-                            // If start_iteration_run returns false, iterations = 0, no-op
                         }
                         AppStatus::Running => {
                             app.stop_command();

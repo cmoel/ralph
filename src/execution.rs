@@ -176,10 +176,11 @@ pub fn claim_before_start(app: &mut App) {
     }
 }
 
-/// Start the command.
+/// Start the command for the currently selected worker.
 pub fn start_command(app: &mut App) -> Result<()> {
-    if app.status == AppStatus::Running {
-        app.show_already_running_popup = true;
+    let w = app.selected_worker;
+    if app.workers[w].child_process.is_some() {
+        // This worker already has a running process
         return Ok(());
     }
 
@@ -288,7 +289,6 @@ pub fn start_command(app: &mut App) -> Result<()> {
 
             app.workers[w].child_process = Some(child);
             app.workers[w].output_receiver = Some(rx);
-            app.status = AppStatus::Running;
             app.workers[w].run_start_time = Some(std::time::Instant::now());
         }
         Err(e) => {
