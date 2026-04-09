@@ -56,7 +56,12 @@ impl App {
             Some(code) => {
                 // Non-zero exit code → Error state — stop all workers
                 self.workers[worker_idx].reset_iteration_state();
-                self.add_text_line(format!("[Error: process exited with code {}]", code));
+                if let Some(ref msg) = self.workers[worker_idx].last_result_error {
+                    self.add_text_line(format!("[Error: {}]", msg));
+                } else {
+                    self.add_text_line(format!("[Error: process exited with code {}]", code));
+                }
+                self.workers[worker_idx].last_result_error = None;
                 for w in 0..self.workers.len() {
                     if w != worker_idx && self.workers[w].child_process.is_some() {
                         self.workers[w].kill_child();

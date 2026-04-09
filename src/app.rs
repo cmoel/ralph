@@ -97,6 +97,8 @@ pub struct Worker {
     pub pending_work_check: Option<Receiver<(WorkRemaining, &'static str)>>,
     /// Currently claimed epic ID (the epic this worker is iterating through).
     pub claimed_epic_id: Option<String>,
+    /// Human-readable error from the last result event (e.g. rate limit message).
+    pub last_result_error: Option<String>,
 }
 
 impl Worker {
@@ -120,6 +122,7 @@ impl Worker {
             current_line: String::new(),
             pending_work_check: None,
             claimed_epic_id: None,
+            last_result_error: None,
         }
     }
 
