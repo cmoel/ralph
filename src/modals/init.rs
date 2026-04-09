@@ -8,10 +8,11 @@ use ratatui::layout::Alignment;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use similar::TextDiff;
 use tracing::debug;
 
 use crate::app::App;
-use crate::config::{self, Config};
+use crate::config::Config;
 use crate::templates;
 use crate::ui::centered_rect;
 
@@ -20,9 +21,9 @@ use crate::ui::centered_rect;
 pub enum InitFileStatus {
     /// File will be created (doesn't exist).
     WillCreate,
-    /// File already exists (will be skipped).
+    /// File already exists and matches template (will be skipped).
     Exists,
-    /// File exists and will be force-regenerated (reinit mode).
+    /// File exists and differs from template — will be overwritten.
     WillRegenerate,
 }
 
@@ -35,6 +36,8 @@ pub struct InitFileEntry {
     pub full_path: PathBuf,
     /// Current status.
     pub status: InitFileStatus,
+    /// Unified diff lines (only for WillRegenerate).
+    pub diff_lines: Vec<String>,
 }
 
 /// Which field is focused in the init modal.
@@ -70,37 +73,76 @@ pub struct InitModalState {
     pub success: Option<String>,
 }
 
-impl InitModalState {
-    /// Create a new init modal state by checking file existence.
-    pub fn new(_config: &Config) -> Self {
-        let prompt_path = config::compute_project_config_path()
-            .map(|p| p.with_file_name("PROMPT.md"))
-            .unwrap_or_else(|| PathBuf::from("PROMPT.md"));
-        let prompt_display = prompt_path.to_string_lossy().to_string();
+/// Return the compiled-in template for a skill file path.
+fn template_for_path(display_path: &str) -> Option<&'static str> {
+    if display_path.contains("brain-dump") {
+        Some(templates::BRAIN_DUMP_SKILL_MD)
+    } else if display_path.contains("shape") {
+        Some(templates::SHAPE_SKILL_MD)
+    } else {
+        None
+    }
+}
 
-        let files_to_check = vec![
-            (prompt_display, prompt_path),
-            (
-                ".claude/skills/brain-dump/SKILL.md".to_string(),
-                PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
-            ),
-            (
-                ".claude/skills/shape/SKILL.md".to_string(),
-                PathBuf::from(".claude/skills/shape/SKILL.md"),
-            ),
-        ];
-        let files = files_to_check
+/// Compute unified diff lines between existing content and template.
+fn compute_diff(existing: &str, template: &str) -> Vec<String> {
+    let diff = TextDiff::from_lines(existing, template);
+    let unified = diff
+        .unified_diff()
+        .context_radius(3)
+        .header("current", "template")
+        .to_string();
+    unified.lines().map(|l| l.to_string()).collect()
+}
+
+/// The list of skill files managed by init.
+fn skill_files() -> Vec<(String, PathBuf)> {
+    vec![
+        (
+            ".claude/skills/brain-dump/SKILL.md".to_string(),
+            PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
+        ),
+        (
+            ".claude/skills/shape/SKILL.md".to_string(),
+            PathBuf::from(".claude/skills/shape/SKILL.md"),
+        ),
+    ]
+}
+
+impl InitModalState {
+    /// Create a new init modal state by checking file existence and diffs.
+    ///
+    /// Files that exist and match the template are skipped. Files that exist
+    /// but differ show a unified diff and will be overwritten.
+    pub fn new(_config: &Config) -> Self {
+        let files = skill_files()
             .into_iter()
             .map(|(display, full)| {
-                let status = if full.exists() {
-                    InitFileStatus::Exists
+                if full.exists() {
+                    let existing = std::fs::read_to_string(&full).unwrap_or_default();
+                    let template = template_for_path(&display).unwrap_or("");
+                    if existing == template {
+                        InitFileEntry {
+                            display_path: display,
+                            full_path: full,
+                            status: InitFileStatus::Exists,
+                            diff_lines: vec![],
+                        }
+                    } else {
+                        InitFileEntry {
+                            diff_lines: compute_diff(&existing, template),
+                            display_path: display,
+                            full_path: full,
+                            status: InitFileStatus::WillRegenerate,
+                        }
+                    }
                 } else {
-                    InitFileStatus::WillCreate
-                };
-                InitFileEntry {
-                    display_path: display,
-                    full_path: full,
-                    status,
+                    InitFileEntry {
+                        display_path: display,
+                        full_path: full,
+                        status: InitFileStatus::WillCreate,
+                        diff_lines: vec![],
+                    }
                 }
             })
             .collect();
@@ -154,38 +196,28 @@ impl InitModalState {
             .count()
     }
 
-    /// Create a reinit state: same files as init but marks
-    /// existing files as `WillRegenerate` instead of `Exists`.
+    /// Create a reinit state: forces regeneration of all existing files,
+    /// showing diffs for those that differ from the template.
     pub fn new_reinit(_config: &Config) -> Self {
-        let prompt_path = config::compute_project_config_path()
-            .map(|p| p.with_file_name("PROMPT.md"))
-            .unwrap_or_else(|| PathBuf::from("PROMPT.md"));
-        let prompt_display = prompt_path.to_string_lossy().to_string();
-
-        let files_to_check = vec![
-            (prompt_display, prompt_path),
-            (
-                ".claude/skills/brain-dump/SKILL.md".to_string(),
-                PathBuf::from(".claude/skills/brain-dump/SKILL.md"),
-            ),
-            (
-                ".claude/skills/shape/SKILL.md".to_string(),
-                PathBuf::from(".claude/skills/shape/SKILL.md"),
-            ),
-        ];
-
-        let files = files_to_check
+        let files = skill_files()
             .into_iter()
             .map(|(display, full)| {
-                let status = if full.exists() {
-                    InitFileStatus::WillRegenerate
+                if full.exists() {
+                    let existing = std::fs::read_to_string(&full).unwrap_or_default();
+                    let template = template_for_path(&display).unwrap_or("");
+                    InitFileEntry {
+                        diff_lines: compute_diff(&existing, template),
+                        display_path: display,
+                        full_path: full,
+                        status: InitFileStatus::WillRegenerate,
+                    }
                 } else {
-                    InitFileStatus::WillCreate
-                };
-                InitFileEntry {
-                    display_path: display,
-                    full_path: full,
-                    status,
+                    InitFileEntry {
+                        display_path: display,
+                        full_path: full,
+                        status: InitFileStatus::WillCreate,
+                        diff_lines: vec![],
+                    }
                 }
             })
             .collect();
@@ -201,34 +233,14 @@ impl InitModalState {
     /// Create all files. Returns Ok(()) on success, Err(message) on failure.
     pub fn create_files(&self) -> Result<(), String> {
         for file in &self.files {
-            // Skip files that already exist and are up to date
+            // Skip files that already exist and match the template
             if file.status == InitFileStatus::Exists {
                 continue;
             }
 
-            // Backup regenerated files before overwriting
-            if file.status == InitFileStatus::WillRegenerate {
-                let backup_ext = if file.display_path.ends_with(".md") {
-                    "md.bak"
-                } else {
-                    "bak"
-                };
-                let backup_path = file.full_path.with_extension(backup_ext);
-                std::fs::rename(&file.full_path, &backup_path)
-                    .map_err(|e| format!("Failed to backup {}: {}", file.display_path, e))?;
-            }
-
             // Determine template content based on file path
-            let content =
-                if file.display_path.ends_with("PROMPT.md") || file.display_path == "./PROMPT.md" {
-                    templates::PROMPT_MD
-                } else if file.display_path.contains("brain-dump") {
-                    templates::BRAIN_DUMP_SKILL_MD
-                } else if file.display_path.contains("shape") {
-                    templates::SHAPE_SKILL_MD
-                } else {
-                    return Err(format!("Unknown template for: {}", file.display_path));
-                };
+            let content = template_for_path(&file.display_path)
+                .ok_or_else(|| format!("Unknown template for: {}", file.display_path))?;
 
             // Create parent directories if needed
             if let Some(parent) = file.full_path.parent()
@@ -245,6 +257,20 @@ impl InitModalState {
         }
 
         Ok(())
+    }
+
+    /// Print diffs for all files that will be regenerated (CLI output).
+    pub fn print_diffs(&self) {
+        for file in &self.files {
+            if file.diff_lines.is_empty() {
+                continue;
+            }
+            println!("Changes for {}:", file.display_path);
+            for line in &file.diff_lines {
+                println!("{line}");
+            }
+            println!();
+        }
     }
 }
 
@@ -280,13 +306,24 @@ pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
                 // Disabled when all files already exist
                 if !state.all_exist() {
                     let created = state.create_count();
+                    let regenerated = state.regenerate_count();
                     let skipped = state.skip_count();
                     match state.create_files() {
                         Ok(()) => {
-                            debug!("Project initialized: created {created}, skipped {skipped}");
-                            state.success = Some(format!(
-                                "Created {created} files, skipped {skipped} existing"
-                            ));
+                            let mut parts = Vec::new();
+                            if created > 0 {
+                                parts.push(format!("created {created}"));
+                            }
+                            if regenerated > 0 {
+                                parts.push(format!("updated {regenerated}"));
+                            }
+                            if skipped > 0 {
+                                parts.push(format!("skipped {skipped}"));
+                            }
+                            debug!(
+                                "Project initialized: created {created}, updated {regenerated}, skipped {skipped}"
+                            );
+                            state.success = Some(parts.join(", "));
                             // Close modal after showing success
                             app.show_init_modal = false;
                             app.init_modal_state = None;
@@ -307,15 +344,10 @@ pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
     }
 }
 
+const MAX_DIFF_LINES: usize = 15;
+
 /// Draw the project init modal.
 pub fn draw_init_modal(f: &mut Frame, app: &App) {
-    let modal_width: u16 = 60;
-    let modal_height: u16 = 18;
-    let modal_area = centered_rect(modal_width, modal_height, f.area());
-
-    // Clear the area behind the modal
-    f.render_widget(Clear, modal_area);
-
     let Some(state) = &app.init_modal_state else {
         return;
     };
@@ -328,7 +360,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
     // Title/description
     content.push(Line::from(""));
     content.push(Line::from(Span::styled(
-        "  Initialize project scaffolding:",
+        "  Scaffold skill files:",
         label_style,
     )));
     content.push(Line::from(""));
@@ -340,12 +372,12 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
             InitFileStatus::Exists => (
                 "—",
                 Style::default().fg(Color::DarkGray),
-                Some(" (exists, skipped)"),
+                Some(" (up to date)"),
             ),
             InitFileStatus::WillRegenerate => (
                 "↻",
                 Style::default().fg(Color::Cyan),
-                Some(" (will regenerate)"),
+                Some(" (will update)"),
             ),
         };
 
@@ -360,6 +392,36 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
         }
 
         content.push(Line::from(spans));
+
+        // Show diff for files that will be regenerated
+        if !file.diff_lines.is_empty() {
+            content.push(Line::from(""));
+            let show_count = file.diff_lines.len().min(MAX_DIFF_LINES);
+            for diff_line in &file.diff_lines[..show_count] {
+                let style = if diff_line.starts_with('+') {
+                    Style::default().fg(Color::Green)
+                } else if diff_line.starts_with('-') {
+                    Style::default().fg(Color::Red)
+                } else if diff_line.starts_with('@') {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                content.push(Line::from(Span::styled(
+                    format!("      {diff_line}"),
+                    style,
+                )));
+            }
+            if file.diff_lines.len() > MAX_DIFF_LINES {
+                content.push(Line::from(Span::styled(
+                    format!(
+                        "      ... ({} more lines)",
+                        file.diff_lines.len() - MAX_DIFF_LINES
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
     }
 
     content.push(Line::from(""));
@@ -367,7 +429,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
     // Show status messages
     if all_exist {
         content.push(Line::from(Span::styled(
-            "  Nothing to create — all files already exist.",
+            "  All skill files are up to date.",
             label_style,
         )));
     } else if let Some(error) = &state.error {
@@ -411,6 +473,15 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
         Span::styled(" Cancel ", cancel_style),
     ]));
 
+    // Dynamic modal height based on content
+    let modal_width: u16 = 72;
+    let modal_height =
+        (content.len() as u16 + 3).min(f.area().height.saturating_sub(2));
+    let modal_area = centered_rect(modal_width, modal_height, f.area());
+
+    // Clear the area behind the modal
+    f.render_widget(Clear, modal_area);
+
     let modal = Paragraph::new(content).block(
         Block::default()
             .borders(Borders::ALL)
@@ -427,7 +498,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_init_includes_prompt_and_skills() {
+    fn test_init_includes_skills_only() {
         let config = Config::default();
         let state = InitModalState::new(&config);
 
@@ -436,15 +507,40 @@ mod tests {
             .iter()
             .map(|f| f.display_path.as_str())
             .collect();
-        assert!(paths.iter().any(|p| p.ends_with("PROMPT.md")));
         assert!(paths.iter().any(|p| p.contains("brain-dump")));
         assert!(paths.iter().any(|p| p.contains("shape")));
+        // PROMPT.md is no longer managed by init
+        assert!(!paths.iter().any(|p| p.ends_with("PROMPT.md")));
     }
 
     #[test]
-    fn test_init_has_three_files() {
+    fn test_init_has_two_files() {
         let config = Config::default();
         let state = InitModalState::new(&config);
-        assert_eq!(state.files.len(), 3);
+        assert_eq!(state.files.len(), 2);
+    }
+
+    #[test]
+    fn test_compute_diff_identical() {
+        let text = "line 1\nline 2\nline 3\n";
+        let diff = compute_diff(text, text);
+        // Identical content produces only header lines (--- and +++)
+        assert!(diff.iter().all(|l| !l.starts_with('@')));
+    }
+
+    #[test]
+    fn test_compute_diff_different() {
+        let old = "line 1\nline 2\nline 3\n";
+        let new = "line 1\nchanged\nline 3\n";
+        let diff = compute_diff(old, new);
+        assert!(diff.iter().any(|l| l.starts_with('-')));
+        assert!(diff.iter().any(|l| l.starts_with('+')));
+    }
+
+    #[test]
+    fn test_template_for_path() {
+        assert!(template_for_path(".claude/skills/brain-dump/SKILL.md").is_some());
+        assert!(template_for_path(".claude/skills/shape/SKILL.md").is_some());
+        assert!(template_for_path("unknown/path.md").is_none());
     }
 }

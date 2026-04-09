@@ -305,6 +305,11 @@ fn run_app(
     let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
     app.validate_board_config();
 
+    // Hint when skill files haven't been scaffolded
+    if !std::path::Path::new(".claude/skills/brain-dump/SKILL.md").exists() {
+        app.set_hint("Run `ralph init` to get skills for shaping and brain-dumping beads.");
+    }
+
     // Run doctor checks asynchronously — only surface failures
     {
         let (tx, rx) = std::sync::mpsc::channel();

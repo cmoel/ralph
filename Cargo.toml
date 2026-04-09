@@ -27,6 +27,7 @@ rand = "0.9"
 rusqlite = { version = "0.34", features = ["bundled"] }
 unicode-width = "0.2"
 notify = "8"
+similar = "2"
 
 [dev-dependencies]
 tempfile = "3.27.0"

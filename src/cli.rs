@@ -112,21 +112,37 @@ pub fn run_init() -> Result<()> {
     let state = InitModalState::new(&loaded_config.config);
 
     if state.all_exist() {
-        println!("All files already exist, nothing to create.");
+        println!("All skill files are up to date.");
         return Ok(());
     }
 
-    let create_count = state.create_count();
-    let skip_count = state.skip_count();
+    state.print_diffs();
+
+    let created = state.create_count();
+    let updated = state.regenerate_count();
+    let skipped = state.skip_count();
 
     match state.create_files() {
         Ok(()) => {
-            println!(
-                "Created {} file{}, skipped {} existing.",
-                create_count,
-                if create_count == 1 { "" } else { "s" },
-                skip_count
-            );
+            let mut parts = Vec::new();
+            if created > 0 {
+                parts.push(format!(
+                    "created {} file{}",
+                    created,
+                    if created == 1 { "" } else { "s" }
+                ));
+            }
+            if updated > 0 {
+                parts.push(format!(
+                    "updated {} file{}",
+                    updated,
+                    if updated == 1 { "" } else { "s" }
+                ));
+            }
+            if skipped > 0 {
+                parts.push(format!("skipped {} unchanged", skipped));
+            }
+            println!("{}.", parts.join(", "));
             Ok(())
         }
         Err(e) => {
@@ -141,32 +157,34 @@ pub fn run_reinit() -> Result<()> {
     let loaded_config = config::load_config();
     let state = InitModalState::new_reinit(&loaded_config.config);
 
-    let create_count = state.create_count();
-    let regenerate_count = state.regenerate_count();
+    let created = state.create_count();
+    let regenerated = state.regenerate_count();
 
-    if create_count == 0 && regenerate_count == 0 {
+    if created == 0 && regenerated == 0 {
         println!("Nothing to do.");
         return Ok(());
     }
 
+    state.print_diffs();
+
     match state.create_files() {
         Ok(()) => {
             let mut parts = Vec::new();
-            if regenerate_count > 0 {
+            if regenerated > 0 {
                 parts.push(format!(
                     "regenerated {} file{}",
-                    regenerate_count,
-                    if regenerate_count == 1 { "" } else { "s" }
+                    regenerated,
+                    if regenerated == 1 { "" } else { "s" }
                 ));
             }
-            if create_count > 0 {
+            if created > 0 {
                 parts.push(format!(
                     "created {} file{}",
-                    create_count,
-                    if create_count == 1 { "" } else { "s" }
+                    created,
+                    if created == 1 { "" } else { "s" }
                 ));
             }
-            println!("{} (old files backed up as .bak).", parts.join(", "));
+            println!("{}.", parts.join(", "));
             Ok(())
         }
         Err(e) => {
