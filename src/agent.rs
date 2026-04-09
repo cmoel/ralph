@@ -1235,6 +1235,26 @@ pub fn select_best_epic(scored: &[ScoredEpic]) -> Option<&str> {
         .map(|e| e.epic_id.as_str())
 }
 
+/// What to do between iterations when an epic is active.
+#[derive(Debug, PartialEq)]
+pub enum IterationAction {
+    /// Epic still has ready children — reuse worktree and claim next child.
+    ContinueInEpic,
+    /// Epic has no ready children — complete it, merge worktree, select new epic.
+    CompleteEpicAndMerge,
+    /// No active epic — just merge any existing worktree.
+    MergeOnly,
+}
+
+/// Decide what action to take between iterations based on epic state.
+pub fn decide_iteration_action(has_epic: bool, has_ready_children: bool) -> IterationAction {
+    match (has_epic, has_ready_children) {
+        (true, true) => IterationAction::ContinueInEpic,
+        (true, false) => IterationAction::CompleteEpicAndMerge,
+        (false, _) => IterationAction::MergeOnly,
+    }
+}
+
 /// Build prompt context for a dirty worktree (uncommitted changes).
 pub fn build_dirty_worktree_context(git_status: &str, git_diff: &str) -> String {
     format!(
@@ -1796,5 +1816,39 @@ mod tests {
         assert!(ctx.contains("M src/main.rs"));
         assert!(ctx.contains("+new line"));
         assert!(ctx.contains("previous worker session"));
+    }
+
+    // --- Iteration action tests ---
+
+    #[test]
+    fn decide_iteration_continues_when_children_ready() {
+        assert_eq!(
+            decide_iteration_action(true, true),
+            IterationAction::ContinueInEpic,
+        );
+    }
+
+    #[test]
+    fn decide_iteration_completes_epic_when_children_exhausted() {
+        assert_eq!(
+            decide_iteration_action(true, false),
+            IterationAction::CompleteEpicAndMerge,
+        );
+    }
+
+    #[test]
+    fn decide_iteration_merges_only_when_no_epic() {
+        assert_eq!(
+            decide_iteration_action(false, false),
+            IterationAction::MergeOnly,
+        );
+    }
+
+    #[test]
+    fn decide_iteration_merges_when_no_epic_ignores_children_flag() {
+        assert_eq!(
+            decide_iteration_action(false, true),
+            IterationAction::MergeOnly,
+        );
     }
 }

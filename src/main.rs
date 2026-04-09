@@ -85,28 +85,31 @@ fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
 fn merge_and_refresh_worktree(app: &mut App) -> bool {
     let bd_path = app.config.behavior.bd_path.clone();
 
-    // If we have an active epic, check whether it still has ready children
-    if let Some(epic_id) = &app.claimed_epic_id {
-        let epic_id = epic_id.clone();
-        let agent_id = app.agent_bead_id.clone().unwrap_or_default();
+    let has_epic = app.claimed_epic_id.is_some();
+    let has_children = has_epic
+        && app
+            .claimed_epic_id
+            .as_ref()
+            .is_some_and(|eid| has_ready_children(&bd_path, eid));
 
-        if has_ready_children(&bd_path, &epic_id) {
-            // Epic still has work — skip merge, reuse worktree
-            return true;
+    match agent::decide_iteration_action(has_epic, has_children) {
+        agent::IterationAction::ContinueInEpic => return true,
+        agent::IterationAction::CompleteEpicAndMerge => {
+            let epic_id = app.claimed_epic_id.clone().unwrap();
+            let agent_id = app.agent_bead_id.clone().unwrap_or_default();
+
+            app.add_text_line(format!("[Completing epic: {}]", epic_id));
+            agent::complete_epic(&bd_path, &epic_id);
+            app.claimed_epic_id = None;
+
+            let _ = std::process::Command::new(&bd_path)
+                .args(["set-state", &agent_id, "epic=none"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output();
         }
-
-        // No more children — complete the epic
-        app.add_text_line(format!("[Completing epic: {}]", epic_id));
-        agent::complete_epic(&bd_path, &epic_id);
-        app.claimed_epic_id = None;
-
-        // Clear epic from agent state
-        let _ = std::process::Command::new(&bd_path)
-            .args(["set-state", &agent_id, "epic=none"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        agent::IterationAction::MergeOnly => {}
     }
 
     // Merge the current worktree to main
