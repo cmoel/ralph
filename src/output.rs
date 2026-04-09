@@ -167,6 +167,11 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
             // Silently ignore ping events
             debug!("Received ping");
         }
+        ClaudeEvent::RateLimit => {
+            // Rate limit info is logged; the actual error message comes via
+            // the subsequent Result event with is_error=true.
+            debug!("Rate limit event received");
+        }
         // SECURITY: DEBUG logs full event structures. Acceptable since DEBUG
         // is only enabled for local development, never in distributed logs.
         ClaudeEvent::System(sys) => {
@@ -271,6 +276,13 @@ fn process_event(app: &mut App, event: ClaudeEvent) {
         }
         ClaudeEvent::Result(result) => {
             debug!(?result, "Result event");
+            // Store error message from result event (e.g. rate limit)
+            if result.is_error.unwrap_or(false)
+                && let Some(ref msg) = result.result
+            {
+                let w = app.selected_worker;
+                app.workers[w].last_result_error = Some(msg.clone());
+            }
             // Flush any pending tool calls that never received results
             let pending_calls: Vec<_> = app.tool_panel.pending_calls.drain().collect();
             for (_id, pending) in pending_calls {

@@ -21,6 +21,10 @@ pub enum ClaudeEvent {
     #[serde(rename = "user")]
     User(UserEvent),
 
+    // Rate limiting
+    #[serde(rename = "rate_limit_event")]
+    RateLimit,
+
     // Heartbeat
     #[serde(rename = "ping")]
     Ping,
@@ -107,6 +111,10 @@ pub struct ResultEvent {
     pub duration_ms: Option<u64>,
     #[serde(default)]
     pub usage: Option<UsageInfo>,
+    #[serde(default)]
+    pub is_error: Option<bool>,
+    #[serde(default)]
+    pub result: Option<String>,
 }
 
 /// Token usage information.
