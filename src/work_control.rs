@@ -20,8 +20,9 @@ impl App {
         // Release wake lock when process ends (drop releases it)
         self.wake_lock = None;
 
-        // Merge worktree to main on successful completion (before auto-continue check)
-        if exit_code == Some(0) {
+        // Merge worktree to main on successful completion (before auto-continue check).
+        // In beads mode, skip — worktree persists across children within an epic.
+        if exit_code == Some(0) && self.config.behavior.mode != "beads" {
             self.merge_current_worktree();
         }
 

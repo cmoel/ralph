@@ -177,6 +177,8 @@ pub struct App {
     pub heartbeat_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Currently hooked bead ID (the bead this agent is working on).
     pub hooked_bead_id: Option<String>,
+    /// Currently claimed epic ID (the epic this agent is iterating through).
+    pub claimed_epic_id: Option<String>,
     /// Resolved repository path for tool history tracking.
     pub repo_path: String,
     /// Whether the kanban board modal is visible.
@@ -298,6 +300,7 @@ impl App {
             worktree_path: None,
             heartbeat_stop: None,
             hooked_bead_id: None,
+            claimed_epic_id: None,
             repo_path: crate::db::detect_repo_path(),
             show_kanban_board: false,
             kanban_board_state: None,
@@ -922,8 +925,7 @@ impl App {
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
                 false
-            } else if let Some(bead_id) =
-                crate::agent::file_merge_conflict_bead(&bd_path, &wt_name)
+            } else if let Some(bead_id) = crate::agent::file_merge_conflict_bead(&bd_path, &wt_name)
             {
                 // Tier 1: First conflict — file bead, Claude resolves next iteration
                 self.add_text_line(format!(
@@ -933,9 +935,7 @@ impl App {
                 // Worktree preserved
                 true
             } else {
-                self.add_text_line(
-                    "[Merge conflict — failed to file bead, stopping]".into(),
-                );
+                self.add_text_line("[Merge conflict — failed to file bead, stopping]".into());
                 self.reset_iteration_state();
                 self.status = AppStatus::Stopped;
                 false
@@ -962,5 +962,6 @@ impl App {
         self.worktree_name = None;
         self.worktree_path = None;
         self.heartbeat_stop = None;
+        self.claimed_epic_id = None;
     }
 }

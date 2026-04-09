@@ -16,9 +16,11 @@ use crate::wake_lock;
 ///
 /// Reads PROMPT.md and optional mode-specific content, writes a temp file for mode
 /// content if needed, and returns the full shell command to pipe into Claude.
+/// If `dirty_context` is provided, it is appended to the mode content.
 pub fn assemble_prompt(
     config: &crate::config::Config,
     claimed_bead_id: Option<&str>,
+    dirty_context: Option<String>,
 ) -> Result<String> {
     let prompt_path = config.prompt_path();
     let claude_path = config.claude_path();
@@ -26,12 +28,26 @@ pub fn assemble_prompt(
         "--output-format=stream-json --verbose --print --include-partial-messages";
 
     let mode = &config.behavior.mode;
-    let mode_temp_path = if let Some(content) = templates::mode_content(mode, claimed_bead_id) {
-        let path = std::env::temp_dir().join("ralph-mode.md");
-        std::fs::write(&path, content)?;
-        Some(path)
-    } else {
-        None
+    let mode_temp_path = {
+        let mut content = templates::mode_content(mode, claimed_bead_id);
+        if let Some(dirty) = dirty_context {
+            match &mut content {
+                Some(c) => {
+                    c.push('\n');
+                    c.push_str(&dirty);
+                }
+                None => {
+                    content = Some(dirty);
+                }
+            }
+        }
+        if let Some(c) = content {
+            let path = std::env::temp_dir().join("ralph-mode.md");
+            std::fs::write(&path, c)?;
+            Some(path)
+        } else {
+            None
+        }
     };
 
     let command = if let Some(ref mode_path) = mode_temp_path {
@@ -119,10 +135,34 @@ pub fn claim_before_start(app: &mut App) {
         }
     }
 
-    match agent::claim_next_bead(&app.config.behavior.bd_path, &agent_id) {
-        Some((bead_id, title)) => {
-            app.add_text_line(format!("[Claimed: {} {}]", bead_id, title));
-            app.hooked_bead_id = Some(bead_id);
+    // If we have an active epic, claim the next child within it
+    if let Some(epic_id) = &app.claimed_epic_id {
+        let epic_id = epic_id.clone();
+        match agent::claim_next_child(&bd_path, &agent_id, &epic_id) {
+            Some((child_id, child_title)) => {
+                app.add_text_line(format!(
+                    "[Claimed child: {} {} (epic: {})]",
+                    child_id, child_title, epic_id
+                ));
+                app.hooked_bead_id = Some(child_id);
+                return;
+            }
+            None => {
+                // No more children — epic is done, will be handled by merge flow
+                app.add_text_line(format!("[Epic {} has no more ready children]", epic_id));
+            }
+        }
+    }
+
+    // Select a new epic and claim its first child
+    match agent::select_and_claim_epic(&bd_path, &agent_id) {
+        Some(claim) => {
+            app.add_text_line(format!(
+                "[Claimed epic: {} → child: {} {}]",
+                claim.epic_id, claim.child_bead_id, claim.child_title
+            ));
+            app.claimed_epic_id = Some(claim.epic_id);
+            app.hooked_bead_id = Some(claim.child_bead_id);
         }
         None => {
             app.add_text_line("[No beads available to claim — starting claimless]".to_string());
@@ -159,7 +199,14 @@ pub fn start_command(app: &mut App) -> Result<()> {
     app.content_blocks.clear();
     app.current_line.clear();
 
-    let command = assemble_prompt(&app.config, app.hooked_bead_id.as_deref())?;
+    // Check for dirty worktree (uncommitted changes from previous session)
+    let dirty_context = app
+        .worktree_path
+        .as_deref()
+        .and_then(agent::check_worktree_dirty)
+        .map(|(status, diff)| agent::build_dirty_worktree_context(&status, &diff));
+
+    let command = assemble_prompt(&app.config, app.hooked_bead_id.as_deref(), dirty_context)?;
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(&command)

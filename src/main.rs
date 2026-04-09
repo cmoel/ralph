@@ -80,8 +80,36 @@ fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
 }
 
 /// Merge the current worktree branch to main, clean up, and create a fresh worktree.
+/// Epic-aware: within an active epic, skips merge and reuses the worktree.
 /// Returns false if the merge failed and the loop should stop.
 fn merge_and_refresh_worktree(app: &mut App) -> bool {
+    let bd_path = app.config.behavior.bd_path.clone();
+
+    // If we have an active epic, check whether it still has ready children
+    if let Some(epic_id) = &app.claimed_epic_id {
+        let epic_id = epic_id.clone();
+        let agent_id = app.agent_bead_id.clone().unwrap_or_default();
+
+        if has_ready_children(&bd_path, &epic_id) {
+            // Epic still has work — skip merge, reuse worktree
+            return true;
+        }
+
+        // No more children — complete the epic
+        app.add_text_line(format!("[Completing epic: {}]", epic_id));
+        agent::complete_epic(&bd_path, &epic_id);
+        app.claimed_epic_id = None;
+
+        // Clear epic from agent state
+        let _ = std::process::Command::new(&bd_path)
+            .args(["set-state", &agent_id, "epic=none"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+    }
+
+    // Merge the current worktree to main
     if !app.merge_current_worktree() {
         return false;
     }
@@ -94,29 +122,56 @@ fn merge_and_refresh_worktree(app: &mut App) -> bool {
         app.worktree_path = None;
     }
 
-    // Create fresh worktree if needed (None after merge+cleanup,
-    // Some if worktree preserved from a failed merge — reuse it)
-    if app.worktree_path.is_none()
-        && let Some(agent_id) = &app.agent_bead_id
-    {
-        let bd_path = app.config.behavior.bd_path.clone();
-        let agent_id = agent_id.clone();
-        if let Some((new_name, new_path)) =
-            agent::create_fresh_worktree(&bd_path, &agent_id)
-        {
-            app.worktree_name = Some(new_name);
-            app.worktree_path = Some(new_path);
-        } else {
-            app.add_text_line(
-                "[Failed to create fresh worktree — stopping.]".into(),
-            );
-            app.reset_iteration_state();
-            app.status = AppStatus::Stopped;
-            return false;
-        }
+    // Worktree will be created after claim_before_start selects a new epic
+    true
+}
+
+/// Ensure a worktree exists for the current epic.
+/// Called after claim_before_start selects an epic, since worktree name = epic_id.
+fn ensure_worktree(app: &mut App) -> bool {
+    if app.worktree_path.is_some() {
+        return true;
     }
 
-    true
+    let worktree_name = if let Some(ref epic_id) = app.claimed_epic_id {
+        epic_id.clone()
+    } else if let Some(ref agent_id) = app.agent_bead_id {
+        agent_id.clone()
+    } else {
+        return true;
+    };
+
+    let bd_path = app.config.behavior.bd_path.clone();
+    if let Some((new_name, new_path)) = agent::create_or_reuse_worktree(&bd_path, &worktree_name) {
+        app.worktree_name = Some(new_name);
+        app.worktree_path = Some(new_path);
+        true
+    } else {
+        app.add_text_line("[Failed to create worktree — stopping.]".into());
+        app.reset_iteration_state();
+        app.status = AppStatus::Stopped;
+        false
+    }
+}
+
+/// Check if an epic has ready children.
+fn has_ready_children(bd_path: &str, epic_id: &str) -> bool {
+    let output = std::process::Command::new(bd_path)
+        .args(["ready", "--parent", epic_id, "--json"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            serde_json::from_str::<Vec<serde_json::Value>>(&stdout)
+                .ok()
+                .is_some_and(|items| !items.is_empty())
+        }
+        _ => false,
+    }
 }
 
 /// Get the modification time of a file, or None if it can't be determined.
@@ -339,6 +394,9 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
             app.increment_iteration();
             // In beads mode, claim next bead before continuing
             execution::claim_before_start(app);
+            if !ensure_worktree(app) {
+                continue;
+            }
             execution::start_command(app)?;
         }
 
@@ -495,6 +553,9 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                                 }
                                 // In beads mode, claim a bead before starting
                                 execution::claim_before_start(app);
+                                if !ensure_worktree(app) {
+                                    continue;
+                                }
                                 execution::start_command(app)?;
                             }
                             // If start_iteration_run returns false, iterations = 0, no-op
@@ -828,7 +889,7 @@ mod tests {
     #[test]
     fn assemble_prompt_default_mode_includes_prompt_and_mode_file() {
         let config = crate::config::Config::default();
-        let command = execution::assemble_prompt(&config, None).unwrap();
+        let command = execution::assemble_prompt(&config, None, None).unwrap();
 
         // Should pipe PROMPT.md and mode content through Claude CLI
         assert!(command.contains("PROMPT.md"));
@@ -841,7 +902,7 @@ mod tests {
     fn assemble_prompt_unknown_mode_omits_mode_file() {
         let mut config = crate::config::Config::default();
         config.behavior.mode = "nonexistent-mode".to_string();
-        let command = execution::assemble_prompt(&config, None).unwrap();
+        let command = execution::assemble_prompt(&config, None, None).unwrap();
 
         // Should only have PROMPT.md, no mode temp file
         assert!(command.contains("PROMPT.md"));
