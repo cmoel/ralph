@@ -148,8 +148,13 @@ pub fn claim_before_start(app: &mut App) {
                 return;
             }
             None => {
-                // No more children — epic is done, will be handled by merge flow
-                app.add_text_line(format!("[Epic {} has no more ready children]", epic_id));
+                // No more ready children — start claimless this cycle.
+                // merge_and_refresh_worktree handles epic completion on the next cycle.
+                app.add_text_line(format!(
+                    "[Epic {} has no more ready children — starting claimless]",
+                    epic_id
+                ));
+                return;
             }
         }
     }
