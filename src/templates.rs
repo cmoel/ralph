@@ -403,6 +403,7 @@ Actively hunt for unknowns in these five categories. Not every category applies 
 - What external calls can fail?
 - What state could be inconsistent?
 - What happens under concurrent access or race conditions?
+- For each failure mode, push for specific behavior: "What does the user see? Retry, fail gracefully, or surface the error?" Don't accept hand-waving.
 
 ### Scope unknowns — do we know WHAT'S OUT?
 - What are we deliberately not doing?
@@ -447,7 +448,11 @@ As the conversation progresses:
 
 Each question you ask should target a specific unknown. Drive questions from the unknowns list, not from a generic template.
 
-When the problem warrants it, explore multiple solution approaches and compare them against requirements. Use fit checks, spikes, and breadboarding as tools — but only when they serve resolving a specific unknown.
+When the problem warrants it, reach for these tools — but only when they serve resolving a specific unknown:
+
+- **Spikes** — when there's genuine uncertainty about whether something will *work* (not just "how" but "if"). Use subagents to investigate. Report findings. Resolve uncertainty before committing to an approach.
+- **Breadboarding** — when designing how components interact. Map affordances (what the user/system can do) and wiring (how components connect). Use when interactions are non-obvious.
+- **Shape alternatives** — when multiple approaches exist and the trade-offs aren't clear. Compare against requirements. Use fit checks to make the decision concrete.
 
 ### Vertical Slicing
 
@@ -458,6 +463,8 @@ When the solution shape is clear, break it into the smallest valuable increments
 - Works independently, even if limited
 - Is smaller than you think
 
+**If a slice has "and" in it, it's probably two slices.** Break it down.
+
 **Challenge aggressively:**
 - "What if we didn't include X in this slice?"
 - "Can we ship just the happy path first?"
@@ -467,6 +474,10 @@ When the solution shape is clear, break it into the smallest valuable increments
 - "Build the infrastructure for X" → No user value. Combine with first use.
 - "This sets up Y for later" → Do Y now as a thin slice instead.
 - "It's all one thing" → What about happy path only?
+
+### Dependencies
+
+Check for cross-bead dependencies (`bd list --json`) and propose an order for slices. If slices depend on each other, set dependencies with `bd dep add`.
 
 ---
 
