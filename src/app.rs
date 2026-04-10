@@ -21,7 +21,8 @@ use crate::modals::{ConfigModalState, InitModalState, KanbanBoardState, ToolAllo
 use crate::output::OutputMessage;
 use crate::wake_lock::WakeLock;
 use crate::work_source::{BeadsWorkSource, WorkRemaining};
-use crate::{get_file_mtime, logging};
+use crate::logging;
+use crate::startup::get_file_mtime;
 
 /// Application status states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

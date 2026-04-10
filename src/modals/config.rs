@@ -12,7 +12,7 @@ use tracing::debug;
 
 use crate::app::App;
 use crate::config::{Config, PartialConfig, save_partial_config};
-use crate::get_file_mtime;
+use crate::startup::get_file_mtime;
 use crate::ui::centered_rect;
 use crate::validators::validate_executable_path;
 
