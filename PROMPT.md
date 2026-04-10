@@ -53,6 +53,8 @@ Build the vertical slice. Prefer TDD — write tests first, then implement. Use 
 
 **For complex implementations:** Break into sub-tasks and use subagents for research-heavy steps. Keep your context focused on the code you're writing.
 
+**Creating files:** Use the Write tool directly. It creates parent directories automatically — don't run `mkdir`, which is sandbox-blocked in ephemeral worktrees.
+
 **If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using mode-specific instructions and exit.
 
 ## 5. Validate
