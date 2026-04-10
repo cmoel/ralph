@@ -678,7 +678,7 @@ impl App {
         }
     }
 
-    /// Poll for background bead detail data (drill-down from kanban board).
+    /// Poll for background bead detail data (preview pane).
     pub fn poll_bead_detail(&mut self) {
         let rx = match self.bead_detail_rx.take() {
             Some(rx) => rx,
@@ -688,7 +688,7 @@ impl App {
         match rx.try_recv() {
             Ok(result) => {
                 self.dirty = true;
-                if let Some(ref mut detail) = self.kanban_board_state.detail_view {
+                if let Some(ref mut detail) = self.kanban_board_state.preview_detail {
                     detail.populate(result);
                 }
             }
@@ -697,10 +697,57 @@ impl App {
             }
             Err(TryRecvError::Disconnected) => {
                 self.dirty = true;
-                if let Some(ref mut detail) = self.kanban_board_state.detail_view {
+                if let Some(ref mut detail) = self.kanban_board_state.preview_detail {
                     detail.populate(Err("Background fetch failed".to_string()));
                 }
             }
+        }
+    }
+
+    /// Poll for debounced preview fetch — fires after cursor stops moving for 150ms.
+    pub fn poll_preview_fetch(&mut self) {
+        let state = &mut self.kanban_board_state;
+        let debounce = std::time::Duration::from_millis(150);
+
+        if let Some(moved_at) = state.preview_cursor_moved
+            && moved_at.elapsed() >= debounce
+            && let Some(pending_id) = state.preview_pending_id.take()
+        {
+            state.preview_cursor_moved = None;
+            state.preview_bead_id = Some(pending_id.clone());
+            state.preview_detail = Some(
+                crate::modals::BeadDetailState::new_loading(pending_id.clone()),
+            );
+
+            let bd_path = self.config.behavior.bd_path.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let output = std::process::Command::new(&bd_path)
+                    .args(["show", &pending_id, "--json"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output();
+                let result = match output {
+                    Ok(out) if out.status.success() => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        serde_json::from_str::<serde_json::Value>(&stdout)
+                            .map(|val| {
+                                if let Some(arr) = val.as_array() {
+                                    arr.first().cloned().unwrap_or(val)
+                                } else {
+                                    val
+                                }
+                            })
+                            .map_err(|e| e.to_string())
+                    }
+                    Ok(out) => Err(String::from_utf8_lossy(&out.stderr).to_string()),
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = tx.send(result);
+            });
+            self.bead_detail_rx = Some(rx);
+            self.dirty = true;
         }
     }
 
@@ -732,7 +779,7 @@ impl App {
         // Also refresh the detail modal if one is open
         if changed
             && self.bead_detail_rx.is_none()
-            && let Some(ref detail) = self.kanban_board_state.detail_view
+            && let Some(ref detail) = self.kanban_board_state.preview_detail
             && !detail.is_loading
         {
             let bd_path = self.config.behavior.bd_path.clone();

@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -278,8 +278,16 @@ pub struct KanbanBoardState {
     pub is_loading: bool,
     /// Error message if loading failed.
     pub error: Option<String>,
-    /// Detail drill-down view (when Some, renders detail instead of board).
-    pub detail_view: Option<BeadDetailState>,
+    /// Which pane has keyboard focus (board columns or preview pane).
+    pub focus: BoardFocus,
+    /// Preview pane detail state (loaded on cursor movement).
+    pub preview_detail: Option<BeadDetailState>,
+    /// Bead ID currently shown in the preview pane.
+    pub preview_bead_id: Option<String>,
+    /// When the cursor last moved — used to debounce preview fetches.
+    pub preview_cursor_moved: Option<Instant>,
+    /// Bead ID that the debounce timer is waiting to fetch.
+    pub preview_pending_id: Option<String>,
     /// Total open issues for footer.
     pub open_count: u64,
     /// Total closed issues for footer.
@@ -311,6 +319,15 @@ pub enum DepDirection {
     BlockedBy,
     /// The selected bead blocks the picked bead.
     Blocks,
+}
+
+/// Which pane has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardFocus {
+    /// Board columns have focus — cursor navigates cards.
+    Board,
+    /// Preview pane has focus — j/k scrolls detail content.
+    Preview,
 }
 
 /// An undoable board action, stored in the undo/redo stacks.
@@ -584,7 +601,11 @@ impl KanbanBoardState {
             selected_row: vec![0; col_count],
             is_loading: true,
             error: None,
-            detail_view: None,
+            focus: BoardFocus::Board,
+            preview_detail: None,
+            preview_bead_id: None,
+            preview_cursor_moved: None,
+            preview_pending_id: None,
             open_count: 0,
             closed_count: 0,
             dep_neighbors: HashMap::new(),
@@ -636,6 +657,9 @@ impl KanbanBoardState {
                     }
                     self.advance_to_card(col_idx);
                 }
+
+                // Schedule preview fetch for initially selected card
+                self.schedule_preview_fetch();
             }
             Err(e) => {
                 self.error = Some(e);
@@ -714,6 +738,29 @@ impl KanbanBoardState {
                 self.selected_row[col] = row;
                 break;
             }
+        }
+    }
+
+    /// Schedule a debounced preview fetch for the currently selected card.
+    pub fn schedule_preview_fetch(&mut self) {
+        if let Some(card) = self.selected_card() {
+            let id = card.id.clone();
+            // Don't schedule if we're already showing this bead
+            if self.preview_bead_id.as_deref() == Some(&id)
+                && self.preview_pending_id.is_none()
+            {
+                return;
+            }
+            self.preview_pending_id = Some(id);
+            self.preview_cursor_moved = Some(Instant::now());
+            // Reset scroll when selecting a different bead
+            if let Some(ref mut detail) = self.preview_detail {
+                detail.scroll_offset = 0;
+            }
+        } else {
+            // No card selected (empty column or error card)
+            self.preview_pending_id = None;
+            self.preview_cursor_moved = None;
         }
     }
 }
@@ -908,17 +955,24 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
         return;
     }
 
-    // If detail view is open, handle detail input
-    if let Some(detail) = &mut state.detail_view {
+    // If preview pane has focus, handle preview input
+    if state.focus == BoardFocus::Preview {
         match key_code {
-            KeyCode::Esc => {
-                state.detail_view = None;
+            KeyCode::Esc | KeyCode::Enter => {
+                state.focus = BoardFocus::Board;
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                detail.scroll_offset = detail.scroll_offset.saturating_add(1);
+                if let Some(ref mut detail) = state.preview_detail {
+                    detail.scroll_offset = detail.scroll_offset.saturating_add(1);
+                }
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                detail.scroll_offset = detail.scroll_offset.saturating_sub(1);
+                if let Some(ref mut detail) = state.preview_detail {
+                    detail.scroll_offset = detail.scroll_offset.saturating_sub(1);
+                }
+            }
+            KeyCode::Char('?') => {
+                state.show_help = true;
             }
             _ => {}
         }
@@ -930,38 +984,9 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
             // Board is the primary view — Esc is a no-op
         }
         KeyCode::Enter => {
-            if let Some(card) = state.selected_card() {
-                let bead_id = card.id.clone();
-                state.detail_view = Some(BeadDetailState::new_loading(bead_id.clone()));
-                let bd_path = app.config.behavior.bd_path.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let output = std::process::Command::new(&bd_path)
-                        .args(["show", &bead_id, "--json"])
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped())
-                        .output();
-                    let result = match output {
-                        Ok(out) if out.status.success() => {
-                            let stdout = String::from_utf8_lossy(&out.stdout);
-                            serde_json::from_str::<serde_json::Value>(&stdout)
-                                .map(|val| {
-                                    // bd show --json returns an array; take the first element
-                                    if let Some(arr) = val.as_array() {
-                                        arr.first().cloned().unwrap_or(val)
-                                    } else {
-                                        val
-                                    }
-                                })
-                                .map_err(|e| e.to_string())
-                        }
-                        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).to_string()),
-                        Err(e) => Err(e.to_string()),
-                    };
-                    let _ = tx.send(result);
-                });
-                app.bead_detail_rx = Some(rx);
+            // Move focus to preview pane if there's a selected card
+            if state.selected_card().is_some() && state.preview_detail.is_some() {
+                state.focus = BoardFocus::Preview;
             }
         }
         KeyCode::Char('X') => {
@@ -1061,15 +1086,19 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
         }
         KeyCode::Char('h') | KeyCode::Left => {
             state.move_left();
+            state.schedule_preview_fetch();
         }
         KeyCode::Char('l') | KeyCode::Right => {
             state.move_right();
+            state.schedule_preview_fetch();
         }
         KeyCode::Char('k') | KeyCode::Up => {
             state.move_up();
+            state.schedule_preview_fetch();
         }
         KeyCode::Char('j') | KeyCode::Down => {
             state.move_down();
+            state.schedule_preview_fetch();
         }
         _ => {}
     }
@@ -1083,14 +1112,25 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
 pub fn draw_kanban_board(f: &mut Frame, app: &App, board_area: Rect) {
     let state = &app.kanban_board_state;
 
-    // If detail view is active, draw that instead
-    if let Some(detail) = &state.detail_view {
-        draw_bead_detail(f, detail);
-        return;
+    // Split content area: top for board columns, bottom for preview pane.
+    // If terminal is very short (< 12 lines), hide preview and show board only.
+    let (columns_area, preview_area) = if board_area.height < 12 {
+        (board_area, None)
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(33), Constraint::Percentage(67)])
+            .split(board_area);
+        (chunks[0], Some(chunks[1]))
+    };
+
+    // Draw the preview pane in the bottom area
+    if let Some(area) = preview_area {
+        draw_preview_pane(f, state, area);
     }
 
-    let inner_height = board_area.height.saturating_sub(2) as usize;
-    let inner_width = board_area.width.saturating_sub(2) as usize;
+    let inner_height = columns_area.height.saturating_sub(2) as usize;
+    let inner_width = columns_area.width.saturating_sub(2) as usize;
 
     let mut content: Vec<Line> = Vec::new();
 
@@ -1367,7 +1407,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App, board_area: Rect) {
                 Span::styled(" navigate", desc),
                 Span::styled(" \u{b7} ", sep),
                 Span::styled("Enter", key),
-                Span::styled(" view", desc),
+                Span::styled(" preview", desc),
                 Span::styled(" \u{b7} ", sep),
                 Span::styled("X", key),
                 Span::styled(" close", desc),
@@ -1404,7 +1444,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App, board_area: Rect) {
             .style(Style::default().fg(Color::White)),
     );
 
-    f.render_widget(board, board_area);
+    f.render_widget(board, columns_area);
 
     // Close confirmation overlay
     if let Some(confirm) = &state.close_confirm {
@@ -1564,7 +1604,7 @@ fn draw_dep_direction(f: &mut Frame, dep_dir: &DepDirectionState) {
 /// Draw the board help overlay with keybinding reference.
 fn draw_board_help(f: &mut Frame) {
     let modal_width: u16 = 50;
-    let modal_height: u16 = 22;
+    let modal_height: u16 = 26;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     f.render_widget(Clear, modal_area);
@@ -1589,7 +1629,19 @@ fn draw_board_help(f: &mut Frame) {
         Line::from(vec![
             Span::raw("    "),
             Span::styled("Enter", key_style),
-            Span::styled("      View detail", desc_style),
+            Span::styled("      Focus preview pane", desc_style),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Preview Pane", header_style)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("j/k", key_style),
+            Span::styled("          Scroll preview", desc_style),
+        ]),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Esc/Enter", key_style),
+            Span::styled("    Return to board", desc_style),
         ]),
         Line::from(""),
         Line::from(Span::styled("  Card Actions", header_style)),
@@ -1634,11 +1686,6 @@ fn draw_board_help(f: &mut Frame) {
         Line::from(Span::styled("  Board", header_style)),
         Line::from(vec![
             Span::raw("    "),
-            Span::styled("Esc", key_style),
-            Span::styled("          Close board", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
             Span::styled("?", key_style),
             Span::styled("            Toggle help", desc_style),
         ]),
@@ -1661,18 +1708,11 @@ fn draw_board_help(f: &mut Frame) {
 }
 
 // ---------------------------------------------------------------------------
-// Bead detail rendering (unchanged)
+// Preview pane rendering
 // ---------------------------------------------------------------------------
 
-/// Draw the bead detail drill-down view.
-fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
-    let area = f.area();
-    let modal_width = area.width.saturating_sub(4).min(100);
-    let modal_height = area.height.saturating_sub(2);
-    let modal_area = centered_rect(modal_width, modal_height, area);
-
-    f.render_widget(Clear, modal_area);
-
+/// Build the detail content lines for a bead (shared by preview pane).
+fn build_detail_content(detail: &BeadDetailState) -> Vec<Line<'_>> {
     let mut content: Vec<Line> = Vec::new();
 
     if detail.is_loading {
@@ -1681,184 +1721,218 @@ fn draw_bead_detail(f: &mut Frame, detail: &BeadDetailState) {
             "  Loading...",
             Style::default().fg(Color::DarkGray),
         )));
-    } else if let Some(error) = &detail.error {
+        return content;
+    }
+    if let Some(error) = &detail.error {
         content.push(Line::from(""));
         content.push(Line::from(Span::styled(
             format!("  Error: {error}"),
             Style::default().fg(Color::Red),
         )));
-    } else {
-        // Title
-        content.push(Line::from(vec![Span::styled(
-            &detail.title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )]));
-        content.push(Line::from(""));
+        return content;
+    }
 
-        // Metadata line: ID · status · priority · type
-        let mut meta: Vec<Span> = vec![Span::styled(
-            short_id(&detail.id),
-            Style::default().fg(Color::Cyan),
+    // Title
+    content.push(Line::from(vec![Span::styled(
+        &detail.title,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    content.push(Line::from(""));
+
+    // Metadata line: ID · status · priority · type
+    let mut meta: Vec<Span> = vec![Span::styled(
+        short_id(&detail.id),
+        Style::default().fg(Color::Cyan),
+    )];
+    if !detail.status.is_empty() {
+        meta.push(Span::styled(
+            " \u{b7} ",
+            Style::default().fg(Color::DarkGray),
+        ));
+        let status_color = match detail.status.as_str() {
+            "open" => Color::Green,
+            "in_progress" => Color::Yellow,
+            "closed" => Color::DarkGray,
+            "blocked" => Color::Red,
+            "deferred" => Color::DarkGray,
+            _ => Color::White,
+        };
+        meta.push(Span::styled(
+            &detail.status,
+            Style::default().fg(status_color),
+        ));
+    }
+    if !detail.priority.is_empty() {
+        meta.push(Span::styled(
+            " \u{b7} ",
+            Style::default().fg(Color::DarkGray),
+        ));
+        meta.push(Span::styled(
+            &detail.priority,
+            Style::default().fg(Color::Magenta),
+        ));
+    }
+    if !detail.issue_type.is_empty() {
+        meta.push(Span::styled(
+            " \u{b7} ",
+            Style::default().fg(Color::DarkGray),
+        ));
+        meta.push(Span::styled(
+            &detail.issue_type,
+            Style::default().fg(Color::Gray),
+        ));
+    }
+    content.push(Line::from(meta));
+
+    // Labels
+    if !detail.labels.is_empty() {
+        let mut label_spans: Vec<Span> = vec![Span::styled(
+            "Labels: ",
+            Style::default().fg(Color::DarkGray),
         )];
-        if !detail.status.is_empty() {
-            meta.push(Span::styled(
-                " \u{b7} ",
-                Style::default().fg(Color::DarkGray),
-            ));
-            let status_color = match detail.status.as_str() {
-                "open" => Color::Green,
-                "in_progress" => Color::Yellow,
+        for (i, label) in detail.labels.iter().enumerate() {
+            if i > 0 {
+                label_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
+            }
+            label_spans.push(Span::styled(label, Style::default().fg(Color::Yellow)));
+        }
+        content.push(Line::from(label_spans));
+    }
+
+    // Dependencies
+    if !detail.dependencies.is_empty() {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "Dependencies",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for dep in &detail.dependencies {
+            let status_icon = match dep.status.as_str() {
+                "closed" => "\u{2713}",
+                "in_progress" => "\u{25d0}",
+                "blocked" => "\u{25cf}",
+                _ => "\u{25cb}",
+            };
+            let arrow = if dep.dep_type == "blocks" {
+                "\u{2190}" // ←  this issue is blocked by dep
+            } else {
+                "\u{2192}" // →  this issue blocks dep
+            };
+            let status_color = match dep.status.as_str() {
                 "closed" => Color::DarkGray,
                 "blocked" => Color::Red,
-                "deferred" => Color::DarkGray,
                 _ => Color::White,
             };
-            meta.push(Span::styled(
-                &detail.status,
-                Style::default().fg(status_color),
-            ));
-        }
-        if !detail.priority.is_empty() {
-            meta.push(Span::styled(
-                " \u{b7} ",
-                Style::default().fg(Color::DarkGray),
-            ));
-            meta.push(Span::styled(
-                &detail.priority,
-                Style::default().fg(Color::Magenta),
-            ));
-        }
-        if !detail.issue_type.is_empty() {
-            meta.push(Span::styled(
-                " \u{b7} ",
-                Style::default().fg(Color::DarkGray),
-            ));
-            meta.push(Span::styled(
-                &detail.issue_type,
-                Style::default().fg(Color::Gray),
-            ));
-        }
-        content.push(Line::from(meta));
-
-        // Labels
-        if !detail.labels.is_empty() {
-            let mut label_spans: Vec<Span> = vec![Span::styled(
-                "Labels: ",
-                Style::default().fg(Color::DarkGray),
-            )];
-            for (i, label) in detail.labels.iter().enumerate() {
-                if i > 0 {
-                    label_spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
-                }
-                label_spans.push(Span::styled(label, Style::default().fg(Color::Yellow)));
-            }
-            content.push(Line::from(label_spans));
-        }
-
-        // Dependencies
-        if !detail.dependencies.is_empty() {
-            content.push(Line::from(""));
-            content.push(Line::from(Span::styled(
-                "Dependencies",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for dep in &detail.dependencies {
-                let status_icon = match dep.status.as_str() {
-                    "closed" => "\u{2713}",
-                    "in_progress" => "\u{25d0}",
-                    "blocked" => "\u{25cf}",
-                    _ => "\u{25cb}",
-                };
-                let arrow = if dep.dep_type == "blocks" {
-                    "\u{2190}" // ←  this issue is blocked by dep
-                } else {
-                    "\u{2192}" // →  this issue blocks dep
-                };
-                let status_color = match dep.status.as_str() {
-                    "closed" => Color::DarkGray,
-                    "blocked" => Color::Red,
-                    _ => Color::White,
-                };
-                content.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {arrow} {status_icon} "),
-                        Style::default().fg(status_color),
-                    ),
-                    Span::styled(&dep.id, Style::default().fg(Color::Cyan)),
-                    Span::styled(" ", Style::default()),
-                    Span::styled(&dep.title, Style::default().fg(status_color)),
-                ]));
-            }
-        }
-
-        // Description
-        if !detail.description.is_empty() {
-            content.push(Line::from(""));
-            content.push(Line::from(Span::styled(
-                "Description",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for line in detail.description.lines() {
-                content.push(Line::from(Span::styled(
-                    format!("  {line}"),
-                    Style::default().fg(Color::Gray),
-                )));
-            }
-        }
-
-        // Design
-        if !detail.design.is_empty() {
-            content.push(Line::from(""));
-            content.push(Line::from(Span::styled(
-                "Design",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for line in detail.design.lines() {
-                content.push(Line::from(Span::styled(
-                    format!("  {line}"),
-                    Style::default().fg(Color::Gray),
-                )));
-            }
-        }
-
-        // Notes
-        if !detail.notes.is_empty() {
-            content.push(Line::from(""));
-            content.push(Line::from(Span::styled(
-                "Notes",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for line in detail.notes.lines() {
-                content.push(Line::from(Span::styled(
-                    format!("  {line}"),
-                    Style::default().fg(Color::Gray),
-                )));
-            }
+            content.push(Line::from(vec![
+                Span::styled(
+                    format!("  {arrow} {status_icon} "),
+                    Style::default().fg(status_color),
+                ),
+                Span::styled(&dep.id, Style::default().fg(Color::Cyan)),
+                Span::styled(" ", Style::default()),
+                Span::styled(&dep.title, Style::default().fg(status_color)),
+            ]));
         }
     }
 
-    let modal = Paragraph::new(content)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} ", short_id(&detail.id)))
-                .title_alignment(Alignment::Center)
-                .style(Style::default().fg(Color::White)),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((detail.scroll_offset, 0));
+    // Description
+    if !detail.description.is_empty() {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "Description",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for line in detail.description.lines() {
+            content.push(Line::from(Span::styled(
+                format!("  {line}"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
 
-    f.render_widget(modal, modal_area);
+    // Design
+    if !detail.design.is_empty() {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "Design",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for line in detail.design.lines() {
+            content.push(Line::from(Span::styled(
+                format!("  {line}"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+
+    // Notes
+    if !detail.notes.is_empty() {
+        content.push(Line::from(""));
+        content.push(Line::from(Span::styled(
+            "Notes",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for line in detail.notes.lines() {
+            content.push(Line::from(Span::styled(
+                format!("  {line}"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+
+    content
+}
+
+/// Draw the preview pane showing bead detail below the board.
+fn draw_preview_pane(f: &mut Frame, state: &KanbanBoardState, area: Rect) {
+    let has_focus = state.focus == BoardFocus::Preview;
+    let border_style = if has_focus {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    match &state.preview_detail {
+        Some(detail) => {
+            let content = build_detail_content(detail);
+            let title = format!(" {} ", short_id(&detail.id));
+            let pane = Paragraph::new(content)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(title)
+                        .title_alignment(Alignment::Center)
+                        .style(border_style),
+                )
+                .wrap(Wrap { trim: false })
+                .scroll((detail.scroll_offset, 0));
+            f.render_widget(pane, area);
+        }
+        None => {
+            let content = vec![Line::from(""), Line::from(Span::styled(
+                "  Select a bead to see details",
+                Style::default().fg(Color::DarkGray),
+            ))];
+            let pane = Paragraph::new(content).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Preview ")
+                    .title_alignment(Alignment::Center)
+                    .style(border_style),
+            );
+            f.render_widget(pane, area);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
