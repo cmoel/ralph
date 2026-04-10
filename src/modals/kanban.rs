@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::Alignment;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -767,11 +767,9 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
 // Input handling
 // ---------------------------------------------------------------------------
 
-/// Handle keyboard input for the kanban board modal.
+/// Handle keyboard input for the kanban board (primary view).
 pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModifiers) {
-    let Some(state) = &mut app.kanban_board_state else {
-        return;
-    };
+    let state = &mut app.kanban_board_state;
 
     // If close confirmation is open, handle its input
     if let Some(confirm) = &mut state.close_confirm {
@@ -929,9 +927,7 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
 
     match key_code {
         KeyCode::Esc => {
-            app.show_kanban_board = false;
-            app.kanban_board_state = None;
-            app.stop_kanban_watcher();
+            // Board is the primary view — Esc is a no-op
         }
         KeyCode::Enter => {
             if let Some(card) = state.selected_card() {
@@ -1083,11 +1079,9 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
 // Board rendering
 // ---------------------------------------------------------------------------
 
-/// Draw the kanban board modal.
-pub fn draw_kanban_board(f: &mut Frame, app: &App) {
-    let Some(state) = &app.kanban_board_state else {
-        return;
-    };
+/// Draw the kanban board in the given content area.
+pub fn draw_kanban_board(f: &mut Frame, app: &App, board_area: Rect) {
+    let state = &app.kanban_board_state;
 
     // If detail view is active, draw that instead
     if let Some(detail) = &state.detail_view {
@@ -1095,16 +1089,8 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
         return;
     }
 
-    // Use most of the screen
-    let area = f.area();
-    let modal_width = area.width.saturating_sub(4).min(120);
-    let modal_height = area.height.saturating_sub(4).min(40);
-    let modal_area = centered_rect(modal_width, modal_height, area);
-
-    f.render_widget(Clear, modal_area);
-
-    let inner_height = modal_height.saturating_sub(2) as usize;
-    let inner_width = modal_width.saturating_sub(2) as usize;
+    let inner_height = board_area.height.saturating_sub(2) as usize;
+    let inner_width = board_area.width.saturating_sub(2) as usize;
 
     let mut content: Vec<Line> = Vec::new();
 
@@ -1409,7 +1395,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
         state.open_count, state.closed_count
     );
 
-    let modal = Paragraph::new(content).block(
+    let board = Paragraph::new(content).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Work Board ")
@@ -1418,7 +1404,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App) {
             .style(Style::default().fg(Color::White)),
     );
 
-    f.render_widget(modal, modal_area);
+    f.render_widget(board, board_area);
 
     // Close confirmation overlay
     if let Some(confirm) = &state.close_confirm {

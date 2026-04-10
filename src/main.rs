@@ -14,6 +14,7 @@ mod modals;
 mod output;
 mod templates;
 mod tool_history;
+#[allow(dead_code)]
 mod tool_panel;
 mod tool_settings;
 mod ui;
@@ -28,11 +29,10 @@ use crate::app::{App, AppStatus};
 use crate::cli::{Cli, Commands, ToolCommands};
 use crate::config::{LoadedConfig, compute_project_config_path, load_project_config};
 use crate::modals::{
-    ConfigModalState, InitModalState, KanbanBoardState, ToolAllowModalState, WorkersStreamState,
-    handle_bead_picker_input, handle_config_modal_input, handle_init_modal_input,
-    handle_kanban_input, handle_tool_allow_modal_input, handle_workers_stream_input,
+    ConfigModalState, InitModalState, WorkersStreamState, handle_bead_picker_input,
+    handle_config_modal_input, handle_init_modal_input, handle_kanban_input,
+    handle_tool_allow_modal_input, handle_workers_stream_input,
 };
-use crate::tool_panel::SelectedPanel;
 use crate::ui::draw_ui;
 
 use std::io;
@@ -44,35 +44,13 @@ use std::time::{Duration, SystemTime};
 use crate::logging::ReloadHandle;
 
 use anyhow::Result;
-use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
-};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::{DefaultTerminal, Terminal};
 use tracing::{debug, info, warn};
-
-/// Direction for scroll operations.
-enum ScrollDirection {
-    Up,
-    Down,
-}
-
-/// Scroll the focused panel.
-fn scroll_panel(app: &mut App, direction: ScrollDirection, amount: u16) {
-    match app.tool_panel.selected_panel {
-        SelectedPanel::Main => match direction {
-            ScrollDirection::Up => app.scroll_up(amount),
-            ScrollDirection::Down => app.scroll_down(amount),
-        },
-        SelectedPanel::Tools => match direction {
-            ScrollDirection::Up => app.tool_panel.scroll_up(amount),
-            ScrollDirection::Down => app.tool_panel.scroll_down(amount),
-        },
-    }
-}
 
 /// Merge the current worktree branch to main, clean up, and create a fresh worktree.
 /// Epic-aware: within an active epic, skips merge and reuses the worktree.
@@ -339,6 +317,27 @@ fn run_app(
         }
     }
 
+    // Start board data fetch and filesystem watcher
+    if app.board_config_error.is_none() {
+        let bd_path = app.config.behavior.bd_path.clone();
+        let column_defs = app.kanban_board_state.column_defs.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = crate::modals::fetch_board_data(&bd_path, &column_defs);
+            let _ = tx.send(result);
+        });
+        app.kanban_items_rx = Some(rx);
+
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (fs_tx, fs_rx) = mpsc::channel();
+        let stop_clone = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || {
+            crate::modals::watch_beads_directory(fs_tx, stop_clone);
+        });
+        app.kanban_fs_rx = Some(fs_rx);
+        app.kanban_watcher_stop = Some(stop);
+    }
+
     // Register agent beads for all workers (worktrees created on first loop start)
     {
         let bd_path = app.config.behavior.bd_path.clone();
@@ -368,7 +367,8 @@ fn run_app(
 
     let result = run_event_loop(&mut app, &mut terminal);
 
-    // Always clean up agent resources for all workers, regardless of how we exited
+    // Always clean up resources, regardless of how we exited
+    app.stop_kanban_watcher();
     for w in 0..app.workers.len() {
         app.workers[w].kill_child();
     }
@@ -479,14 +479,6 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                 continue;
             }
 
-            // Handle kanban board input
-            if app.show_kanban_board {
-                if let Event::Key(key) = event {
-                    handle_kanban_input(app, key.code, key.modifiers);
-                }
-                continue;
-            }
-
             // Handle init modal input
             if app.show_init_modal {
                 if let Event::Key(key) = event {
@@ -537,8 +529,9 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                 continue;
             }
 
-            match event {
-                Event::Key(key) => match key.code {
+            // App-level keys handled before board, then fall through to board input
+            if let Event::Key(key) = event {
+                match key.code {
                     KeyCode::Char('q') => {
                         if app.status == AppStatus::Running {
                             app.set_hint("press s to stop the loop");
@@ -548,7 +541,6 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                     }
                     KeyCode::Char('S') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {
-                            // Start new iteration run for all workers
                             if app.start_iteration_run() {
                                 let worker_count = app.workers.len();
                                 for w in 0..worker_count {
@@ -563,7 +555,6 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                                     execution::start_command(app)?;
                                 }
                                 app.selected_worker = 0;
-                                // Set status after starting all workers
                                 if app.any_worker_active() {
                                     app.status = AppStatus::Running;
                                 }
@@ -574,7 +565,6 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                         }
                     },
                     KeyCode::Char('c') => {
-                        // Open config modal
                         app.show_config_modal = true;
                         let project_path = app
                             .project_config_path
@@ -591,112 +581,22 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                             project_path,
                         ));
                     }
-                    KeyCode::Char('B') => {
-                        if let Some(err) = &app.board_config_error {
-                            app.set_hint(err.clone());
-                            continue;
-                        }
-                        let board_config =
-                            crate::modals::load_board_config().expect("already validated");
-                        let column_defs = board_config.columns.clone();
-                        app.show_kanban_board = true;
-                        app.kanban_board_state =
-                            Some(KanbanBoardState::new_loading(board_config.columns));
-                        let bd_path = app.config.behavior.bd_path.clone();
-                        let (tx, rx) = mpsc::channel();
-                        std::thread::spawn(move || {
-                            let result = crate::modals::fetch_board_data(&bd_path, &column_defs);
-                            let _ = tx.send(result);
-                        });
-                        app.kanban_items_rx = Some(rx);
-
-                        // Start filesystem watcher for live board updates
-                        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                        let (fs_tx, fs_rx) = mpsc::channel();
-                        let stop_clone = std::sync::Arc::clone(&stop);
-                        std::thread::spawn(move || {
-                            crate::modals::watch_beads_directory(fs_tx, stop_clone);
-                        });
-                        app.kanban_fs_rx = Some(fs_rx);
-                        app.kanban_watcher_stop = Some(stop);
-                    }
                     KeyCode::Char('i') => {
-                        // Open init modal
                         app.show_init_modal = true;
                         app.init_modal_state = Some(InitModalState::new(&app.config));
                     }
-                    KeyCode::Char('?') => {
-                        // Open help modal
-                        app.show_help_modal = true;
-                    }
                     KeyCode::Char('D') => {
-                        // Toggle Dolt server
                         app.toggle_dolt_server();
-                    }
-                    KeyCode::Tab => {
-                        app.tool_panel.selected_panel.toggle();
-                        if app.tool_panel.selected_panel == SelectedPanel::Tools
-                            && app.tool_panel.selected.is_none()
-                            && !app.tool_panel.entries.is_empty()
-                        {
-                            app.tool_panel.selected =
-                                Some(app.tool_panel.entries.len().saturating_sub(1));
-                        }
-                    }
-                    KeyCode::Char('t') => {
-                        app.tool_panel.collapsed = !app.tool_panel.collapsed;
                     }
                     KeyCode::Char('w') if !app.workers.is_empty() => {
                         app.show_workers_stream = true;
                         app.workers_stream_state =
                             Some(WorkersStreamState::new(app.selected_worker));
                     }
-                    KeyCode::Char('A') if app.tool_panel.selected_panel == SelectedPanel::Tools => {
-                        if let Some(idx) = app.tool_panel.selected
-                            && let Some(entry) = app.tool_panel.entries.get(idx)
-                        {
-                            app.show_tool_allow_modal = true;
-                            app.tool_allow_modal_state =
-                                Some(ToolAllowModalState::new(&entry.tool_name, &entry.summary));
-                        }
+                    _ => {
+                        handle_kanban_input(app, key.code, key.modifiers);
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        scroll_panel(app, ScrollDirection::Up, 1);
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        scroll_panel(app, ScrollDirection::Down, 1);
-                    }
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let half_page = app.main_pane_height / 2;
-                        scroll_panel(app, ScrollDirection::Up, half_page);
-                    }
-                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let half_page = app.main_pane_height / 2;
-                        scroll_panel(app, ScrollDirection::Down, half_page);
-                    }
-                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let full_page = app.main_pane_height;
-                        scroll_panel(app, ScrollDirection::Up, full_page);
-                    }
-                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let full_page = app.main_pane_height;
-                        scroll_panel(app, ScrollDirection::Down, full_page);
-                    }
-                    _ => {}
-                },
-                Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::ScrollUp => {
-                        scroll_panel(app, ScrollDirection::Up, 3);
-                    }
-                    MouseEventKind::ScrollDown => {
-                        scroll_panel(app, ScrollDirection::Down, 3);
-                    }
-                    _ => {}
-                },
-                Event::Resize(_, _) => {
-                    // Terminal resized, will be handled in next draw
                 }
-                _ => {}
             }
         }
     }

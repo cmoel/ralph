@@ -239,10 +239,8 @@ pub struct App {
     pub tool_allow_modal_state: Option<ToolAllowModalState>,
     /// Resolved repository path for tool history tracking.
     pub repo_path: String,
-    /// Whether the kanban board modal is visible.
-    pub show_kanban_board: bool,
-    /// State for the kanban board modal (when open).
-    pub kanban_board_state: Option<KanbanBoardState>,
+    /// State for the kanban board (primary view, always present).
+    pub kanban_board_state: KanbanBoardState,
     /// Receiver for background kanban board data (multiple bd commands).
     pub kanban_items_rx: Option<Receiver<Result<crate::modals::KanbanBoardData, String>>>,
     /// Receiver for background bd show --json result (bead detail drill-down).
@@ -296,6 +294,10 @@ impl App {
         let work_source = Arc::new(BeadsWorkSource::new(
             loaded_config.config.behavior.bd_path.clone(),
         ));
+        let board_columns = crate::modals::load_board_config()
+            .map(|c| c.columns)
+            .unwrap_or_default();
+        let kanban_board_state = KanbanBoardState::new_loading(board_columns);
         Self {
             status: AppStatus::Stopped,
             scroll_offset: 0,
@@ -345,8 +347,7 @@ impl App {
             show_tool_allow_modal: false,
             tool_allow_modal_state: None,
             repo_path: crate::db::detect_repo_path(),
-            show_kanban_board: false,
-            kanban_board_state: None,
+            kanban_board_state,
             kanban_items_rx: None,
             bead_detail_rx: None,
             kanban_fs_rx: None,
@@ -413,6 +414,7 @@ impl App {
             .saturating_sub(self.main_pane_height)
     }
 
+    #[allow(dead_code)]
     pub fn scroll_up(&mut self, amount: u16) {
         if self.scroll_offset > 0 {
             self.scroll_offset = self.scroll_offset.saturating_sub(amount);
@@ -420,6 +422,7 @@ impl App {
         }
     }
 
+    #[allow(dead_code)]
     pub fn scroll_down(&mut self, amount: u16) {
         let max = self.max_scroll();
         self.scroll_offset = (self.scroll_offset + amount).min(max);
@@ -662,18 +665,15 @@ impl App {
         match rx.try_recv() {
             Ok(result) => {
                 self.dirty = true;
-                if let Some(ref mut board) = self.kanban_board_state {
-                    board.populate(result);
-                }
+                self.kanban_board_state.populate(result);
             }
             Err(TryRecvError::Empty) => {
                 self.kanban_items_rx = Some(rx); // still running
             }
             Err(TryRecvError::Disconnected) => {
                 self.dirty = true;
-                if let Some(ref mut board) = self.kanban_board_state {
-                    board.populate(Err("Background fetch failed".to_string()));
-                }
+                self.kanban_board_state
+                    .populate(Err("Background fetch failed".to_string()));
             }
         }
     }
@@ -688,9 +688,7 @@ impl App {
         match rx.try_recv() {
             Ok(result) => {
                 self.dirty = true;
-                if let Some(ref mut board) = self.kanban_board_state
-                    && let Some(ref mut detail) = board.detail_view
-                {
+                if let Some(ref mut detail) = self.kanban_board_state.detail_view {
                     detail.populate(result);
                 }
             }
@@ -699,9 +697,7 @@ impl App {
             }
             Err(TryRecvError::Disconnected) => {
                 self.dirty = true;
-                if let Some(ref mut board) = self.kanban_board_state
-                    && let Some(ref mut detail) = board.detail_view
-                {
+                if let Some(ref mut detail) = self.kanban_board_state.detail_view {
                     detail.populate(Err("Background fetch failed".to_string()));
                 }
             }
@@ -722,13 +718,9 @@ impl App {
         }
 
         // If something changed and we're not already fetching, trigger re-fetch
-        if changed
-            && self.kanban_items_rx.is_none()
-            && self.show_kanban_board
-            && let Some(ref board) = self.kanban_board_state
-        {
+        if changed && self.kanban_items_rx.is_none() {
             let bd_path = self.config.behavior.bd_path.clone();
-            let column_defs = board.column_defs.clone();
+            let column_defs = self.kanban_board_state.column_defs.clone();
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
                 let result = crate::modals::fetch_board_data(&bd_path, &column_defs);
@@ -740,8 +732,7 @@ impl App {
         // Also refresh the detail modal if one is open
         if changed
             && self.bead_detail_rx.is_none()
-            && let Some(ref board) = self.kanban_board_state
-            && let Some(ref detail) = board.detail_view
+            && let Some(ref detail) = self.kanban_board_state.detail_view
             && !detail.is_loading
         {
             let bd_path = self.config.behavior.bd_path.clone();
@@ -831,12 +822,11 @@ impl App {
             crate::modals::DepDirection::BlockedBy => (dep.bead_id, picked_id),
             crate::modals::DepDirection::Blocks => (picked_id, dep.bead_id),
         };
-        if let Some(state) = &mut self.kanban_board_state {
-            state.push_action(crate::modals::BoardAction::AddDependency {
+        self.kanban_board_state
+            .push_action(crate::modals::BoardAction::AddDependency {
                 issue: issue.clone(),
                 depends_on: depends_on.clone(),
             });
-        }
         std::thread::spawn(move || {
             std::process::Command::new(&bd_path)
                 .args(["dep", "add", &issue, &depends_on])

@@ -55,6 +55,7 @@ pub struct ToolAllowModalState {
 
 impl ToolAllowModalState {
     /// Create a new state pre-filled with the tool name and summary.
+    #[allow(dead_code)]
     pub fn new(tool_name: &str, summary: &str) -> Self {
         let pattern = if summary.is_empty() {
             tool_name.to_string()

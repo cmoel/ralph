@@ -6,16 +6,13 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::app::{App, AppStatus, DoltServerState};
 use crate::modals::{
     draw_bead_picker, draw_config_modal, draw_help_modal, draw_init_modal, draw_kanban_board,
     draw_quit_modal, draw_tool_allow_modal, draw_workers_stream,
 };
-use crate::tool_panel::{SelectedPanel, ToolCallStatus};
 
 /// Maximum length for truncated tool input display.
 pub const TOOL_INPUT_MAX_LEN: usize = 60;
@@ -409,10 +406,8 @@ pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 /// Draw the main UI.
 pub fn draw_ui(f: &mut Frame, app: &mut App) {
     use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::widgets::Wrap;
 
     let command_height = 3u16; // Fixed: border + 1 content + border
-    let show_tools_column = !app.tool_panel.collapsed && !app.tool_panel.entries.is_empty();
 
     // Two-level layout: content area (flexible) + command bar (fixed)
     let outer = Layout::default()
@@ -423,123 +418,14 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
-    // Split content area: stream panel (left) + tools panel (right)
-    let content_constraints = if show_tools_column {
-        vec![Constraint::Percentage(70), Constraint::Percentage(30)]
-    } else {
-        vec![Constraint::Percentage(100)]
-    };
-    let content = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(content_constraints)
-        .split(outer[0]);
-
-    let stream_area = content[0];
-    let tools_area = if show_tools_column {
-        Some(content[1])
-    } else {
-        None
-    };
+    let content_area = outer[0];
     let command_area = outer[1];
 
-    // Update pane dimensions for scroll calculations
-    app.main_pane_height = stream_area.height.saturating_sub(2); // Account for borders
-    let new_width = stream_area.width;
-    if new_width != app.main_pane_width {
-        app.main_pane_width = new_width;
-        app.cached_visual_line_count = None;
-    }
-
-    // === Stream Panel ===
-    let w = app.selected_worker;
-    let mut content: Vec<Line> = app.workers[w].output_lines.to_vec();
-    if !app.workers[w].current_line.is_empty() {
-        content.push(Line::raw(&app.workers[w].current_line));
-    }
-
-    // Build iteration progress display for bottom title
-    let iteration_display = if app.workers[w].current_iteration == 0 {
-        None
-    } else if app.workers[w].total_iterations < 0 {
-        Some(format!("{}/∞", app.workers[w].current_iteration))
-    } else {
-        Some(format!(
-            "{}/{}",
-            app.workers[w].current_iteration, app.workers[w].total_iterations
-        ))
-    };
-
-    // Build tokens display for bottom title
-    let tokens_display = if app.cumulative_tokens > 0 {
-        Some(format!("{} tokens", app.cumulative_tokens))
-    } else {
-        None
-    };
-
-    // Top title: session ID (left), bead name (right)
-    let output_border_color = if app.tool_panel.selected_panel == SelectedPanel::Main {
-        Color::White
-    } else {
-        app.status.status_color()
-    };
-    let mut output_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(app.status.border_type())
-        .border_style(Style::default().fg(output_border_color))
-        .title(
-            Line::from(if let Some(wt) = &app.workers[w].worktree_name {
-                format!(" {} | {} ", app.session_id, wt)
-            } else {
-                format!(" {} ", app.session_id)
-            })
-            .left_aligned(),
-        );
-
-    if let Some(bead) = &app.current_bead {
-        output_block = output_block.title(Line::from(format!(" {} ", bead)).right_aligned());
-    }
-
-    // Bottom title: iteration count (left), cumulative tokens (right)
-    if let Some(iter) = &iteration_display {
-        output_block = output_block.title_bottom(Line::from(format!(" {} ", iter)).left_aligned());
-    }
-    if let Some(tokens) = &tokens_display {
-        output_block =
-            output_block.title_bottom(Line::from(format!(" {} ", tokens)).right_aligned());
-    }
-
-    let output_panel = Paragraph::new(content)
-        .block(output_block)
-        .wrap(Wrap { trim: false })
-        .scroll((app.scroll_offset, 0));
-
-    f.render_widget(output_panel, stream_area);
-
-    // Stream scrollbar
-    let visual_lines = app.visual_line_count();
-    if visual_lines > app.main_pane_height {
-        let scrollbar = Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"));
-
-        let mut scrollbar_state = ScrollbarState::default()
-            .content_length(visual_lines as usize)
-            .position(app.scroll_offset as usize)
-            .viewport_content_length(app.main_pane_height as usize);
-
-        f.render_stateful_widget(scrollbar, stream_area, &mut scrollbar_state);
-    }
-
-    // === Tools Panel ===
-    if let Some(tools_area) = tools_area {
-        app.tool_panel.height = tools_area.height;
-        draw_tool_panel(f, app, tools_area);
-    } else {
-        app.tool_panel.height = 0;
-    }
+    // === Board (primary content area) ===
+    draw_kanban_board(f, app, content_area);
 
     // === Command Panel ===
+    let w = app.selected_worker;
     let key_style = Style::default().fg(Color::Cyan);
     let label_style = Style::default().fg(Color::DarkGray);
 
@@ -675,11 +561,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         draw_config_modal(f, app);
     }
 
-    // Kanban board modal
-    if app.show_kanban_board {
-        draw_kanban_board(f, app);
-    }
-
     // Init modal
     if app.show_init_modal {
         draw_init_modal(f, app);
@@ -708,126 +589,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Quit confirmation modal
     if app.show_quit_modal {
         draw_quit_modal(f, app);
-    }
-}
-
-/// Draw the tools panel (right column).
-fn draw_tool_panel(f: &mut Frame, app: &App, area: Rect) {
-    let is_selected = app.tool_panel.selected_panel == SelectedPanel::Tools;
-    let border_color = if is_selected {
-        Color::White
-    } else {
-        app.status.status_color()
-    };
-    let border_type = app.status.border_type();
-
-    let entry_count = app.tool_panel.entries.len();
-
-    // Collapsed state: single line with count
-    if entry_count == 0 || app.tool_panel.collapsed {
-        let title = if entry_count == 0 {
-            " Tools ".to_string()
-        } else {
-            format!(" Tools [{}] ", entry_count)
-        };
-        let collapsed = Paragraph::new("").block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_type(border_type)
-                .border_style(Style::default().fg(border_color))
-                .title(title),
-        );
-        f.render_widget(collapsed, area);
-        return;
-    }
-
-    // Build tool call lines
-    let dim = Style::default().fg(Color::DarkGray);
-    let cyan_bold = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-
-    let selected_idx = if is_selected {
-        app.tool_panel.selected
-    } else {
-        None
-    };
-
-    let lines: Vec<Line> = app
-        .tool_panel
-        .entries
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            let is_item_selected = selected_idx == Some(i);
-            let (icon, icon_style) = match entry.status {
-                ToolCallStatus::Pending => ("▶", Style::default().fg(Color::Yellow)),
-                ToolCallStatus::Success => ("✓", Style::default().fg(Color::Green)),
-                ToolCallStatus::Error => ("✗", Style::default().fg(Color::Red)),
-            };
-
-            let name_style = if entry.status == ToolCallStatus::Error {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-            } else {
-                cyan_bold
-            };
-
-            let mut line = if entry.summary.is_empty() {
-                Line::from(vec![
-                    Span::styled(format!(" {} ", icon), icon_style),
-                    Span::styled(entry.tool_name.clone(), name_style),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled(format!(" {} ", icon), icon_style),
-                    Span::styled(entry.tool_name.clone(), name_style),
-                    Span::styled(format!("({})", entry.summary), dim),
-                ])
-            };
-
-            if is_item_selected {
-                line = line.style(Style::default().bg(Color::DarkGray));
-            }
-
-            line
-        })
-        .collect();
-
-    let title = format!(" Tools [{}] ", entry_count);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(border_type)
-        .border_style(Style::default().fg(border_color))
-        .title(title);
-
-    let inner_height = area.height.saturating_sub(2);
-
-    // Auto-scroll: if not focused, always show the latest entries
-    let scroll_offset = if !is_selected {
-        entry_count.saturating_sub(inner_height as usize) as u16
-    } else {
-        app.tool_panel.scroll_offset
-    };
-
-    let panel = Paragraph::new(lines)
-        .block(block)
-        .scroll((scroll_offset, 0));
-
-    f.render_widget(panel, area);
-
-    // Scrollbar if content exceeds panel
-    if entry_count as u16 > inner_height {
-        let scrollbar = Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"));
-
-        let mut scrollbar_state = ScrollbarState::default()
-            .content_length(entry_count)
-            .position(scroll_offset as usize)
-            .viewport_content_length(inner_height as usize);
-
-        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
 }
 
