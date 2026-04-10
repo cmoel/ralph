@@ -178,6 +178,10 @@ pub const BRAIN_DUMP_SKILL_MD: &str =
 pub const SHAPE_SKILL_MD: &str =
     include_str!("../.claude/skills/shape/SKILL.md");
 
+/// Capture skill (with YAML frontmatter).
+pub const CAPTURE_SKILL_MD: &str =
+    include_str!("../.claude/skills/capture/SKILL.md");
+
 #[cfg(test)]
 mod tests {
     use super::*;

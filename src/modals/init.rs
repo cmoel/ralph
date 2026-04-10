@@ -79,6 +79,8 @@ fn template_for_path(display_path: &str) -> Option<&'static str> {
         Some(templates::BRAIN_DUMP_SKILL_MD)
     } else if display_path.contains("shape") {
         Some(templates::SHAPE_SKILL_MD)
+    } else if display_path.contains("capture") {
+        Some(templates::CAPTURE_SKILL_MD)
     } else {
         None
     }
@@ -105,6 +107,10 @@ fn skill_files() -> Vec<(String, PathBuf)> {
         (
             ".claude/skills/shape/SKILL.md".to_string(),
             PathBuf::from(".claude/skills/shape/SKILL.md"),
+        ),
+        (
+            ".claude/skills/capture/SKILL.md".to_string(),
+            PathBuf::from(".claude/skills/capture/SKILL.md"),
         ),
     ]
 }
@@ -484,6 +490,7 @@ mod tests {
             .collect();
         assert!(paths.iter().any(|p| p.contains("brain-dump")));
         assert!(paths.iter().any(|p| p.contains("shape")));
+        assert!(paths.iter().any(|p| p.contains("capture")));
         // PROMPT.md is no longer managed by init
         assert!(!paths.iter().any(|p| p.ends_with("PROMPT.md")));
     }
@@ -492,7 +499,7 @@ mod tests {
     fn test_init_has_two_files() {
         let config = Config::default();
         let state = InitModalState::new(&config);
-        assert_eq!(state.files.len(), 2);
+        assert_eq!(state.files.len(), 3);
     }
 
     #[test]
@@ -516,6 +523,7 @@ mod tests {
     fn test_template_for_path() {
         assert!(template_for_path(".claude/skills/brain-dump/SKILL.md").is_some());
         assert!(template_for_path(".claude/skills/shape/SKILL.md").is_some());
+        assert!(template_for_path(".claude/skills/capture/SKILL.md").is_some());
         assert!(template_for_path("unknown/path.md").is_none());
     }
 
