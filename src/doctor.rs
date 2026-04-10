@@ -167,6 +167,25 @@ fn settings_has_bd_prime_hook(contents: &str) -> bool {
     false
 }
 
+/// Check that scaffolded skill files are present and match compiled-in templates.
+pub fn check_scaffolding_drift(config: &Config) -> CheckResult {
+    let state = crate::modals::InitModalState::new(config);
+    if state.all_up_to_date() {
+        CheckResult::pass("Scaffolded skills up to date")
+    } else {
+        let missing = state.create_count();
+        let drifted = state.regenerate_count();
+        let msg = match (missing > 0, drifted > 0) {
+            (true, false) => format!("{missing} skill file(s) not installed — run `ralph init`"),
+            (false, true) => {
+                format!("{drifted} skill file(s) have updates — run `ralph init` to refresh")
+            }
+            _ => format!("{missing} missing, {drifted} drifted — run `ralph init`"),
+        };
+        CheckResult::fail(msg)
+    }
+}
+
 /// Check board column TOML validity.
 ///
 /// If a per-project `board_columns.toml` exists, validates it and reports the path.
@@ -329,5 +348,14 @@ mod tests {
         assert!(result.message.contains("valid"));
         // When no external file, should report compiled-in default
         assert!(result.message.contains("compiled-in default"));
+    }
+
+    #[test]
+    fn scaffolding_drift_returns_valid_result() {
+        let config = Config::default();
+        let result = check_scaffolding_drift(&config);
+        // Whether it passes or fails depends on local file state,
+        // but it should always produce a non-empty message
+        assert!(!result.message.is_empty());
     }
 }

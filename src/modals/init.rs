@@ -196,6 +196,16 @@ impl InitModalState {
             .count()
     }
 
+    /// Return a hint message describing scaffolding drift, or `None` if up to date.
+    pub fn hint_message(&self) -> Option<&'static str> {
+        match (self.create_count() > 0, self.regenerate_count() > 0) {
+            (true, false) => Some("Skills not installed \u{2014} press `i` to run init."),
+            (false, true) => Some("Skill updates available \u{2014} press `i` to refresh."),
+            (true, true) => Some("Skills out of date \u{2014} press `i` to init."),
+            (false, false) => None,
+        }
+    }
+
     /// Create all files. Returns Ok(()) on success, Err(message) on failure.
     pub fn create_files(&self) -> Result<(), String> {
         for file in &self.files {
@@ -507,5 +517,52 @@ mod tests {
         assert!(template_for_path(".claude/skills/brain-dump/SKILL.md").is_some());
         assert!(template_for_path(".claude/skills/shape/SKILL.md").is_some());
         assert!(template_for_path("unknown/path.md").is_none());
+    }
+
+    fn make_state(statuses: &[InitFileStatus]) -> InitModalState {
+        let files = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, &status)| InitFileEntry {
+                display_path: format!("file_{i}"),
+                full_path: PathBuf::from(format!("file_{i}")),
+                status,
+                diff_lines: vec![],
+            })
+            .collect();
+        InitModalState {
+            files,
+            focus: InitModalField::InitializeButton,
+            error: None,
+            success: None,
+        }
+    }
+
+    #[test]
+    fn hint_message_none_when_all_up_to_date() {
+        let state = make_state(&[InitFileStatus::Exists, InitFileStatus::Exists]);
+        assert!(state.hint_message().is_none());
+    }
+
+    #[test]
+    fn hint_message_missing_only() {
+        let state = make_state(&[InitFileStatus::WillCreate, InitFileStatus::WillCreate]);
+        let msg = state.hint_message().unwrap();
+        assert!(msg.contains("not installed"));
+        assert!(msg.contains("press `i`"));
+    }
+
+    #[test]
+    fn hint_message_drifted_only() {
+        let state = make_state(&[InitFileStatus::WillRegenerate, InitFileStatus::Exists]);
+        let msg = state.hint_message().unwrap();
+        assert!(msg.contains("updates available"));
+    }
+
+    #[test]
+    fn hint_message_both_missing_and_drifted() {
+        let state = make_state(&[InitFileStatus::WillCreate, InitFileStatus::WillRegenerate]);
+        let msg = state.hint_message().unwrap();
+        assert!(msg.contains("out of date"));
     }
 }

@@ -133,9 +133,10 @@ pub(crate) fn run_app(
     let mut app = App::new(session_id, log_directory, loaded_config, log_level_handle);
     app.validate_board_config();
 
-    // Hint when skill files haven't been scaffolded
-    if !std::path::Path::new(".claude/skills/brain-dump/SKILL.md").exists() {
-        app.set_hint("Run `ralph init` to get skills for shaping and brain-dumping beads.");
+    // Hint when skill files are missing or drifted from compiled-in templates
+    let init_state = modals::InitModalState::new(&loaded_for_doctor.config);
+    if let Some(msg) = init_state.hint_message() {
+        app.set_hint(msg);
     }
 
     // Run doctor checks asynchronously — only surface failures
@@ -149,6 +150,7 @@ pub(crate) fn run_app(
                 doctor::check_prompt(cfg),
             ];
             checks.push(doctor::check_bd(cfg));
+            checks.push(doctor::check_scaffolding_drift(cfg));
             let dolt_check = doctor::check_dolt_status(cfg);
             let dolt_running = dolt_check.passed;
             checks.push(dolt_check);
