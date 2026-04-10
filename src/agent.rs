@@ -1168,23 +1168,14 @@ pub fn filter_claimable_beads(items: &[serde_json::Value]) -> Vec<&serde_json::V
     items
         .iter()
         .filter(|item| {
-            let dominated_by_labels =
-                item.get("labels")
-                    .and_then(|l| l.as_array())
-                    .is_some_and(|ls| {
-                        ls.iter().any(|l| {
-                            l.as_str().is_some_and(|s| {
-                                matches!(
-                                    s,
-                                    "needs-shaping"
-                                        | "shaping-required"
-                                        | "human"
-                                        | "needs-brain-dump"
-                                )
-                            })
-                        })
-                    });
-            !dominated_by_labels
+            let has_human_label = item
+                .get("labels")
+                .and_then(|l| l.as_array())
+                .is_some_and(|ls| {
+                    ls.iter()
+                        .any(|l| l.as_str().is_some_and(|s| s == "human"))
+                });
+            !has_human_label
         })
         .collect()
 }
@@ -1737,7 +1728,7 @@ mod tests {
     // --- Epic selection tests ---
 
     #[test]
-    fn filter_claimable_beads_excludes_human_and_shaping_labels() {
+    fn filter_claimable_beads_excludes_only_human_label() {
         let items = vec![
             json!({"id": "b1", "title": "good", "labels": []}),
             json!({"id": "b2", "title": "human", "labels": ["human"]}),
@@ -1751,7 +1742,7 @@ mod tests {
             .iter()
             .filter_map(|b| b.get("id").and_then(|i| i.as_str()))
             .collect();
-        assert_eq!(ids, vec!["b1", "b4"]);
+        assert_eq!(ids, vec!["b1", "b3", "b4", "b5", "b6"]);
     }
 
     #[test]
