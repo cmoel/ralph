@@ -28,6 +28,10 @@ Never use `rm`. To delete a file:
 - Messages are typed enums (exhaustive match required)
 - Logging via tracing with file rotation
 
+## Build Output
+
+Use `scripts/run-silent.sh` for build/test/check/fmt commands to keep output concise. A PreToolUse hook does this automatically for `devbox run build|test|check|fmt` and their cargo equivalents.
+
 ## Testing
 
 See `TESTING.md` for testing philosophy.
