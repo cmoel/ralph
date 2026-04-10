@@ -715,9 +715,9 @@ impl App {
         {
             state.preview_cursor_moved = None;
             state.preview_bead_id = Some(pending_id.clone());
-            state.preview_detail = Some(
-                crate::modals::BeadDetailState::new_loading(pending_id.clone()),
-            );
+            state.preview_detail = Some(crate::modals::BeadDetailState::new_loading(
+                pending_id.clone(),
+            ));
 
             let bd_path = self.config.behavior.bd_path.clone();
             let (tx, rx) = std::sync::mpsc::channel();

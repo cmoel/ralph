@@ -167,11 +167,44 @@ fn settings_has_bd_prime_hook(contents: &str) -> bool {
     false
 }
 
-/// Check that the embedded board column TOML parses correctly.
+/// Check board column TOML validity.
+///
+/// If a per-project `board_columns.toml` exists, validates it and reports the path.
+/// Otherwise validates the compiled-in default.
 pub fn check_board_toml() -> CheckResult {
-    match crate::modals::load_board_config() {
-        Ok(_) => CheckResult::pass("Board column TOML is valid"),
-        Err(e) => CheckResult::fail(format!("Board column TOML is invalid: {e}")),
+    if let Some(path) = crate::config::resolve_board_columns_path() {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => match toml::from_str::<crate::modals::BoardConfig>(&contents) {
+                Ok(config) => {
+                    if config.columns.is_empty() {
+                        return CheckResult::fail(format!(
+                            "Custom board TOML has no columns ({})",
+                            path.display()
+                        ));
+                    }
+                    CheckResult::pass(format!(
+                        "Custom board TOML is valid ({}, {} columns)",
+                        path.display(),
+                        config.columns.len()
+                    ))
+                }
+                Err(e) => CheckResult::fail(format!(
+                    "Custom board TOML is invalid ({}): {e}",
+                    path.display()
+                )),
+            },
+            Err(e) => CheckResult::fail(format!(
+                "Cannot read custom board TOML ({}): {e}",
+                path.display()
+            )),
+        }
+    } else {
+        match toml::from_str::<crate::modals::BoardConfig>(include_str!(
+            "modals/board_columns.toml"
+        )) {
+            Ok(_) => CheckResult::pass("Board column TOML is valid (compiled-in default)"),
+            Err(e) => CheckResult::fail(format!("Compiled-in board column TOML is invalid: {e}")),
+        }
     }
 }
 
@@ -294,5 +327,7 @@ mod tests {
         let result = check_board_toml();
         assert!(result.passed);
         assert!(result.message.contains("valid"));
+        // When no external file, should report compiled-in default
+        assert!(result.message.contains("compiled-in default"));
     }
 }
