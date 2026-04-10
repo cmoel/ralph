@@ -276,6 +276,19 @@ pub fn resolve_prompt_path() -> Option<PathBuf> {
     }
 }
 
+/// Resolve the per-project board_columns.toml path if the file exists.
+/// Returns the path to `<per-project-config-dir>/board_columns.toml` when present,
+/// or None (meaning the compiled-in default should be used).
+pub fn resolve_board_columns_path() -> Option<PathBuf> {
+    let config_path = compute_project_config_path()?;
+    let board_path = config_path.with_file_name("board_columns.toml");
+    if board_path.exists() {
+        Some(board_path)
+    } else {
+        None
+    }
+}
+
 /// Load a per-project config from the given path.
 /// Returns Ok(PartialConfig) on success, Err(String) on parse/read failure.
 pub fn load_project_config(path: &PathBuf) -> Result<PartialConfig, String> {

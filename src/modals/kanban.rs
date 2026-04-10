@@ -43,8 +43,34 @@ pub struct SourceDef {
     pub emoji: String,
 }
 
-/// Load the embedded board column definitions.
+/// Load board column definitions.
+///
+/// Cascade: per-project `board_columns.toml` in the config dir → compiled-in default.
+/// If the external file exists but fails to parse, falls back to the compiled-in
+/// default and logs a warning.
 pub fn load_board_config() -> Result<BoardConfig, toml::de::Error> {
+    if let Some(path) = crate::config::resolve_board_columns_path() {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => match toml::from_str::<BoardConfig>(&contents) {
+                Ok(config) => {
+                    tracing::info!("Loaded custom board columns from {}", path.display());
+                    return Ok(config);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse {}: {e}. Falling back to compiled-in default.",
+                        path.display()
+                    );
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to read {}: {e}. Falling back to compiled-in default.",
+                    path.display()
+                );
+            }
+        }
+    }
     toml::from_str(include_str!("board_columns.toml"))
 }
 
@@ -746,9 +772,7 @@ impl KanbanBoardState {
         if let Some(card) = self.selected_card() {
             let id = card.id.clone();
             // Don't schedule if we're already showing this bead
-            if self.preview_bead_id.as_deref() == Some(&id)
-                && self.preview_pending_id.is_none()
-            {
+            if self.preview_bead_id.as_deref() == Some(&id) && self.preview_pending_id.is_none() {
                 return;
             }
             self.preview_pending_id = Some(id);
@@ -1919,10 +1943,13 @@ fn draw_preview_pane(f: &mut Frame, state: &KanbanBoardState, area: Rect) {
             f.render_widget(pane, area);
         }
         None => {
-            let content = vec![Line::from(""), Line::from(Span::styled(
-                "  Select a bead to see details",
-                Style::default().fg(Color::DarkGray),
-            ))];
+            let content = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Select a bead to see details",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
             let pane = Paragraph::new(content).block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -2197,4 +2224,64 @@ pub fn fetch_board_data(
         dep_neighbors,
         manual_blocked_ids,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_board_config_returns_compiled_default_when_no_external_file() {
+        // With no external file, load_board_config should succeed with compiled-in default
+        let config = load_board_config().expect("compiled-in default should parse");
+        assert!(
+            !config.columns.is_empty(),
+            "default config should have columns"
+        );
+    }
+
+    #[test]
+    fn compiled_default_parses_correctly() {
+        let config: BoardConfig =
+            toml::from_str(include_str!("board_columns.toml")).expect("embedded TOML should parse");
+        assert!(!config.columns.is_empty());
+        for col in &config.columns {
+            assert!(!col.name.is_empty(), "column name should not be empty");
+            assert!(
+                !col.sources.is_empty(),
+                "column should have at least one source"
+            );
+            for src in &col.sources {
+                assert!(
+                    !src.command.is_empty(),
+                    "source command should not be empty"
+                );
+                assert!(!src.emoji.is_empty(), "source emoji should not be empty");
+            }
+        }
+    }
+
+    #[test]
+    fn board_config_deserializes_valid_toml() {
+        let toml_str = r#"
+[[columns]]
+name = "Test Column"
+
+[[columns.sources]]
+command = "echo '[]'"
+emoji = "✓"
+"#;
+        let config: BoardConfig = toml::from_str(toml_str).expect("valid TOML should parse");
+        assert_eq!(config.columns.len(), 1);
+        assert_eq!(config.columns[0].name, "Test Column");
+        assert_eq!(config.columns[0].sources.len(), 1);
+        assert_eq!(config.columns[0].sources[0].emoji, "✓");
+    }
+
+    #[test]
+    fn board_config_rejects_invalid_toml() {
+        let bad_toml = "this is not valid TOML [[[";
+        let result = toml::from_str::<BoardConfig>(bad_toml);
+        assert!(result.is_err());
+    }
 }
