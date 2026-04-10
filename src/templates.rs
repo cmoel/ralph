@@ -96,7 +96,15 @@ Ralph claimed bead `{id}` for you. Run `bd show {id}` to read its full specifica
 
 Research the codebase and the bead before committing to build it.
 
-**Build it** if the bead is well-specified and this is the right work.
+**First, check the hill status.** Run `bd show {id}` and look for `## Hill: Shaped` in the description.
+
+**If `## Hill: Shaped` is NOT present** (missing, Pending, Climbing, or any other status):
+1. Update the bead's hill section with WHY it's not ready: `bd update {id} --description="$(bd show {id} --field=description)\n\n## Hill: Climbing\nNot ready: [specific reasons — missing acceptance criteria, approach not grounded in codebase, no edge cases identified, etc.]"`
+2. Flag for human: `bd update {id} --add-label=human`
+3. Unclaim: `bd update {id} --status=open --assignee=""`
+4. Move on to admin work or exit — do NOT write code for unshaped beads
+
+**Build it** if `## Hill: Shaped` is present and the bead is well-specified.
 
 **Redirect** if the bead is under-specified, wrong, or not what the project needs right now:
 1. Update with what's missing: `bd update {id} --notes="WHAT'S MISSING: [what sections are absent and what questions need answering]"`
@@ -139,6 +147,8 @@ When not confident about a bead or decision:
 - Flag under-specified beads: `bd update <id> --add-label=human --notes="Needs shaping: [what's missing]"`
 - Close eligible epics: `bd epic close-eligible`
 - Surface stale items: `bd stale`
+
+When creating new beads during admin work, always include `## Hill: Pending` in the description and add the `human` label. New beads are NOT ready for work — they need shaping first.
 
 ## When Blocked — MANDATORY ESCALATION
 
@@ -263,18 +273,21 @@ Create beads using `bd create` for each item:
 bd create "Title of work item" \
   --description="One-line description of what this solves.
 
+## Hill: Pending
+
 ## Context
 Why this matters and what prompted it.
 
 ## Open Questions
 - Things that need investigation during shaping" \
   -t task -p 2 \
-  --labels needs-shaping
+  --labels human
 ```
 
 - Default type: `task` (adjust if clearly a `bug`, `feature`, `refactor`, etc.)
 - Default priority: `2` (adjust based on user's emphasis during extraction)
-- Always add `needs-shaping` label — these items need /shape before implementation
+- Always include `## Hill: Pending` in the description — these are raw ideas that need shaping
+- Always add `human` label — these items need /shape before Ralph can work on them
 - For epics: create the epic bead noting it will need children, but don't prescribe what children should be
 
 ### Session End
@@ -591,3 +604,59 @@ When shaping multiple items in one session:
    - If neither → query for `needs-shaping` items and present the list (auto-discover)
 3. Summarize what you see in the item, then begin the shaping conversation
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_md_contains_hill_enforcement() {
+        let content = beads_mode_content(Some("test-123"));
+        assert!(
+            content.contains("## Hill: Shaped"),
+            "beads mode should reference Hill: Shaped check"
+        );
+        assert!(
+            content.contains("NOT present"),
+            "beads mode should instruct what to do when hill status is missing"
+        );
+    }
+
+    #[test]
+    fn beads_mode_admin_includes_hill_for_new_beads() {
+        let content = beads_mode_content(Some("test-123"));
+        assert!(
+            content.contains("## Hill: Pending"),
+            "admin section should instruct adding Hill: Pending to new beads"
+        );
+        assert!(
+            content.contains("human"),
+            "admin section should instruct adding human label to new beads"
+        );
+    }
+
+    #[test]
+    fn beads_mode_unclaimed_includes_hill_for_new_beads() {
+        let content = beads_mode_content(None);
+        assert!(
+            content.contains("## Hill: Pending"),
+            "unclaimed admin section should instruct adding Hill: Pending to new beads"
+        );
+    }
+
+    #[test]
+    fn brain_dump_skill_includes_hill_pending() {
+        assert!(
+            BRAIN_DUMP_SKILL_MD.contains("## Hill: Pending"),
+            "brain dump bead template should include Hill: Pending"
+        );
+    }
+
+    #[test]
+    fn brain_dump_skill_uses_human_label() {
+        assert!(
+            BRAIN_DUMP_SKILL_MD.contains("--labels human"),
+            "brain dump should label beads with human, not needs-shaping"
+        );
+    }
+}
