@@ -122,6 +122,9 @@ pub fn handle_workers_stream_input(app: &mut App, key_code: KeyCode, modifiers: 
             // Still disable auto-scroll for Ctrl+d
             state.auto_scroll = false;
         }
+        KeyCode::Char('?') => {
+            app.help_context = Some(crate::modals::HelpContext::WorkersStream);
+        }
         _ => {}
     }
 }

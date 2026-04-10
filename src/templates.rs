@@ -175,16 +175,13 @@ Close any beads you complete.
 }
 
 /// Brain dump skill (with YAML frontmatter).
-pub const BRAIN_DUMP_SKILL_MD: &str =
-    include_str!("../.claude/skills/brain-dump/SKILL.md");
+pub const BRAIN_DUMP_SKILL_MD: &str = include_str!("../.claude/skills/brain-dump/SKILL.md");
 
 /// Shape skill (with YAML frontmatter).
-pub const SHAPE_SKILL_MD: &str =
-    include_str!("../.claude/skills/shape/SKILL.md");
+pub const SHAPE_SKILL_MD: &str = include_str!("../.claude/skills/shape/SKILL.md");
 
 /// Capture skill (with YAML frontmatter).
-pub const CAPTURE_SKILL_MD: &str =
-    include_str!("../.claude/skills/capture/SKILL.md");
+pub const CAPTURE_SKILL_MD: &str = include_str!("../.claude/skills/capture/SKILL.md");
 
 #[cfg(test)]
 mod tests {

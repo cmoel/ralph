@@ -1,10 +1,10 @@
-use std::sync::mpsc::{self, TryRecvError};
 use std::sync::Arc;
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use tracing::{debug, warn};
 
-use crate::config::{reload_config, get_project_config_path};
+use crate::config::{get_project_config_path, reload_config};
 use crate::dolt::DoltServerState;
 use crate::logging;
 use crate::startup::get_file_mtime;

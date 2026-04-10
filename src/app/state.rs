@@ -12,10 +12,12 @@ use rusqlite::Connection;
 use tracing::info;
 
 use crate::config::{Config, LoadedConfig};
-use crate::dolt::DoltManager;
 use crate::doctor;
+use crate::dolt::DoltManager;
 use crate::logging::ReloadHandle;
-use crate::modals::{ConfigModalState, InitModalState, KanbanBoardState, ToolAllowModalState};
+use crate::modals::{
+    ConfigModalState, HelpContext, InitModalState, KanbanBoardState, ToolAllowModalState,
+};
 use crate::output::OutputMessage;
 use crate::startup::get_file_mtime;
 use crate::tool_panel::{ContentBlockState, ToolPanel};
@@ -195,8 +197,8 @@ pub struct App {
     pub show_init_modal: bool,
     /// State for the init modal (when open).
     pub init_modal_state: Option<InitModalState>,
-    /// Whether the help modal is visible.
-    pub show_help_modal: bool,
+    /// Which help context is showing, if any.
+    pub help_context: Option<HelpContext>,
     /// Whether the quit confirmation modal is visible.
     pub show_quit_modal: bool,
     /// Transient hint message displayed in the status bar (auto-clears after timeout).
@@ -322,7 +324,7 @@ impl App {
             config_modal_state: None,
             show_init_modal: false,
             init_modal_state: None,
-            show_help_modal: false,
+            help_context: None,
             show_quit_modal: false,
             hint: None,
             cumulative_tokens: 0,

@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::app::App;
 use super::overlays::{CloseConfirmState, DeferState, DepDirectionState};
 use super::state::{BoardAction, BoardFocus, DepDirection, spawn_bd};
+use crate::app::App;
 
 /// Handle keyboard input for the kanban board (primary view).
 pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModifiers) {
@@ -134,17 +134,6 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
         return;
     }
 
-    // If help overlay is open, only ? and Esc dismiss it
-    if state.show_help {
-        match key_code {
-            KeyCode::Char('?') | KeyCode::Esc => {
-                state.show_help = false;
-            }
-            _ => {}
-        }
-        return;
-    }
-
     // If preview pane has focus, handle preview input
     if state.focus == BoardFocus::Preview {
         match key_code {
@@ -162,7 +151,7 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                 }
             }
             KeyCode::Char('?') => {
-                state.show_help = true;
+                app.help_context = Some(crate::modals::HelpContext::Preview);
             }
             _ => {}
         }
@@ -272,7 +261,7 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
             }
         }
         KeyCode::Char('?') => {
-            state.show_help = true;
+            app.help_context = Some(crate::modals::HelpContext::Board);
         }
         KeyCode::Char('h') | KeyCode::Left => {
             state.move_left();

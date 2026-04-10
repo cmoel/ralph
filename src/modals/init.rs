@@ -322,6 +322,9 @@ pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
             }
         },
 
+        KeyCode::Char('?') => {
+            app.help_context = Some(crate::modals::HelpContext::Init);
+        }
         _ => {}
     }
 }

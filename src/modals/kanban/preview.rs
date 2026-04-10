@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use super::state::{short_id, BeadDetailState, BoardFocus, KanbanBoardState};
+use super::state::{BeadDetailState, BoardFocus, KanbanBoardState, short_id};
 
 fn build_detail_content(detail: &BeadDetailState) -> Vec<Line<'_>> {
     let mut content: Vec<Line> = Vec::new();

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::state::{short_id, ColumnDef, KanbanBoardData, KanbanCard};
+use super::state::{ColumnDef, KanbanBoardData, KanbanCard, short_id};
 
 fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
     let id = item.get("id").and_then(|v| v.as_str())?.to_string();

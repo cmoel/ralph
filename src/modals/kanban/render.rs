@@ -7,11 +7,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::App;
-use crate::ui::centered_rect;
 use super::overlays::{CloseConfirmState, DeferState, DepDirectionState};
 use super::preview::draw_preview_pane;
 use super::state::short_id;
+use crate::app::App;
+use crate::ui::centered_rect;
 
 fn truncate_to_width(s: &str, max_width: usize) -> String {
     use unicode_width::UnicodeWidthChar;
@@ -384,11 +384,6 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App, board_area: Rect) {
     if let Some(dep_dir) = &state.dep_direction {
         draw_dep_direction(f, dep_dir);
     }
-
-    // Help overlay
-    if state.show_help {
-        draw_board_help(f);
-    }
 }
 
 fn draw_close_confirm(f: &mut Frame, confirm: &CloseConfirmState) {
@@ -520,109 +515,4 @@ fn draw_dep_direction(f: &mut Frame, dep_dir: &DepDirectionState) {
     );
 
     f.render_widget(widget, overlay);
-}
-
-fn draw_board_help(f: &mut Frame) {
-    let modal_width: u16 = 50;
-    let modal_height: u16 = 26;
-    let modal_area = centered_rect(modal_width, modal_height, f.area());
-
-    f.render_widget(Clear, modal_area);
-
-    let key_style = Style::default().fg(Color::Cyan);
-    let desc_style = Style::default().fg(Color::DarkGray);
-    let header_style = Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD);
-
-    let inner_width = modal_width.saturating_sub(4) as usize;
-    let footer_text = "? or Esc to close";
-    let footer_padding = inner_width.saturating_sub(footer_text.len());
-
-    let content: Vec<Line> = vec![
-        Line::from(Span::styled("  Navigation", header_style)),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("hjkl/\u{2190}\u{2191}\u{2192}\u{2193}", key_style),
-            Span::styled("  Move between cards", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("Enter", key_style),
-            Span::styled("      Focus preview pane", desc_style),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Preview Pane", header_style)),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("j/k", key_style),
-            Span::styled("          Scroll preview", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("Esc/Enter", key_style),
-            Span::styled("    Return to board", desc_style),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Card Actions", header_style)),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("X", key_style),
-            Span::styled("            Close bead", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("b", key_style),
-            Span::styled("            Add dependency", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("d", key_style),
-            Span::styled("            Defer bead", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("+/-", key_style),
-            Span::styled("          Change priority", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("H", key_style),
-            Span::styled("            Toggle human label", desc_style),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Undo/Redo", header_style)),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("u", key_style),
-            Span::styled("            Undo last action", desc_style),
-        ]),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("Ctrl+r", key_style),
-            Span::styled("       Redo", desc_style),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Board", header_style)),
-        Line::from(vec![
-            Span::raw("    "),
-            Span::styled("?", key_style),
-            Span::styled("            Toggle help", desc_style),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw(" ".repeat(footer_padding)),
-            Span::styled(footer_text, desc_style),
-        ]),
-    ];
-
-    let modal = Paragraph::new(content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Help ")
-            .title_alignment(Alignment::Center)
-            .style(Style::default().fg(Color::White)),
-    );
-
-    f.render_widget(modal, modal_area);
 }

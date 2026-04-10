@@ -90,6 +90,8 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Char(c) => {
             if matches!(state.focus, ConfigModalField::ClaudePath) {
                 state.insert_char(c);
+            } else if c == '?' {
+                app.help_context = Some(crate::modals::HelpContext::Config);
             }
         }
 

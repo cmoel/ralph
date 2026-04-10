@@ -17,7 +17,7 @@ pub use bead_picker::{
     handle_bead_picker_input,
 };
 pub use config::{ConfigModalState, draw_config_modal, handle_config_modal_input};
-pub use help::draw_help_modal;
+pub use help::{HelpContext, draw_help_modal};
 pub use init::{InitModalState, draw_init_modal, handle_init_modal_input};
 pub use kanban::{
     BeadDetailState, BoardAction, BoardConfig, DepDirection, KanbanBoardData, KanbanBoardState,

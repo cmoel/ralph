@@ -182,11 +182,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         draw_init_modal(f, app);
     }
 
-    // Help modal
-    if app.show_help_modal {
-        draw_help_modal(f, app);
-    }
-
     // Tool allow modal
     if app.show_tool_allow_modal {
         draw_tool_allow_modal(f, app);
@@ -200,6 +195,11 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     // Workers stream modal
     if app.show_workers_stream {
         draw_workers_stream(f, app);
+    }
+
+    // Help modal (renders on top of all other modals except quit)
+    if let Some(ctx) = app.help_context {
+        draw_help_modal(f, ctx);
     }
 
     // Quit confirmation modal

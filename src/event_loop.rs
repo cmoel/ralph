@@ -143,12 +143,50 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
                 continue;
             }
 
-            // Handle help modal input
-            if app.show_help_modal {
-                if let Event::Key(key) = event
-                    && (key.code == KeyCode::Esc || key.code == KeyCode::Char('?'))
-                {
-                    app.show_help_modal = false;
+            // Handle help modal input — overlay on top of everything
+            if app.help_context.is_some() {
+                if let Event::Key(key) = event {
+                    match key.code {
+                        KeyCode::Char('?') | KeyCode::Esc => {
+                            app.help_context = None;
+                        }
+                        KeyCode::Char('S') => match app.status {
+                            AppStatus::Stopped | AppStatus::Error => {
+                                app.help_context = None;
+                                if app.start_iteration_run() {
+                                    let worker_count = app.workers.len();
+                                    for w in 0..worker_count {
+                                        app.selected_worker = w;
+                                        if !merge_and_refresh_worktree(app) {
+                                            continue;
+                                        }
+                                        execution::claim_before_start(app);
+                                        if !ensure_worktree(app) {
+                                            continue;
+                                        }
+                                        execution::start_command(app)?;
+                                    }
+                                    app.selected_worker = 0;
+                                    if app.any_worker_active() {
+                                        app.status = AppStatus::Running;
+                                    }
+                                }
+                            }
+                            AppStatus::Running => {
+                                app.help_context = None;
+                                app.stop_command();
+                            }
+                        },
+                        KeyCode::Char('q') => {
+                            app.help_context = None;
+                            if app.status == AppStatus::Running {
+                                app.set_hint("press s to stop the loop");
+                            } else {
+                                app.show_quit_modal = true;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 continue;
             }

@@ -279,8 +279,6 @@ pub struct KanbanBoardState {
     pub redo_stack: Vec<BoardAction>,
     /// Transient status message with timestamp for auto-dismiss.
     pub status_message: Option<(String, Instant)>,
-    /// Whether the help overlay is shown.
-    pub show_help: bool,
 }
 
 /// Which direction the dependency goes.
@@ -476,7 +474,6 @@ impl KanbanBoardState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             status_message: None,
-            show_help: false,
             column_defs,
         }
     }
@@ -639,8 +636,8 @@ mod tests {
 
     #[test]
     fn compiled_default_parses_correctly() {
-        let config: BoardConfig =
-            toml::from_str(include_str!("../board_columns.toml")).expect("embedded TOML should parse");
+        let config: BoardConfig = toml::from_str(include_str!("../board_columns.toml"))
+            .expect("embedded TOML should parse");
         assert!(!config.columns.is_empty());
         for col in &config.columns {
             assert!(!col.name.is_empty(), "column name should not be empty");
