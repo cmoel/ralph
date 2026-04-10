@@ -175,20 +175,14 @@ pub struct App {
     pub log_directory: Option<PathBuf>,
     /// Loaded configuration.
     pub config: Config,
-    /// Path to the global configuration file.
-    pub config_path: PathBuf,
     /// Path to the per-project configuration file, if it existed at startup.
     pub project_config_path: Option<PathBuf>,
-    /// Last known mtime of the global config file for change detection.
-    pub config_mtime: Option<SystemTime>,
     /// Last known mtime of the project config file for change detection.
     pub project_config_mtime: Option<SystemTime>,
     /// Last time we polled for config changes.
     pub last_config_poll: Instant,
     /// When config was last successfully reloaded (for "Reloaded" indicator fade).
     pub config_reloaded_at: Option<Instant>,
-    /// Error message if global config reload failed.
-    pub config_reload_error: Option<String>,
     /// Error message if per-project config reload failed.
     pub project_config_error: Option<String>,
     /// Name of the currently active bead (from bd list).
@@ -314,9 +308,7 @@ impl App {
             loop_count: 0,
             log_directory,
             config: loaded_config.config,
-            config_path: loaded_config.config_path.clone(),
             project_config_path: loaded_config.project_config_path.clone(),
-            config_mtime: get_file_mtime(&loaded_config.config_path),
             project_config_mtime: loaded_config
                 .project_config_path
                 .as_ref()
@@ -324,7 +316,6 @@ impl App {
             // Initialize to "long ago" so we poll immediately on start
             last_config_poll: Instant::now() - Duration::from_secs(10),
             config_reloaded_at: None,
-            config_reload_error: None,
             project_config_error: None,
             current_bead: None,
             // Initialize to "long ago" so we poll immediately on start
@@ -601,14 +592,6 @@ impl App {
 
         self.last_config_poll = Instant::now();
 
-        // Check global config mtime
-        let global_mtime = get_file_mtime(&self.config_path);
-        let global_changed = match (global_mtime, self.config_mtime) {
-            (Some(current), Some(prev)) => current != prev,
-            (Some(_), None) => true,
-            _ => false,
-        };
-
         // Check project config mtime (also detect new project config appearing)
         let project_path = self
             .project_config_path
@@ -622,21 +605,17 @@ impl App {
             (None, None) => false,
         };
 
-        if !global_changed && !project_changed {
+        if !project_changed {
             return;
         }
 
         self.dirty = true;
 
-        // Update mtimes
-        if let Some(mtime) = global_mtime {
-            self.config_mtime = Some(mtime);
-        }
         self.project_config_mtime = project_mtime;
         // Update project path (may have appeared or disappeared)
         self.project_config_path = project_path;
 
-        let reloaded = reload_config(&self.config_path, self.project_config_path.as_ref());
+        let reloaded = reload_config(self.project_config_path.as_ref());
 
         // Check if log level changed and update if we have a reload handle
         let new_log_level = &reloaded.config.logging.level;
@@ -666,10 +645,9 @@ impl App {
         }
 
         self.config = reloaded.config;
-        self.config_reload_error = reloaded.global_error;
         self.project_config_error = reloaded.project_error;
 
-        if self.config_reload_error.is_none() && self.project_config_error.is_none() {
+        if self.project_config_error.is_none() {
             self.config_reloaded_at = Some(Instant::now());
         }
     }

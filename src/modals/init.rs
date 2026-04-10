@@ -475,8 +475,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
 
     // Dynamic modal height based on content
     let modal_width: u16 = 72;
-    let modal_height =
-        (content.len() as u16 + 3).min(f.area().height.saturating_sub(2));
+    let modal_height = (content.len() as u16 + 3).min(f.area().height.saturating_sub(2));
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal

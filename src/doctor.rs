@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-use crate::config::{Config, ConfigLoadStatus, LoadedConfig};
+use crate::config::{Config, LoadedConfig};
 use crate::work_source;
 
 /// Result of a single health check.
@@ -27,19 +27,11 @@ impl CheckResult {
     }
 }
 
-/// Check that the config file was loaded successfully.
+/// Check that config loaded successfully.
 pub fn check_config(loaded: &LoadedConfig) -> CheckResult {
-    match &loaded.status {
-        ConfigLoadStatus::Loaded => CheckResult::pass("Config loaded"),
-        ConfigLoadStatus::Created => CheckResult::pass(format!(
-            "Config created at {}",
-            loaded.config_path.display()
-        )),
-        ConfigLoadStatus::Error(e) => CheckResult::fail(format!(
-            "Config error: {} — check {}",
-            e,
-            loaded.config_path.display()
-        )),
+    match &loaded.project_config_path {
+        Some(path) => CheckResult::pass(format!("Config loaded (project: {})", path.display())),
+        None => CheckResult::pass("Config loaded (compiled-in defaults)"),
     }
 }
 
@@ -186,40 +178,28 @@ pub fn check_board_toml() -> CheckResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConfigLoadStatus;
     use std::path::PathBuf;
 
-    fn default_loaded_config(status: ConfigLoadStatus) -> LoadedConfig {
-        LoadedConfig {
+    #[test]
+    fn check_config_passes_with_defaults() {
+        let loaded = LoadedConfig {
             config: Config::default(),
-            config_path: PathBuf::from("/tmp/config.toml"),
             project_config_path: None,
-            status,
-        }
-    }
-
-    #[test]
-    fn check_config_passes_when_loaded() {
-        let loaded = default_loaded_config(ConfigLoadStatus::Loaded);
+        };
         let result = check_config(&loaded);
         assert!(result.passed);
-        assert!(result.message.contains("Config loaded"));
+        assert!(result.message.contains("compiled-in defaults"));
     }
 
     #[test]
-    fn check_config_passes_when_created() {
-        let loaded = default_loaded_config(ConfigLoadStatus::Created);
+    fn check_config_passes_with_project() {
+        let loaded = LoadedConfig {
+            config: Config::default(),
+            project_config_path: Some(PathBuf::from("/tmp/project/config.toml")),
+        };
         let result = check_config(&loaded);
         assert!(result.passed);
-        assert!(result.message.contains("Config created"));
-    }
-
-    #[test]
-    fn check_config_fails_on_error() {
-        let loaded = default_loaded_config(ConfigLoadStatus::Error("bad toml".to_string()));
-        let result = check_config(&loaded);
-        assert!(!result.passed);
-        assert!(result.message.contains("bad toml"));
+        assert!(result.message.contains("project"));
     }
 
     #[test]

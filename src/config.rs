@@ -2,22 +2,8 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
-use std::io;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
-
-/// Status of config file loading
-#[derive(Debug, Clone)]
-pub enum ConfigLoadStatus {
-    /// Config loaded successfully from existing file
-    Loaded,
-    /// Created default config file (first run)
-    Created,
-    /// Error occurred during loading, using defaults.
-    /// String is used in Debug output for logging.
-    #[allow(dead_code)]
-    Error(String),
-}
 
 /// Claude CLI configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,10 +62,6 @@ pub struct BehaviorConfig {
     pub stale_threshold: u64,
     /// Number of concurrent Claude Code workers to spawn on S press. Default: 1.
     pub workers: u32,
-    /// Legacy field - converted to iterations on load.
-    /// `true` becomes `-1` (infinite), `false` becomes `0` (stopped).
-    #[serde(skip_serializing, default)]
-    auto_continue: Option<bool>,
 }
 
 impl Default for BehaviorConfig {
@@ -91,27 +73,6 @@ impl Default for BehaviorConfig {
             heartbeat_interval: 30,
             stale_threshold: 180,
             workers: 1,
-            auto_continue: None,
-        }
-    }
-}
-
-impl BehaviorConfig {
-    /// Normalize the config after deserialization.
-    /// Converts legacy `auto_continue` field to `iterations` if present,
-    /// but only if `iterations` wasn't explicitly set (i.e., still at default -1).
-    pub fn normalize(&mut self) {
-        if let Some(auto_continue) = self.auto_continue.take() {
-            // Only apply legacy migration if iterations wasn't explicitly set
-            // We can't truly detect if it was explicitly set to -1 vs defaulted,
-            // but that's an edge case. Just document that iterations takes precedence.
-            // For simplicity, always apply legacy field if present (old configs won't have iterations)
-            self.iterations = if auto_continue { -1 } else { 0 };
-        }
-        // Clamp workers to at least 1
-        if self.workers == 0 {
-            tracing::warn!("workers=0 in config, treating as 1");
-            self.workers = 1;
         }
     }
 }
@@ -128,12 +89,6 @@ pub struct Config {
 }
 
 impl Config {
-    /// Normalize the config after deserialization.
-    /// Handles legacy field migrations.
-    pub fn normalize(&mut self) {
-        self.behavior.normalize();
-    }
-
     /// Expand `~` to home directory in a path string
     pub fn expand_tilde(path: &str) -> PathBuf {
         if let Some(stripped) = path.strip_prefix("~/")
@@ -185,7 +140,7 @@ pub struct PartialBehaviorConfig {
 }
 
 /// Project-specific configuration where every field is optional.
-/// Fields that are `None` inherit from the global config.
+/// Fields that are `None` inherit from compiled-in defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PartialConfig {
@@ -214,8 +169,8 @@ fn is_partial_behavior_empty(b: &PartialBehaviorConfig) -> bool {
         && b.workers.is_none()
 }
 
-/// Merge a global config with a project-level partial config.
-/// Project values override global values where present.
+/// Merge a base config with a project-level partial config.
+/// Project values override base values where present.
 pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
     Config {
         claude: ClaudeConfig {
@@ -255,8 +210,11 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
                 .behavior
                 .stale_threshold
                 .unwrap_or(global.behavior.stale_threshold),
-            workers: project.behavior.workers.unwrap_or(global.behavior.workers),
-            auto_continue: None,
+            workers: project
+                .behavior
+                .workers
+                .unwrap_or(global.behavior.workers)
+                .max(1),
         },
     }
 }
@@ -265,9 +223,7 @@ pub fn merge_config(global: &Config, project: &PartialConfig) -> Config {
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
     pub config: Config,
-    pub config_path: PathBuf,
     pub project_config_path: Option<PathBuf>,
-    pub status: ConfigLoadStatus,
 }
 
 impl LoadedConfig {
@@ -276,9 +232,7 @@ impl LoadedConfig {
     pub fn default_for_test() -> Self {
         Self {
             config: Config::default(),
-            config_path: PathBuf::from("/tmp/test-config.toml"),
             project_config_path: None,
-            status: ConfigLoadStatus::Created,
         }
     }
 }
@@ -286,11 +240,6 @@ impl LoadedConfig {
 /// Get the platform-appropriate config directory
 fn get_config_dir() -> Option<PathBuf> {
     ProjectDirs::from("com", "cmoel", "ralph").map(|dirs| dirs.config_dir().to_path_buf())
-}
-
-/// Get the full path to the config file
-pub fn get_config_path() -> Option<PathBuf> {
-    get_config_dir().map(|dir| dir.join("config.toml"))
 }
 
 /// Derive a project key from an absolute path.
@@ -341,39 +290,9 @@ pub fn load_project_config(path: &PathBuf) -> Result<PartialConfig, String> {
     })
 }
 
-/// Load the global config from file (without project merge or env overrides).
-/// Used to populate the Global tab of the config modal.
-pub fn load_global_config(config_path: &PathBuf) -> Config {
-    match fs::read_to_string(config_path) {
-        Ok(contents) => match toml::from_str::<Config>(&contents) {
-            Ok(mut c) => {
-                c.normalize();
-                c
-            }
-            Err(_) => Config::default(),
-        },
-        Err(_) => Config::default(),
-    }
-}
-
-/// Load configuration from file, environment, and defaults
+/// Load configuration from compiled-in defaults, per-project overrides, and env vars.
 pub fn load_config() -> LoadedConfig {
-    let config_path = match get_config_path() {
-        Some(path) => path,
-        None => {
-            warn!("Could not determine config directory, using defaults");
-            return LoadedConfig {
-                config: apply_env_overrides(Config::default()),
-                config_path: PathBuf::from("config.toml"),
-                project_config_path: None,
-                status: ConfigLoadStatus::Error("Could not determine config directory".to_string()),
-            };
-        }
-    };
-
-    debug!("Config path: {:?}", config_path);
-
-    let (mut config, status) = load_or_create_config(&config_path);
+    let mut config = Config::default();
 
     // Check for per-project config file
     let project_config_path = get_project_config_path();
@@ -385,7 +304,6 @@ pub fn load_config() -> LoadedConfig {
             }
             Err(e) => {
                 warn!(path = ?project_path, error = %e, "project_config_error");
-                // Keep using global config only
             }
         }
     }
@@ -394,46 +312,20 @@ pub fn load_config() -> LoadedConfig {
 
     LoadedConfig {
         config,
-        config_path,
         project_config_path,
-        status,
     }
 }
 
-/// Result of reloading configuration, including separate error tracking.
+/// Result of reloading configuration.
 pub struct ReloadedConfig {
     pub config: Config,
-    pub global_error: Option<String>,
     pub project_error: Option<String>,
 }
 
-/// Reload configuration from global and optional project config paths.
+/// Reload configuration from compiled-in defaults and optional project config.
 /// Returns a ReloadedConfig that always has a usable config (falls back to defaults).
-/// Errors for each source are tracked separately so the UI can display them.
-pub fn reload_config(
-    config_path: &PathBuf,
-    project_config_path: Option<&PathBuf>,
-) -> ReloadedConfig {
-    // Load global config
-    let (mut config, global_error) = match fs::read_to_string(config_path) {
-        Ok(contents) => match toml::from_str::<Config>(&contents) {
-            Ok(mut c) => {
-                c.normalize();
-                (c, None)
-            }
-            Err(e) => {
-                warn!(path = ?config_path, error = %e, "config_reload_parse_failed");
-                (Config::default(), Some(format!("Invalid config: {}", e)))
-            }
-        },
-        Err(e) => {
-            warn!(path = ?config_path, error = %e, "config_reload_read_failed");
-            (
-                Config::default(),
-                Some(format!("Failed to read config: {}", e)),
-            )
-        }
-    };
+pub fn reload_config(project_config_path: Option<&PathBuf>) -> ReloadedConfig {
+    let mut config = Config::default();
 
     // Merge with project config if present
     let project_error = if let Some(project_path) = project_config_path {
@@ -446,7 +338,7 @@ pub fn reload_config(
                 Err(e) => Some(e),
             }
         } else {
-            // Project config was deleted — just use global config, no error
+            // Project config was deleted — just use defaults, no error
             None
         }
     } else {
@@ -454,32 +346,12 @@ pub fn reload_config(
     };
 
     let config = apply_env_overrides(config);
-    info!(path = ?config_path, "config_reloaded");
+    info!("config_reloaded");
 
     ReloadedConfig {
         config,
-        global_error,
         project_error,
     }
-}
-
-/// Save a config to the given file path.
-/// Returns Ok(()) on success, or Err(String) with error message on failure.
-pub fn save_config(config: &Config, config_path: &PathBuf) -> Result<(), String> {
-    // Serialize to TOML
-    let toml_content = toml::to_string_pretty(config).map_err(|e| {
-        warn!(error = %e, "config_save_serialize_failed");
-        format!("Failed to serialize config: {}", e)
-    })?;
-
-    // Write to file
-    fs::write(config_path, &toml_content).map_err(|e| {
-        warn!(path = ?config_path, error = %e, "config_save_write_failed");
-        format!("Failed to write config: {}", e)
-    })?;
-
-    info!(path = ?config_path, "config_saved");
-    Ok(())
 }
 
 /// Save a partial config to the given file path (per-project config).
@@ -516,112 +388,6 @@ pub fn save_partial_config(partial: &PartialConfig, config_path: &PathBuf) -> Re
 
     info!(path = ?config_path, "partial_config_saved");
     Ok(())
-}
-
-/// Load config from file, or create default if not exists
-fn load_or_create_config(config_path: &PathBuf) -> (Config, ConfigLoadStatus) {
-    match fs::read_to_string(config_path) {
-        Ok(contents) => match toml::from_str::<Config>(&contents) {
-            Ok(mut config) => {
-                config.normalize();
-                info!("Loaded config from {:?}", config_path);
-                (config, ConfigLoadStatus::Loaded)
-            }
-            Err(e) => {
-                warn!(
-                    "Config file malformed at {:?}: {}. Using defaults.",
-                    config_path, e
-                );
-                (
-                    Config::default(),
-                    ConfigLoadStatus::Error(format!("Malformed TOML: {}", e)),
-                )
-            }
-        },
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            // Config doesn't exist, create default
-            create_default_config(config_path)
-        }
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            warn!(
-                "Permission denied reading config at {:?}. Using defaults.",
-                config_path
-            );
-            (
-                Config::default(),
-                ConfigLoadStatus::Error("Permission denied reading config".to_string()),
-            )
-        }
-        Err(e) => {
-            warn!(
-                "Error reading config at {:?}: {}. Using defaults.",
-                config_path, e
-            );
-            (
-                Config::default(),
-                ConfigLoadStatus::Error(format!("Read error: {}", e)),
-            )
-        }
-    }
-}
-
-/// Create the default config file
-fn create_default_config(config_path: &PathBuf) -> (Config, ConfigLoadStatus) {
-    let config = Config::default();
-
-    // Ensure parent directory exists
-    if let Some(parent) = config_path.parent()
-        && let Err(e) = fs::create_dir_all(parent)
-    {
-        warn!(
-            "Could not create config directory {:?}: {}. Continuing without file.",
-            parent, e
-        );
-        return (
-            config,
-            ConfigLoadStatus::Error(format!("Could not create config directory: {}", e)),
-        );
-    }
-
-    // Serialize to TOML
-    let toml_content = match toml::to_string_pretty(&config) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("Could not serialize default config: {}", e);
-            return (
-                config,
-                ConfigLoadStatus::Error(format!("Serialization error: {}", e)),
-            );
-        }
-    };
-
-    // Write file
-    match fs::write(config_path, &toml_content) {
-        Ok(()) => {
-            info!("Created default config at {:?}", config_path);
-            (config, ConfigLoadStatus::Created)
-        }
-        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
-            warn!(
-                "Permission denied creating config at {:?}. Continuing without file.",
-                config_path
-            );
-            (
-                config,
-                ConfigLoadStatus::Error("Permission denied creating config".to_string()),
-            )
-        }
-        Err(e) => {
-            warn!(
-                "Could not write default config to {:?}: {}. Continuing without file.",
-                config_path, e
-            );
-            (
-                config,
-                ConfigLoadStatus::Error(format!("Write error: {}", e)),
-            )
-        }
-    }
 }
 
 /// Apply environment variable overrides to config
@@ -746,55 +512,8 @@ args = "--output-format=stream-json --verbose"
 iterations = 5
 "#;
 
-        let mut config: Config = toml::from_str(toml_str).unwrap();
-        config.normalize();
+        let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.behavior.iterations, 5);
-    }
-
-    #[test]
-    fn test_legacy_auto_continue_true() {
-        // Existing config files may have auto_continue - ensure they migrate
-        let toml_str = r#"
-[behavior]
-auto_continue = true
-"#;
-
-        let mut config: Config = toml::from_str(toml_str).unwrap();
-        config.normalize();
-        // true becomes -1 (infinite mode)
-        assert_eq!(config.behavior.iterations, -1);
-    }
-
-    #[test]
-    fn test_legacy_auto_continue_false() {
-        let toml_str = r#"
-[behavior]
-auto_continue = false
-"#;
-
-        let mut config: Config = toml::from_str(toml_str).unwrap();
-        config.normalize();
-        // false becomes 0 (stopped mode)
-        assert_eq!(config.behavior.iterations, 0);
-    }
-
-    #[test]
-    fn test_legacy_auto_continue_overwrites_iterations() {
-        // When both are present (unlikely transition case), auto_continue wins.
-        // This is intentional - old configs won't have iterations field,
-        // and if someone manually adds both, we favor the legacy field to be safe.
-        let toml_str = r#"
-[behavior]
-iterations = 3
-auto_continue = true
-"#;
-
-        let mut config: Config = toml::from_str(toml_str).unwrap();
-        // Before normalize, iterations is 3 from TOML
-        assert_eq!(config.behavior.iterations, 3);
-        config.normalize();
-        // After normalize, legacy auto_continue=true becomes -1 (infinite)
-        assert_eq!(config.behavior.iterations, -1);
     }
 
     #[test]
@@ -1010,15 +729,17 @@ workers = 4
     }
 
     #[test]
-    fn workers_zero_normalized_to_one() {
-        let toml_str = r#"
-[behavior]
-workers = 0
-"#;
-        let mut config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.behavior.workers, 0);
-        config.normalize();
-        assert_eq!(config.behavior.workers, 1);
+    fn workers_zero_clamped_to_one_on_merge() {
+        let base = Config::default();
+        let partial = PartialConfig {
+            behavior: PartialBehaviorConfig {
+                workers: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let merged = merge_config(&base, &partial);
+        assert_eq!(merged.behavior.workers, 1);
     }
 
     #[test]

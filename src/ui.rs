@@ -632,10 +632,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let command_line = Line::from(line_spans);
 
     // Build config error warning for bottom title
-    let config_error = app
-        .config_reload_error
-        .as_deref()
-        .or(app.project_config_error.as_deref());
+    let config_error = app.project_config_error.as_deref();
 
     let mut block = Block::default()
         .borders(Borders::ALL)

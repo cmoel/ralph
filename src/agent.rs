@@ -1171,10 +1171,7 @@ pub fn filter_claimable_beads(items: &[serde_json::Value]) -> Vec<&serde_json::V
             let has_human_label = item
                 .get("labels")
                 .and_then(|l| l.as_array())
-                .is_some_and(|ls| {
-                    ls.iter()
-                        .any(|l| l.as_str().is_some_and(|s| s == "human"))
-                });
+                .is_some_and(|ls| ls.iter().any(|l| l.as_str().is_some_and(|s| s == "human")));
             !has_human_label
         })
         .collect()

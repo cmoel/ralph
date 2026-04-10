@@ -26,10 +26,7 @@ use clap::Parser;
 
 use crate::app::{App, AppStatus};
 use crate::cli::{Cli, Commands, ToolCommands};
-use crate::config::{
-    LoadedConfig, PartialConfig, compute_project_config_path, load_global_config,
-    load_project_config,
-};
+use crate::config::{LoadedConfig, compute_project_config_path, load_project_config};
 use crate::modals::{
     ConfigModalState, InitModalState, KanbanBoardState, ToolAllowModalState, WorkersStreamState,
     handle_bead_picker_input, handle_config_modal_input, handle_init_modal_input,
@@ -259,8 +256,7 @@ fn main() -> Result<()> {
 
     // Log config status after logging is initialized
     debug!(
-        config_path = %loaded_config.config_path.display(),
-        status = ?loaded_config.status,
+        project_config = ?loaded_config.project_config_path.as_ref().map(|p| p.display().to_string()),
         log_level = %loaded_config.config.logging.level,
         "config_loaded"
     );
@@ -578,28 +574,22 @@ fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
                         }
                     },
                     KeyCode::Char('c') => {
-                        // Open config modal — always show project tab when path is computable
+                        // Open config modal
                         app.show_config_modal = true;
                         let project_path = app
                             .project_config_path
                             .clone()
                             .or_else(compute_project_config_path);
-                        app.config_modal_state = if let Some(project_path) = project_path {
-                            let global_config = load_global_config(&app.config_path);
-                            let partial = if project_path.exists() {
-                                load_project_config(&project_path).unwrap_or_default()
-                            } else {
-                                PartialConfig::default()
-                            };
-                            Some(ConfigModalState::from_config_with_project(
-                                &global_config,
-                                &partial,
-                                &app.config,
-                                project_path,
-                            ))
-                        } else {
-                            Some(ConfigModalState::from_config(&app.config))
-                        };
+                        let partial = project_path
+                            .as_ref()
+                            .filter(|p| p.exists())
+                            .and_then(|p| load_project_config(p).ok())
+                            .unwrap_or_default();
+                        app.config_modal_state = Some(ConfigModalState::from_config(
+                            &partial,
+                            &app.config,
+                            project_path,
+                        ));
                     }
                     KeyCode::Char('B') => {
                         if let Some(err) = &app.board_config_error {

@@ -1,4 +1,4 @@
-//! Configuration modal — settings editor with project/global tabs.
+//! Configuration modal — settings editor for per-project config.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -11,20 +11,13 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tracing::debug;
 
 use crate::app::App;
-use crate::config::{Config, PartialConfig, save_config, save_partial_config};
+use crate::config::{Config, PartialConfig, save_partial_config};
 use crate::get_file_mtime;
 use crate::ui::centered_rect;
 use crate::validators::validate_executable_path;
 
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
-
-/// Which tab is active in the config modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigTab {
-    Project,
-    Global,
-}
 
 /// Per-tab form state storing field values and validation state.
 #[derive(Debug, Clone)]
@@ -80,38 +73,15 @@ impl ConfigModalField {
 pub struct ConfigModalState {
     /// Current focused field.
     pub focus: ConfigModalField,
-    /// Active tab (Project or Global). None when project path unavailable.
-    pub tab: Option<ConfigTab>,
-    /// Project tab form state (only present when project config path is available).
-    pub project_form: Option<TabFormState>,
-    /// Global tab form state.
-    pub global_form: TabFormState,
+    /// Form state for editing config values.
+    pub form: TabFormState,
     /// Path to the per-project config file, if available.
     pub project_config_path: Option<PathBuf>,
 }
 
 impl TabFormState {
-    /// Create form state from a Config, with all fields marked as explicit.
-    fn from_config(config: &Config) -> Self {
-        let log_level_index = LOG_LEVELS
-            .iter()
-            .position(|&l| l == config.logging.level)
-            .unwrap_or(2);
-
-        Self {
-            claude_path: config.claude.path.clone(),
-            log_level_index,
-            iterations: config.behavior.iterations,
-            keep_awake: config.behavior.keep_awake,
-            cursor_pos: config.claude.path.len(),
-            error: None,
-            validation_errors: HashMap::new(),
-            explicit_fields: HashSet::new(),
-        }
-    }
-
-    /// Create form state for the project tab from a PartialConfig (values)
-    /// and the merged Config (for inherited values to display).
+    /// Create form state from a PartialConfig (to know which fields are explicit)
+    /// and the merged Config (for displaying resolved values).
     fn from_partial_config(partial: &PartialConfig, merged: &Config) -> Self {
         let mut explicit_fields = HashSet::new();
 
@@ -210,76 +180,27 @@ impl TabFormState {
 }
 
 impl ConfigModalState {
-    /// Create a new modal state with global tab only (fallback when project path unavailable).
-    pub fn from_config(config: &Config) -> Self {
-        Self {
-            focus: ConfigModalField::ClaudePath,
-            tab: None,
-            project_form: None,
-            global_form: TabFormState::from_config(config),
-            project_config_path: None,
-        }
-    }
-
-    /// Create a new modal state with project and global tabs.
-    pub fn from_config_with_project(
-        global_config: &Config,
+    /// Create modal state showing resolved config (compiled-in defaults + per-project overrides).
+    pub fn from_config(
         partial: &PartialConfig,
         merged_config: &Config,
-        project_config_path: PathBuf,
+        project_config_path: Option<PathBuf>,
     ) -> Self {
         Self {
             focus: ConfigModalField::ClaudePath,
-            tab: Some(ConfigTab::Project),
-            project_form: Some(TabFormState::from_partial_config(partial, merged_config)),
-            global_form: TabFormState::from_config(global_config),
-            project_config_path: Some(project_config_path),
+            form: TabFormState::from_partial_config(partial, merged_config),
+            project_config_path,
         }
     }
 
-    /// Get the active tab, defaulting to Global when no tabs.
-    pub fn active_tab(&self) -> ConfigTab {
-        self.tab.unwrap_or(ConfigTab::Global)
-    }
-
-    /// Whether tabs are shown (i.e., a project config path is available).
-    pub fn has_tabs(&self) -> bool {
-        self.tab.is_some()
-    }
-
-    /// Switch to the other tab, preserving form state.
-    pub fn switch_tab(&mut self) {
-        if let Some(ref mut tab) = self.tab {
-            // Save cursor state for the current form
-            *tab = match tab {
-                ConfigTab::Project => ConfigTab::Global,
-                ConfigTab::Global => ConfigTab::Project,
-            };
-            self.focus = ConfigModalField::ClaudePath;
-            self.update_cursor_for_new_focus();
-        }
-    }
-
-    /// Get a reference to the active form state.
+    /// Get a reference to the form state.
     pub fn active_form(&self) -> &TabFormState {
-        match self.active_tab() {
-            ConfigTab::Project => self.project_form.as_ref().unwrap_or(&self.global_form),
-            ConfigTab::Global => &self.global_form,
-        }
+        &self.form
     }
 
-    /// Get a mutable reference to the active form state.
+    /// Get a mutable reference to the form state.
     fn active_form_mut(&mut self) -> &mut TabFormState {
-        match self.active_tab() {
-            ConfigTab::Project => {
-                if let Some(ref mut form) = self.project_form {
-                    form
-                } else {
-                    &mut self.global_form
-                }
-            }
-            ConfigTab::Global => &mut self.global_form,
-        }
+        &mut self.form
     }
 
     /// Get a reference to the currently focused text field's value.
@@ -320,13 +241,9 @@ impl ConfigModalState {
         }
     }
 
-    /// Mark a field as explicitly set in the project tab.
+    /// Mark a field as explicitly set (overriding the compiled-in default).
     fn mark_explicit(&mut self) {
-        if self.active_tab() == ConfigTab::Project
-            && let Some(ref mut form) = self.project_form
-        {
-            form.explicit_fields.insert(self.focus);
-        }
+        self.form.explicit_fields.insert(self.focus);
     }
 
     /// Insert a character at the current cursor position.
@@ -471,13 +388,10 @@ impl ConfigModalState {
     }
 
     /// Validate a specific field and update validation_errors.
-    /// Skips validation for inherited (non-explicit) fields in the project tab.
+    /// Skips validation for inherited (non-explicit) fields.
     pub fn validate_field(&mut self, field: ConfigModalField) {
-        if self.active_tab() == ConfigTab::Project {
-            let form = self.active_form();
-            if !form.explicit_fields.contains(&field) {
-                return;
-            }
+        if !self.form.explicit_fields.contains(&field) {
+            return;
         }
 
         let form = self.active_form();
@@ -540,14 +454,6 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
     }
 
     match key_code {
-        // Tab switching with [ and ]
-        KeyCode::Char('[') if state.has_tabs() => {
-            state.switch_tab();
-        }
-        KeyCode::Char(']') if state.has_tabs() => {
-            state.switch_tab();
-        }
-
         // Navigation between fields
         KeyCode::Tab => {
             if modifiers.contains(KeyModifiers::SHIFT) {
@@ -573,28 +479,19 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
                 if state.has_validation_errors() {
                     return;
                 }
-                // Save based on active tab
-                let save_result = match state.active_tab() {
-                    ConfigTab::Project => {
-                        let partial = state.to_partial_config();
-                        if let Some(ref path) = state.project_config_path {
-                            save_partial_config(&partial, path)
-                        } else {
-                            Err("No project config path".to_string())
-                        }
-                    }
-                    ConfigTab::Global => {
-                        let new_config = state.to_config();
-                        save_config(&new_config, &app.config_path)
-                    }
+                // Save as per-project partial config
+                let partial = state.to_partial_config();
+                let save_result = if let Some(ref path) = state.project_config_path {
+                    save_partial_config(&partial, path)
+                } else {
+                    Err("No project config path".to_string())
                 };
                 match save_result {
                     Ok(()) => {
                         // Re-merge and update app config
                         let new_merged = state.to_config();
                         app.config = new_merged;
-                        // Update mtimes so we don't trigger a reload
-                        app.config_mtime = get_file_mtime(&app.config_path);
+                        // Update mtime so we don't trigger a reload
                         if let Some(ref path) = state.project_config_path {
                             app.project_config_mtime = get_file_mtime(path);
                             // Track the project config path for hot-reload
@@ -700,15 +597,8 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let separator = "─".repeat(modal_width.saturating_sub(4) as usize);
     let field_width = 40;
 
-    // Determine if we're on the project tab and which fields are inherited
-    let on_project_tab = state
-        .map(|s| s.active_tab() == ConfigTab::Project)
-        .unwrap_or(false);
-    let explicit_fields = if on_project_tab {
-        state.and_then(|s| s.project_form.as_ref().map(|f| &f.explicit_fields))
-    } else {
-        None
-    };
+    // Determine which fields are explicitly set (vs inherited from defaults)
+    let explicit_fields = state.map(|s| &s.form.explicit_fields);
 
     // Check if a field is inherited (not explicitly set in project config)
     let is_inherited = |field: ConfigModalField| -> bool {
@@ -827,41 +717,11 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     // Build content lines
     let mut content: Vec<Line> = Vec::new();
 
-    // Tab bar (only when project config path is available)
-    if let Some(s) = state
-        && s.has_tabs()
-    {
-        let active = s.active_tab();
-        let project_style = if active == ConfigTab::Project {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        let global_style = if active == ConfigTab::Global {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-
-        content.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(" Project ", project_style),
-            Span::raw(" "),
-            Span::styled(" Global ", global_style),
-            Span::styled("                  [ / ] switch tabs", label_style),
-        ]));
-        content.push(Line::from(format!("  {separator}")));
-    }
-
     // Config file path display
-    let config_path_display = if on_project_tab {
-        state
-            .and_then(|s| s.project_config_path.as_ref())
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "project config".to_string())
-    } else {
-        app.config_path.display().to_string()
-    };
+    let config_path_display = state
+        .and_then(|s| s.project_config_path.as_ref())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(no project config path)".to_string());
     content.push(Line::from(vec![
         Span::styled("  Config file: ", label_style),
         Span::raw(config_path_display),
@@ -1033,14 +893,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     content.push(Line::from(""));
 
-    // Title shows which config we're editing
-    let title = if on_project_tab {
-        " Configuration (Project) "
-    } else if state.map(|s| s.has_tabs()).unwrap_or(false) {
-        " Configuration (Global) "
-    } else {
-        " Configuration "
-    };
+    let title = " Configuration ";
 
     let modal = Paragraph::new(content).block(
         Block::default()
