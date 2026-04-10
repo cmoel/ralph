@@ -48,7 +48,6 @@ fn main() -> Result<()> {
     // Handle subcommands that don't need the TUI
     match cli.command {
         Some(Commands::Init) => return cli::run_init(),
-        Some(Commands::Reinit) => return cli::run_reinit(),
         Some(Commands::Doctor) => return cli::run_doctor(),
         Some(Commands::Ready { verbose }) => return cli::run_ready(verbose),
         Some(Commands::Logs { id, path }) => return cli::run_logs(id, path),
@@ -200,9 +199,8 @@ mod tests {
     }
 
     #[test]
-    fn cli_reinit_subcommand_parses() {
-        let cli = Cli::try_parse_from(["ralph", "reinit"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Reinit)));
+    fn cli_reinit_subcommand_rejected() {
+        assert!(Cli::try_parse_from(["ralph", "reinit"]).is_err());
     }
 
     #[test]

@@ -18,8 +18,6 @@ use crate::work_source;
 pub enum Commands {
     /// Initialize project with Ralph scaffolding
     Init,
-    /// Force-regenerate all managed files (preserves project config)
-    Reinit,
     /// Check environment health and report pass/fail for each check
     Doctor,
     /// List implementable beads (beads mode only)
@@ -111,7 +109,7 @@ pub fn run_init() -> Result<()> {
     let loaded_config = config::load_config();
     let state = InitModalState::new(&loaded_config.config);
 
-    if state.all_exist() {
+    if state.all_up_to_date() {
         println!("All skill files are up to date.");
         return Ok(());
     }
@@ -141,48 +139,6 @@ pub fn run_init() -> Result<()> {
             }
             if skipped > 0 {
                 parts.push(format!("skipped {} unchanged", skipped));
-            }
-            println!("{}.", parts.join(", "));
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    }
-}
-
-/// Run the reinit subcommand: force-regenerate all managed files.
-pub fn run_reinit() -> Result<()> {
-    let loaded_config = config::load_config();
-    let state = InitModalState::new_reinit(&loaded_config.config);
-
-    let created = state.create_count();
-    let regenerated = state.regenerate_count();
-
-    if created == 0 && regenerated == 0 {
-        println!("Nothing to do.");
-        return Ok(());
-    }
-
-    state.print_diffs();
-
-    match state.create_files() {
-        Ok(()) => {
-            let mut parts = Vec::new();
-            if regenerated > 0 {
-                parts.push(format!(
-                    "regenerated {} file{}",
-                    regenerated,
-                    if regenerated == 1 { "" } else { "s" }
-                ));
-            }
-            if created > 0 {
-                parts.push(format!(
-                    "created {} file{}",
-                    created,
-                    if created == 1 { "" } else { "s" }
-                ));
             }
             println!("{}.", parts.join(", "));
             Ok(())

@@ -156,7 +156,7 @@ impl InitModalState {
     }
 
     /// Check if all files are up to date (nothing to create or regenerate).
-    pub fn all_exist(&self) -> bool {
+    pub fn all_up_to_date(&self) -> bool {
         self.files
             .iter()
             .all(|f| f.status == InitFileStatus::Exists)
@@ -194,40 +194,6 @@ impl InitModalState {
             .iter()
             .filter(|f| f.status == InitFileStatus::WillRegenerate)
             .count()
-    }
-
-    /// Create a reinit state: forces regeneration of all existing files,
-    /// showing diffs for those that differ from the template.
-    pub fn new_reinit(_config: &Config) -> Self {
-        let files = skill_files()
-            .into_iter()
-            .map(|(display, full)| {
-                if full.exists() {
-                    let existing = std::fs::read_to_string(&full).unwrap_or_default();
-                    let template = template_for_path(&display).unwrap_or("");
-                    InitFileEntry {
-                        diff_lines: compute_diff(&existing, template),
-                        display_path: display,
-                        full_path: full,
-                        status: InitFileStatus::WillRegenerate,
-                    }
-                } else {
-                    InitFileEntry {
-                        display_path: display,
-                        full_path: full,
-                        status: InitFileStatus::WillCreate,
-                        diff_lines: vec![],
-                    }
-                }
-            })
-            .collect();
-
-        Self {
-            files,
-            focus: InitModalField::InitializeButton,
-            error: None,
-            success: None,
-        }
     }
 
     /// Create all files. Returns Ok(()) on success, Err(message) on failure.
@@ -304,7 +270,7 @@ pub fn handle_init_modal_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Enter => match state.focus {
             InitModalField::InitializeButton => {
                 // Disabled when all files already exist
-                if !state.all_exist() {
+                if !state.all_up_to_date() {
                     let created = state.create_count();
                     let regenerated = state.regenerate_count();
                     let skipped = state.skip_count();
@@ -353,7 +319,7 @@ pub fn draw_init_modal(f: &mut Frame, app: &App) {
     };
 
     let label_style = Style::default().fg(Color::DarkGray);
-    let all_exist = state.all_exist();
+    let all_exist = state.all_up_to_date();
 
     let mut content: Vec<Line> = Vec::new();
 
