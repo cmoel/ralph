@@ -58,6 +58,8 @@ Build the vertical slice. Prefer TDD — write tests first, then implement. Use 
 
 **Creating files:** Use the Write tool directly. It creates parent directories automatically — don't run `mkdir`, which is sandbox-blocked in ephemeral worktrees.
 
+**Making scripts executable:** Use `git add --chmod=+x <file>` to set the executable bit. Don't run `chmod`, which is sandbox-blocked.
+
 **If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using mode-specific instructions and exit.
 
 ## 5. Validate
