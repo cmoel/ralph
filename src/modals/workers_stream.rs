@@ -194,7 +194,11 @@ fn draw_worker_list(f: &mut Frame, app: &App, area: Rect) {
             "○"
         };
 
-        let bead_title = worker.hooked_bead_id.as_deref().unwrap_or("idle");
+        let bead_title = match (&worker.child_process, worker.hooked_bead_id.as_deref()) {
+            (_, Some(id)) => id,
+            (Some(_), None) => "claimless",
+            (None, None) => "idle",
+        };
 
         let max_title_len = area.width.saturating_sub(6) as usize; // icon + space + index + padding
         let truncated = if bead_title.len() > max_title_len {
