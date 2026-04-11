@@ -11,6 +11,8 @@ const HEARTBEAT_MIN: u64 = 1;
 const HEARTBEAT_MAX: u64 = 9999;
 const STALE_MIN: u64 = 1;
 const STALE_MAX: u64 = 9999;
+const WORKERS_MIN: u32 = 1;
+const WORKERS_MAX: u32 = 8;
 
 /// Per-tab form state storing field values and validation state.
 #[derive(Debug, Clone)]
@@ -22,6 +24,7 @@ pub struct TabFormState {
     pub heartbeat_interval: u64,
     pub stale_threshold: u64,
     pub keep_awake: bool,
+    pub workers: u32,
     pub cursor_pos: usize,
     pub error: Option<String>,
     pub validation_errors: HashMap<ConfigModalField, String>,
@@ -39,6 +42,7 @@ pub enum ConfigModalField {
     HeartbeatInterval,
     StaleThreshold,
     KeepAwake,
+    Workers,
     SaveButton,
     CancelButton,
 }
@@ -52,7 +56,8 @@ impl ConfigModalField {
             Self::Iterations => Self::HeartbeatInterval,
             Self::HeartbeatInterval => Self::StaleThreshold,
             Self::StaleThreshold => Self::KeepAwake,
-            Self::KeepAwake => Self::SaveButton,
+            Self::KeepAwake => Self::Workers,
+            Self::Workers => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
         }
@@ -67,7 +72,8 @@ impl ConfigModalField {
             Self::HeartbeatInterval => Self::Iterations,
             Self::StaleThreshold => Self::HeartbeatInterval,
             Self::KeepAwake => Self::StaleThreshold,
-            Self::SaveButton => Self::KeepAwake,
+            Self::Workers => Self::KeepAwake,
+            Self::SaveButton => Self::Workers,
             Self::CancelButton => Self::SaveButton,
         }
     }
@@ -111,6 +117,9 @@ impl TabFormState {
         if partial.behavior.stale_threshold.is_some() {
             explicit_fields.insert(ConfigModalField::StaleThreshold);
         }
+        if partial.behavior.workers.is_some() {
+            explicit_fields.insert(ConfigModalField::Workers);
+        }
 
         // Display merged values (so inherited fields show their effective value)
         let log_level_index = LOG_LEVELS
@@ -126,6 +135,7 @@ impl TabFormState {
             heartbeat_interval: merged.behavior.heartbeat_interval,
             stale_threshold: merged.behavior.stale_threshold,
             keep_awake: merged.behavior.keep_awake,
+            workers: merged.behavior.workers,
             cursor_pos: merged.claude.path.len(),
             error: None,
             validation_errors: HashMap::new(),
@@ -150,6 +160,7 @@ impl TabFormState {
         config.behavior.bd_path = self.bd_path.clone();
         config.behavior.heartbeat_interval = self.heartbeat_interval;
         config.behavior.stale_threshold = self.stale_threshold;
+        config.behavior.workers = self.workers;
         config
     }
 
@@ -202,7 +213,11 @@ impl TabFormState {
                 } else {
                     None
                 },
-                workers: None,
+                workers: if self.explicit_fields.contains(&ConfigModalField::Workers) {
+                    Some(self.workers)
+                } else {
+                    None
+                },
             },
         }
     }
@@ -471,6 +486,22 @@ impl ConfigModalState {
         self.mark_explicit();
     }
 
+    pub fn workers_increment(&mut self) {
+        let form = self.active_form_mut();
+        if form.workers < WORKERS_MAX {
+            form.workers += 1;
+        }
+        self.mark_explicit();
+    }
+
+    pub fn workers_decrement(&mut self) {
+        let form = self.active_form_mut();
+        if form.workers > WORKERS_MIN {
+            form.workers -= 1;
+        }
+        self.mark_explicit();
+    }
+
     /// Check if there are any validation errors.
     pub fn has_validation_errors(&self) -> bool {
         self.active_form().has_validation_errors()
@@ -704,5 +735,53 @@ mod tests {
         state.stale_increment();
         let out = state.to_partial_config();
         assert!(out.behavior.stale_threshold.is_some());
+    }
+
+    // -- Workers tests --
+
+    #[test]
+    fn workers_round_trips_through_partial() {
+        let mut partial = PartialConfig::default();
+        partial.behavior.workers = Some(3);
+        let mut merged = Config::default();
+        merged.behavior.workers = 3;
+
+        let state = make_state(&partial, &merged);
+        let out = state.to_config();
+        assert_eq!(out.behavior.workers, 3);
+    }
+
+    #[test]
+    fn workers_not_in_partial_when_not_explicit() {
+        let state = default_state();
+        let out = state.to_partial_config();
+        assert_eq!(out.behavior.workers, None);
+    }
+
+    #[test]
+    fn workers_in_partial_when_explicit() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::Workers;
+        state.workers_increment();
+        let out = state.to_partial_config();
+        assert!(out.behavior.workers.is_some());
+    }
+
+    #[test]
+    fn workers_increment_clamps_at_max() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::Workers;
+        state.active_form_mut().workers = 8;
+        state.workers_increment();
+        assert_eq!(state.active_form().workers, 8);
+    }
+
+    #[test]
+    fn workers_decrement_clamps_at_min() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::Workers;
+        state.active_form_mut().workers = 1;
+        state.workers_decrement();
+        assert_eq!(state.active_form().workers, 1);
     }
 }

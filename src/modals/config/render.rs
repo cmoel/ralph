@@ -7,7 +7,7 @@ use tracing::debug;
 
 use std::sync::Arc;
 
-use crate::app::App;
+use crate::app::{App, AppStatus};
 use crate::config::save_partial_config;
 use crate::startup::get_file_mtime;
 use crate::ui::centered_rect;
@@ -48,11 +48,9 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         // Enter - context-dependent
         KeyCode::Enter => match state.focus {
             ConfigModalField::SaveButton => {
-                // Don't save if there are validation errors
-                if state.has_validation_errors() {
+                if state.has_validation_errors() || app.status == AppStatus::Running {
                     return;
                 }
-                // Save as per-project partial config
                 let partial = state.to_partial_config();
                 let save_result = if let Some(ref path) = state.project_config_path {
                     save_partial_config(&partial, path)
@@ -61,17 +59,18 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
                 };
                 match save_result {
                     Ok(()) => {
-                        // Re-merge and update app config
                         let new_merged = state.to_config();
+                        let config_path = state.project_config_path.clone();
                         if new_merged.behavior.bd_path != app.config.behavior.bd_path {
                             app.work_source =
                                 Arc::new(BeadsWorkSource::new(new_merged.behavior.bd_path.clone()));
                         }
+                        if new_merged.behavior.workers as usize != app.workers.len() {
+                            app.reshape_workers_to(new_merged.behavior.workers as usize);
+                        }
                         app.config = new_merged;
-                        // Update mtime so we don't trigger a reload
-                        if let Some(ref path) = state.project_config_path {
+                        if let Some(ref path) = config_path {
                             app.project_config_mtime = get_file_mtime(path);
-                            // Track the project config path for hot-reload
                             app.project_config_path = Some(path.clone());
                         }
                         app.show_config_modal = false;
@@ -120,6 +119,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::HeartbeatInterval => state.heartbeat_decrement(),
             ConfigModalField::StaleThreshold => state.stale_decrement(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Workers => state.workers_decrement(),
             _ => state.cursor_left(),
         },
 
@@ -129,6 +129,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::HeartbeatInterval => state.heartbeat_increment(),
             ConfigModalField::StaleThreshold => state.stale_increment(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Workers => state.workers_increment(),
             _ => state.cursor_right(),
         },
 
@@ -147,6 +148,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::HeartbeatInterval => state.heartbeat_increment(),
             ConfigModalField::StaleThreshold => state.stale_increment(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Workers => state.workers_increment(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
         },
@@ -157,6 +159,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
             ConfigModalField::HeartbeatInterval => state.heartbeat_decrement(),
             ConfigModalField::StaleThreshold => state.stale_decrement(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
+            ConfigModalField::Workers => state.workers_decrement(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
         },
@@ -168,7 +171,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
 /// Draw the configuration modal.
 pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let modal_width = 70;
-    let modal_height = 32;
+    let modal_height = 34;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -315,6 +318,10 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
             false,
         )
     };
+
+    let workers = state
+        .map(|s| s.active_form().workers)
+        .unwrap_or(app.config.behavior.workers);
 
     // Helper to get validation error for a field
     let get_field_error = |field: ConfigModalField| -> Option<&str> {
@@ -548,7 +555,47 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     }
     content.push(Line::from(keep_awake_line));
 
+    // Workers field
+    let workers_focused = focus == Some(ConfigModalField::Workers);
+    let workers_inherited = is_inherited(ConfigModalField::Workers);
+    let workers_label_style = if workers_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let workers_display = if workers_focused {
+        format!("< {} >", workers)
+    } else {
+        workers.to_string()
+    };
+    let workers_value_style = if workers_focused {
+        Style::default().fg(Color::Cyan)
+    } else if workers_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut workers_line = vec![
+        Span::styled("  Workers:           ", workers_label_style),
+        Span::styled(workers_display, workers_value_style),
+    ];
+    if workers_inherited && !workers_focused {
+        workers_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(workers_line));
+
     content.push(Line::from(""));
+
+    // Running hint when save is disabled due to running status
+    let is_running = app.status == AppStatus::Running;
+    if is_running {
+        content.push(Line::from(Span::styled(
+            "  Stop all loops to change worker count",
+            Style::default().fg(Color::Yellow),
+        )));
+    } else {
+        content.push(Line::from(""));
+    }
 
     // Error message if any
     if let Some(s) = state {
@@ -568,7 +615,7 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let save_focused = focus == Some(ConfigModalField::SaveButton);
     let cancel_focused = focus == Some(ConfigModalField::CancelButton);
 
-    let save_style = if has_errors {
+    let save_style = if has_errors || is_running {
         Style::default().fg(Color::DarkGray)
     } else if save_focused {
         Style::default().fg(Color::Black).bg(Color::Cyan)
@@ -623,6 +670,8 @@ mod tests {
         let field = field.next();
         assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.next();
+        assert_eq!(field, ConfigModalField::Workers);
+        let field = field.next();
         assert_eq!(field, ConfigModalField::SaveButton);
         let field = field.next();
         assert_eq!(field, ConfigModalField::CancelButton);
@@ -646,6 +695,8 @@ mod tests {
         assert_eq!(field, ConfigModalField::CancelButton);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::SaveButton);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::Workers);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.prev();
@@ -680,6 +731,7 @@ mod tests {
             ConfigModalField::HeartbeatInterval,
             ConfigModalField::StaleThreshold,
             ConfigModalField::KeepAwake,
+            ConfigModalField::Workers,
             ConfigModalField::SaveButton,
             ConfigModalField::CancelButton,
         ];

@@ -448,6 +448,28 @@ impl App {
             crate::agent::release_bead(&self.config.behavior.bd_path, agent_id, &bead_id);
         }
     }
+
+    pub fn reshape_workers_to(&mut self, target: usize) {
+        if self.status == AppStatus::Running {
+            return;
+        }
+        let target = target.clamp(1, 8);
+        if target == self.workers.len() {
+            return;
+        }
+        if target > self.workers.len() {
+            let start = self.workers.len();
+            for i in start..target {
+                self.workers.push(Worker::new(i));
+            }
+        } else {
+            self.workers.truncate(target);
+            if self.selected_worker >= target {
+                self.selected_worker = target - 1;
+            }
+        }
+        self.dirty = true;
+    }
 }
 
 #[cfg(test)]
@@ -524,5 +546,57 @@ mod tests {
         let (_tx, rx) = std::sync::mpsc::channel::<crate::output::OutputMessage>();
         app.workers[2].output_receiver = Some(rx);
         assert!(app.any_worker_active());
+    }
+
+    // -- reshape_workers_to tests --
+
+    #[test]
+    fn reshape_workers_grow_from_1_to_3() {
+        let mut app = app_with_workers(1);
+        app.reshape_workers_to(3);
+        assert_eq!(app.workers.len(), 3);
+        for (i, w) in app.workers.iter().enumerate() {
+            assert_eq!(w.id, i);
+        }
+    }
+
+    #[test]
+    fn reshape_workers_shrink_from_3_to_1_clamps_selected() {
+        let mut app = app_with_workers(3);
+        app.selected_worker = 2;
+        app.reshape_workers_to(1);
+        assert_eq!(app.workers.len(), 1);
+        assert_eq!(app.selected_worker, 0);
+    }
+
+    #[test]
+    fn reshape_workers_noop_when_same_length() {
+        let mut app = app_with_workers(3);
+        app.dirty = false;
+        app.reshape_workers_to(3);
+        assert_eq!(app.workers.len(), 3);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn reshape_workers_noop_when_running() {
+        let mut app = app_with_workers(1);
+        app.status = AppStatus::Running;
+        app.reshape_workers_to(4);
+        assert_eq!(app.workers.len(), 1);
+    }
+
+    #[test]
+    fn reshape_workers_clamps_target_to_max() {
+        let mut app = app_with_workers(1);
+        app.reshape_workers_to(50);
+        assert_eq!(app.workers.len(), 8);
+    }
+
+    #[test]
+    fn reshape_workers_clamps_target_to_min() {
+        let mut app = app_with_workers(3);
+        app.reshape_workers_to(0);
+        assert_eq!(app.workers.len(), 1);
     }
 }

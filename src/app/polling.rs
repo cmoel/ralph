@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::{get_project_config_path, reload_config};
 use crate::dolt::DoltServerState;
@@ -154,6 +154,21 @@ impl App {
         if new_bd_path != &self.config.behavior.bd_path {
             self.work_source = Arc::new(BeadsWorkSource::new(new_bd_path.clone()));
             self.clear_pending_work_ops();
+        }
+
+        // Reshape worker pool if workers changed
+        let new_workers = reloaded.config.behavior.workers;
+        let old_workers = self.config.behavior.workers;
+        if new_workers != old_workers {
+            if self.status != AppStatus::Running {
+                self.reshape_workers_to(new_workers as usize);
+            } else {
+                info!(
+                    old = old_workers,
+                    new = new_workers,
+                    "workers_change_deferred_running"
+                );
+            }
         }
 
         self.config = reloaded.config;
