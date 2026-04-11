@@ -11,6 +11,7 @@ static LOOP_ITERS: AtomicU64 = AtomicU64::new(0);
 static REDRAWS: AtomicU64 = AtomicU64::new(0);
 static DRAW_MAX_US: AtomicU64 = AtomicU64::new(0);
 static SUBPROCESS_SPAWNS: AtomicU64 = AtomicU64::new(0);
+static OUTPUT_MSGS: AtomicU64 = AtomicU64::new(0);
 
 pub fn record_loop_iter() {
     LOOP_ITERS.fetch_add(1, Ordering::Relaxed);
@@ -24,6 +25,10 @@ pub fn record_redraw(duration: Duration) {
 
 pub fn record_subprocess_spawn() {
     SUBPROCESS_SPAWNS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn record_output_msgs(count: u64) {
+    OUTPUT_MSGS.fetch_add(count, Ordering::Relaxed);
 }
 
 pub struct PerfReporter {
@@ -47,12 +52,14 @@ impl PerfReporter {
         let redraws = REDRAWS.swap(0, Ordering::Relaxed);
         let draw_max_us = DRAW_MAX_US.swap(0, Ordering::Relaxed);
         let spawns = SUBPROCESS_SPAWNS.swap(0, Ordering::Relaxed);
+        let output_msgs = OUTPUT_MSGS.swap(0, Ordering::Relaxed);
         info!(
             target: "ralph::perf",
             loop_iters_per_sec = loop_iters as f64 / secs,
             redraws_per_sec = redraws as f64 / secs,
             draw_max_ms = draw_max_us as f64 / 1000.0,
             subprocess_spawns_per_sec = spawns as f64 / secs,
+            output_msgs_per_sec = output_msgs as f64 / secs,
             "perf_tick"
         );
         self.last_flush = Instant::now();
