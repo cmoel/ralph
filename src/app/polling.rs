@@ -8,6 +8,45 @@ use crate::config::{get_project_config_path, reload_config};
 use crate::dolt::DoltServerState;
 use crate::logging;
 use crate::startup::get_file_mtime;
+
+const KANBAN_FETCH_MIN_INTERVAL: Duration = Duration::from_secs(2);
+
+struct FetchDecision {
+    should_fetch: bool,
+    pending: bool,
+    last_fetch_at: Option<Instant>,
+}
+
+fn decide_kanban_fetch(
+    changed: bool,
+    pending: bool,
+    last_fetch_at: Option<Instant>,
+    now: Instant,
+) -> FetchDecision {
+    let can_fetch_now = last_fetch_at.is_none()
+        || last_fetch_at.is_some_and(|t| now.duration_since(t) >= KANBAN_FETCH_MIN_INTERVAL);
+
+    let mut new_pending = pending;
+    if changed {
+        new_pending = !can_fetch_now;
+    }
+
+    let should_fetch = (new_pending || changed) && can_fetch_now;
+
+    if should_fetch {
+        FetchDecision {
+            should_fetch: true,
+            pending: false,
+            last_fetch_at: Some(now),
+        }
+    } else {
+        FetchDecision {
+            should_fetch: false,
+            pending: new_pending,
+            last_fetch_at,
+        }
+    }
+}
 use crate::work_source::BeadsWorkSource;
 
 use super::state::{App, AppStatus};
@@ -235,8 +274,18 @@ impl App {
             changed = true;
         }
 
-        // If something changed and we're not already fetching, trigger re-fetch
-        if changed && self.kanban_items_rx.is_none() {
+        let decision = decide_kanban_fetch(
+            changed,
+            self.pending_kanban_fetch,
+            self.last_kanban_fetch_at,
+            Instant::now(),
+        );
+        self.pending_kanban_fetch = decision.pending;
+        self.last_kanban_fetch_at = decision.last_fetch_at;
+        let should_fetch = decision.should_fetch;
+
+        // If we should fetch and we're not already fetching, trigger re-fetch
+        if should_fetch && self.kanban_items_rx.is_none() {
             let bd_path = self.config.behavior.bd_path.clone();
             let column_defs = self.kanban_board_state.column_defs.clone();
             let (tx, rx) = mpsc::channel();
@@ -248,7 +297,7 @@ impl App {
         }
 
         // Also refresh the detail modal if one is open
-        if changed
+        if should_fetch
             && self.bead_detail_rx.is_none()
             && let Some(ref detail) = self.kanban_board_state.preview_detail
             && !detail.is_loading
@@ -510,5 +559,57 @@ impl App {
         } else {
             AppStatus::Stopped
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_signal_fetches_immediately() {
+        let now = Instant::now();
+        let d = decide_kanban_fetch(true, false, None, now);
+        assert!(d.should_fetch);
+        assert!(!d.pending);
+        assert_eq!(d.last_fetch_at, Some(now));
+    }
+
+    #[test]
+    fn signal_within_interval_sets_pending() {
+        let now = Instant::now();
+        let last = now - Duration::from_millis(500);
+        let d = decide_kanban_fetch(true, false, Some(last), now);
+        assert!(!d.should_fetch);
+        assert!(d.pending);
+        assert_eq!(d.last_fetch_at, Some(last));
+    }
+
+    #[test]
+    fn pending_fires_after_interval() {
+        let now = Instant::now();
+        let last = now - Duration::from_secs(3);
+        let d = decide_kanban_fetch(false, true, Some(last), now);
+        assert!(d.should_fetch);
+        assert!(!d.pending);
+        assert_eq!(d.last_fetch_at, Some(now));
+    }
+
+    #[test]
+    fn no_signal_no_pending_does_nothing() {
+        let now = Instant::now();
+        let d = decide_kanban_fetch(false, false, Some(now), now);
+        assert!(!d.should_fetch);
+        assert!(!d.pending);
+    }
+
+    #[test]
+    fn signal_after_interval_fetches() {
+        let now = Instant::now();
+        let last = now - Duration::from_secs(3);
+        let d = decide_kanban_fetch(true, false, Some(last), now);
+        assert!(d.should_fetch);
+        assert!(!d.pending);
+        assert_eq!(d.last_fetch_at, Some(now));
     }
 }

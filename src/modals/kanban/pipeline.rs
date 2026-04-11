@@ -79,6 +79,44 @@ fn run_shell_pipeline(command: &str, bd_path: &str) -> Result<Vec<serde_json::Va
         .map_err(|e| format!("Failed to parse pipeline output: {e}"))
 }
 
+fn should_ignore_event(paths: &[std::path::PathBuf]) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    paths.iter().all(|path| {
+        let components: Vec<_> = path.components().collect();
+        let beads_idx = components.iter().position(
+            |c| matches!(c, std::path::Component::Normal(s) if s.to_str() == Some(".beads")),
+        );
+        let Some(beads_idx) = beads_idx else {
+            return false;
+        };
+
+        if let Some(name) = path.file_name().and_then(|s| s.to_str())
+            && matches!(
+                name,
+                "dolt-server.log"
+                    | "dolt-server.pid"
+                    | "dolt-server.port"
+                    | "dolt-server.lock"
+                    | "last-touched"
+            )
+        {
+            return true;
+        }
+
+        for component in &components[beads_idx + 1..] {
+            if let std::path::Component::Normal(s) = component
+                && let Some(name) = s.to_str()
+                && (name == "backup" || name == "dolt")
+            {
+                return true;
+            }
+        }
+        false
+    })
+}
+
 /// Watch .beads/ directory for changes and send notifications (called from background thread).
 /// Debounces events — waits 200ms after the last change before notifying.
 pub fn watch_beads_directory(
@@ -113,8 +151,10 @@ pub fn watch_beads_directory(
 
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
         match event_rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Ok(_)) => {
-                last_event = Some(Instant::now());
+            Ok(Ok(event)) => {
+                if !should_ignore_event(&event.paths) {
+                    last_event = Some(Instant::now());
+                }
             }
             Ok(Err(_)) => {} // notify error, ignore
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -297,4 +337,79 @@ pub fn fetch_board_data(
         dep_neighbors,
         manual_blocked_ids,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn should_ignore_event_all_noise() {
+        assert!(should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/dolt-server.log"
+        )]));
+    }
+
+    #[test]
+    fn should_ignore_event_dolt_subdir() {
+        assert!(should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/dolt/.dolt/stuff"
+        )]));
+    }
+
+    #[test]
+    fn should_ignore_event_backup() {
+        assert!(should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/backup/2026-04-10.db"
+        )]));
+    }
+
+    #[test]
+    fn should_ignore_event_last_touched() {
+        assert!(should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/last-touched"
+        )]));
+    }
+
+    #[test]
+    fn should_ignore_event_mixed() {
+        assert!(!should_ignore_event(&[
+            PathBuf::from("/proj/.beads/dolt-server.log"),
+            PathBuf::from("/proj/.beads/some-real-data.json"),
+        ]));
+    }
+
+    #[test]
+    fn should_ignore_event_data_file() {
+        assert!(!should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/some-real-data.json"
+        )]));
+    }
+
+    #[test]
+    fn should_ignore_event_empty() {
+        assert!(!should_ignore_event(&[]));
+    }
+
+    #[test]
+    fn should_ignore_event_dolt_server_pid() {
+        assert!(should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/dolt-server.pid"
+        )]));
+    }
+
+    #[test]
+    fn should_ignore_event_dolt_server_port() {
+        assert!(should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/dolt-server.port"
+        )]));
+    }
+
+    #[test]
+    fn should_ignore_event_dolt_server_lock() {
+        assert!(should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/dolt-server.lock"
+        )]));
+    }
 }
