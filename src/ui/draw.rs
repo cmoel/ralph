@@ -4,7 +4,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::app::{App, AppStatus, DoltServerState};
+use crate::app::{App, AppStatus};
 use crate::modals::{
     draw_bead_picker, draw_config_modal, draw_help_modal, draw_init_modal, draw_kanban_board,
     draw_quit_modal, draw_tool_allow_modal, draw_workers_stream,
@@ -81,32 +81,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         Span::styled(" Help", label_style),
     ];
 
-    // Dolt server indicator
-    let dim = Style::default().fg(Color::DarkGray);
-    let dolt_spans: Vec<Span> = match app.dolt.state {
-        DoltServerState::On => vec![
-            Span::styled("Dolt ", dim),
-            Span::styled("● ", Style::default().fg(Color::Green)),
-            Span::styled("│ ", dim),
-        ],
-        DoltServerState::Off => vec![
-            Span::styled("Dolt ", dim),
-            Span::styled("○ ", dim),
-            Span::styled("│ ", dim),
-        ],
-        DoltServerState::Starting | DoltServerState::Stopping => vec![
-            Span::styled("Dolt ", dim),
-            Span::styled("… ", Style::default().fg(Color::Yellow)),
-            Span::styled("│ ", dim),
-        ],
-        DoltServerState::Unknown => vec![
-            Span::styled("Dolt ", dim),
-            Span::styled("? ", dim),
-            Span::styled("│ ", dim),
-        ],
-    };
-    let dolt_len: usize = dolt_spans.iter().map(|s| s.content.len()).sum();
-
     let commands_len: usize = command_spans.iter().map(|s| s.content.len()).sum();
     let inner_width = command_area.width.saturating_sub(2) as usize;
     let status_len = status_dot.len() + status_text.len();
@@ -117,7 +91,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         .map(|(msg, _)| Span::styled(msg.as_str(), Style::default().fg(Color::Yellow)));
     let hint_len = hint_span.as_ref().map_or(0, |s| s.content.len());
 
-    let total_fixed = commands_len + hint_len + dolt_len + status_len;
+    let total_fixed = commands_len + hint_len + status_len;
     let remaining = inner_width.saturating_sub(total_fixed);
     let left_pad = remaining / 2;
     let right_pad = remaining.saturating_sub(left_pad);
@@ -128,7 +102,6 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
         line_spans.push(span);
     }
     line_spans.push(Span::raw(" ".repeat(right_pad)));
-    line_spans.extend(dolt_spans);
     line_spans.push(Span::styled(status_dot, Style::default().fg(status_color)));
     line_spans.push(Span::styled(status_text, Style::default().fg(status_color)));
 

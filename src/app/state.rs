@@ -13,7 +13,6 @@ use tracing::info;
 
 use crate::config::{Config, LoadedConfig};
 use crate::doctor;
-use crate::dolt::DoltManager;
 use crate::logging::ReloadHandle;
 use crate::modals::{
     ConfigModalState, HelpContext, InitModalState, KanbanBoardState, ToolAllowModalState,
@@ -221,8 +220,6 @@ pub struct App {
     pub work_source: Arc<BeadsWorkSource>,
     /// Receiver for background detect_current() result (poll_bead).
     pub bead_poll_rx: Option<Receiver<Option<String>>>,
-    /// Dolt SQL server manager.
-    pub dolt: DoltManager,
     /// When the app entered Error state (for auto-clearing the pulsing flash).
     pub error_at: Option<Instant>,
     /// Receiver for background doctor checks (run once on TUI open).
@@ -342,7 +339,6 @@ impl App {
             in_indented_text: false,
             work_source,
             bead_poll_rx: None,
-            dolt: DoltManager::new(),
             error_at: None,
             doctor_rx: None,
             tool_history_db: None,

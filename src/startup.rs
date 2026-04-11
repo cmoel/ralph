@@ -155,12 +155,7 @@ pub(crate) fn run_app(
             ];
             checks.push(doctor::check_bd(cfg));
             checks.push(doctor::check_scaffolding_drift(cfg));
-            let dolt_check = doctor::check_dolt_status(cfg);
-            let dolt_running = dolt_check.passed;
-            checks.push(dolt_check);
-            if dolt_running {
-                checks.push(doctor::check_work_items(cfg));
-            }
+            checks.push(doctor::check_work_items(cfg));
             let _ = tx.send(checks);
         });
         app.doctor_rx = Some(rx);

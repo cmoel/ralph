@@ -7,7 +7,6 @@ use std::time::Instant;
 use tracing::{info, warn};
 
 use crate::app::{App, AppStatus};
-use crate::dolt::DoltServerState;
 use crate::work_source::WorkRemaining;
 
 impl App {
@@ -26,19 +25,14 @@ impl App {
         // Determine next state based on exit code and iteration control
         match exit_code {
             Some(0) if self.workers[worker_idx].should_auto_continue() => {
-                // Skip work check if dolt server is not running
-                if self.dolt.state != DoltServerState::On {
-                    self.workers[worker_idx].reset_iteration_state();
-                } else {
-                    // Kick off background check_remaining (non-blocking)
-                    let complete_msg = self.work_source.complete_message();
-                    let (tx, rx) = mpsc::channel();
-                    let ws = Arc::clone(&self.work_source);
-                    std::thread::spawn(move || {
-                        let _ = tx.send((ws.check_remaining(), complete_msg));
-                    });
-                    self.workers[worker_idx].pending_work_check = Some(rx);
-                }
+                // Kick off background check_remaining (non-blocking)
+                let complete_msg = self.work_source.complete_message();
+                let (tx, rx) = mpsc::channel();
+                let ws = Arc::clone(&self.work_source);
+                std::thread::spawn(move || {
+                    let _ = tx.send((ws.check_remaining(), complete_msg));
+                });
+                self.workers[worker_idx].pending_work_check = Some(rx);
             }
             Some(0) => {
                 // Countdown exhausted or iterations = 0, just stop

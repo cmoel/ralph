@@ -77,23 +77,6 @@ pub fn check_prompt(_config: &Config) -> CheckResult {
     }
 }
 
-/// Check that the Dolt server is running.
-pub fn check_dolt_status(config: &Config) -> CheckResult {
-    let path = &config.behavior.bd_path;
-    match crate::bd_lock::with_lock(|| Command::new(path).args(["dolt", "status"]).output()) {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("server: running") {
-                CheckResult::pass("Dolt server running")
-            } else {
-                CheckResult::fail("Dolt server not running — press D to start it in ralph")
-            }
-        }
-        Ok(_) => CheckResult::fail("Dolt server not running — press D to start it in ralph"),
-        Err(_) => CheckResult::fail("Could not check Dolt status"),
-    }
-}
-
 /// Check that work items exist.
 pub fn check_work_items(config: &Config) -> CheckResult {
     let source = work_source::BeadsWorkSource::new(config.behavior.bd_path.clone());

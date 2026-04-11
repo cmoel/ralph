@@ -93,23 +93,15 @@ fn should_ignore_event(paths: &[std::path::PathBuf]) -> bool {
             return false;
         };
 
-        if let Some(name) = path.file_name().and_then(|s| s.to_str())
-            && matches!(
-                name,
-                "dolt-server.log"
-                    | "dolt-server.pid"
-                    | "dolt-server.port"
-                    | "dolt-server.lock"
-                    | "last-touched"
-            )
-        {
+        // Heartbeat marker file — bd touches it on every command; not a mutation signal.
+        if path.file_name().and_then(|s| s.to_str()) == Some("last-touched") {
             return true;
         }
 
+        // JSONL backup directory — large, periodic, not a mutation signal.
         for component in &components[beads_idx + 1..] {
             if let std::path::Component::Normal(s) = component
-                && let Some(name) = s.to_str()
-                && (name == "backup" || name == "dolt")
+                && s.to_str() == Some("backup")
             {
                 return true;
             }
@@ -340,20 +332,6 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn should_ignore_event_all_noise() {
-        assert!(should_ignore_event(&[PathBuf::from(
-            "/proj/.beads/dolt-server.log"
-        )]));
-    }
-
-    #[test]
-    fn should_ignore_event_dolt_subdir() {
-        assert!(should_ignore_event(&[PathBuf::from(
-            "/proj/.beads/dolt/.dolt/stuff"
-        )]));
-    }
-
-    #[test]
     fn should_ignore_event_backup() {
         assert!(should_ignore_event(&[PathBuf::from(
             "/proj/.beads/backup/2026-04-10.db"
@@ -368,9 +346,9 @@ mod tests {
     }
 
     #[test]
-    fn should_ignore_event_mixed() {
+    fn should_ignore_event_mixed_not_all_ignored() {
         assert!(!should_ignore_event(&[
-            PathBuf::from("/proj/.beads/dolt-server.log"),
+            PathBuf::from("/proj/.beads/last-touched"),
             PathBuf::from("/proj/.beads/some-real-data.json"),
         ]));
     }
@@ -383,28 +361,14 @@ mod tests {
     }
 
     #[test]
+    fn should_ignore_event_embeddeddolt_changes_are_signal() {
+        assert!(!should_ignore_event(&[PathBuf::from(
+            "/proj/.beads/embeddeddolt/ralph/.dolt/noms/abc.bin"
+        )]));
+    }
+
+    #[test]
     fn should_ignore_event_empty() {
         assert!(!should_ignore_event(&[]));
-    }
-
-    #[test]
-    fn should_ignore_event_dolt_server_pid() {
-        assert!(should_ignore_event(&[PathBuf::from(
-            "/proj/.beads/dolt-server.pid"
-        )]));
-    }
-
-    #[test]
-    fn should_ignore_event_dolt_server_port() {
-        assert!(should_ignore_event(&[PathBuf::from(
-            "/proj/.beads/dolt-server.port"
-        )]));
-    }
-
-    #[test]
-    fn should_ignore_event_dolt_server_lock() {
-        assert!(should_ignore_event(&[PathBuf::from(
-            "/proj/.beads/dolt-server.lock"
-        )]));
     }
 }

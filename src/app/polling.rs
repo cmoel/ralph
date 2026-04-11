@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use crate::config::{get_project_config_path, reload_config};
-use crate::dolt::DoltServerState;
 use crate::logging;
 use crate::startup::get_file_mtime;
 
@@ -72,11 +71,6 @@ impl App {
 
         // Only kick new poll when running
         if self.status != AppStatus::Running {
-            return;
-        }
-
-        // Skip if dolt server is not confirmed running
-        if self.dolt.state != DoltServerState::On {
             return;
         }
 
@@ -469,21 +463,6 @@ impl App {
         self.bead_poll_rx = None;
         let w = self.selected_worker;
         self.workers[w].pending_work_check = None;
-        self.dolt.clear();
-    }
-
-    /// Poll for Dolt server status (throttled).
-    pub fn poll_dolt_status(&mut self) {
-        if self.dolt.poll_status(&self.config.behavior.bd_path) {
-            self.dirty = true;
-        }
-    }
-
-    /// Poll for Dolt toggle (start/stop) completion.
-    pub fn poll_dolt_toggle(&mut self) {
-        if self.dolt.poll_toggle() {
-            self.dirty = true;
-        }
     }
 
     /// Poll for background doctor check results. Displays only failures.
@@ -507,11 +486,6 @@ impl App {
             }
             Err(TryRecvError::Disconnected) => {}
         }
-    }
-
-    /// Toggle Dolt server on/off.
-    pub fn toggle_dolt_server(&mut self) {
-        self.dolt.toggle(&self.config.behavior.bd_path);
     }
 
     /// Merge the current worktree branch to main and clean up.

@@ -53,7 +53,6 @@ fn navigate_section() -> Vec<Line<'static>> {
         kv("w", "Workers stream"),
         kv("c", "Configuration"),
         kv("i", "Initialize project"),
-        kv("D", "Toggle Dolt server"),
     ]
 }
 
@@ -242,7 +241,6 @@ mod tests {
             assert!(content_contains(ctx, "w"), "{ctx:?} missing navigate key w");
             assert!(content_contains(ctx, "c"), "{ctx:?} missing navigate key c");
             assert!(content_contains(ctx, "i"), "{ctx:?} missing navigate key i");
-            assert!(content_contains(ctx, "D"), "{ctx:?} missing navigate key D");
         }
     }
 

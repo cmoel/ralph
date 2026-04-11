@@ -7,7 +7,6 @@ mod cli;
 mod config;
 mod db;
 mod doctor;
-mod dolt;
 mod event_loop;
 mod events;
 mod execution;
@@ -38,7 +37,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::cli::{Cli, Commands, ToolCommands};
 
@@ -121,14 +120,6 @@ fn main() -> Result<()> {
         log_level = %loaded_config.config.logging.level,
         "config_loaded"
     );
-
-    if !dolt::is_dolt_server_alive() {
-        match dolt::truncate_server_log_if_large(dolt::DOLT_LOG_TRUNCATE_THRESHOLD) {
-            Ok(true) => info!("truncated .beads/dolt-server.log on startup (dolt not running)"),
-            Ok(false) => {}
-            Err(e) => warn!(error = %e, "failed to truncate dolt-server.log on startup"),
-        }
-    }
 
     // Setup terminal
     enable_raw_mode()?;

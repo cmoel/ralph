@@ -63,11 +63,6 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
         // Poll for current bead (throttled to every 2 seconds)
         app.poll_bead();
 
-        // Poll for Dolt server state
-        // Process toggle results first so stale status polls don't override
-        app.poll_dolt_toggle();
-        app.poll_dolt_status();
-
         // Poll for config file changes (throttled to every 2 seconds)
         app.poll_config();
 
@@ -239,9 +234,6 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
                     KeyCode::Char('i') => {
                         app.show_init_modal = true;
                         app.init_modal_state = Some(InitModalState::new(&app.config));
-                    }
-                    KeyCode::Char('D') => {
-                        app.toggle_dolt_server();
                     }
                     KeyCode::Char('w') if !app.workers.is_empty() => {
                         app.show_workers_stream = true;
