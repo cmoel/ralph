@@ -7,45 +7,6 @@ use tracing::{debug, info, warn};
 use crate::config::{get_project_config_path, reload_config};
 use crate::logging;
 use crate::startup::get_file_mtime;
-
-const KANBAN_FETCH_MIN_INTERVAL: Duration = Duration::from_secs(2);
-
-struct FetchDecision {
-    should_fetch: bool,
-    pending: bool,
-    last_fetch_at: Option<Instant>,
-}
-
-fn decide_kanban_fetch(
-    changed: bool,
-    pending: bool,
-    last_fetch_at: Option<Instant>,
-    now: Instant,
-) -> FetchDecision {
-    let can_fetch_now = last_fetch_at.is_none()
-        || last_fetch_at.is_some_and(|t| now.duration_since(t) >= KANBAN_FETCH_MIN_INTERVAL);
-
-    let mut new_pending = pending;
-    if changed {
-        new_pending = !can_fetch_now;
-    }
-
-    let should_fetch = (new_pending || changed) && can_fetch_now;
-
-    if should_fetch {
-        FetchDecision {
-            should_fetch: true,
-            pending: false,
-            last_fetch_at: Some(now),
-        }
-    } else {
-        FetchDecision {
-            should_fetch: false,
-            pending: new_pending,
-            last_fetch_at,
-        }
-    }
-}
 use crate::work_source::BeadsWorkSource;
 
 use super::state::{App, AppStatus};
@@ -301,81 +262,101 @@ impl App {
         }
     }
 
-    /// Poll for filesystem changes on .beads/ and trigger board re-fetch.
-    pub fn poll_kanban_watcher(&mut self) {
-        let rx = match self.kanban_fs_rx.as_ref() {
-            Some(rx) => rx,
-            None => return,
+    /// Kick off a streaming board refresh if one isn't already in flight.
+    /// Called on startup, on the `r` keybinding, and indirectly by
+    /// [`App::mutate_and_refresh_kanban`] after every user mutation.
+    pub fn trigger_kanban_refresh(&mut self) {
+        if self.kanban_items_rx.is_some() {
+            return;
+        }
+        let bd_path = self.config.behavior.bd_path.clone();
+        let column_defs = self.kanban_board_state.column_defs.clone();
+        self.kanban_board_state.begin_refresh();
+        self.dirty = true;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            crate::modals::stream_board_data(&bd_path, &column_defs, tx);
+        });
+        self.kanban_items_rx = Some(rx);
+
+        // If the preview pane is showing a bead, refetch its detail in parallel.
+        self.refresh_preview_detail();
+    }
+
+    /// Run a bd mutation (with the global bd_lock) then immediately kick off a
+    /// board refresh on the SAME background thread. Chaining mutation → refresh
+    /// in one thread guarantees the refresh observes post-mutation state —
+    /// there's no race where a concurrent refresh could start before the
+    /// mutation lands.
+    ///
+    /// If a refresh is already in flight, the old receiver is replaced; the
+    /// old stream thread will notice on its next send and abort.
+    pub fn mutate_and_refresh_kanban(&mut self, args: Vec<String>) {
+        let bd_path = self.config.behavior.bd_path.clone();
+        let column_defs = self.kanban_board_state.column_defs.clone();
+        self.kanban_board_state.begin_refresh();
+        self.dirty = true;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            crate::perf::record_subprocess_spawn();
+            let _ = crate::bd_lock::with_lock(|| {
+                std::process::Command::new(&bd_path)
+                    .args(&args)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+            });
+            crate::modals::stream_board_data(&bd_path, &column_defs, tx);
+        });
+        self.kanban_items_rx = Some(rx);
+        self.refresh_preview_detail();
+    }
+
+    /// Refetch the currently-previewed bead's detail JSON, if a preview pane
+    /// is showing one and isn't already loading.
+    fn refresh_preview_detail(&mut self) {
+        if self.bead_detail_rx.is_some() {
+            return;
+        }
+        let Some(ref detail) = self.kanban_board_state.preview_detail else {
+            return;
         };
-
-        // Drain all pending events (we only care that something changed)
-        let mut changed = false;
-        while rx.try_recv().is_ok() {
-            changed = true;
+        if detail.is_loading {
+            return;
         }
-
-        let decision = decide_kanban_fetch(
-            changed,
-            self.pending_kanban_fetch,
-            self.last_kanban_fetch_at,
-            Instant::now(),
-        );
-        self.pending_kanban_fetch = decision.pending;
-        self.last_kanban_fetch_at = decision.last_fetch_at;
-        let should_fetch = decision.should_fetch;
-
-        // If we should fetch and we're not already fetching, trigger re-fetch
-        if should_fetch && self.kanban_items_rx.is_none() {
-            let bd_path = self.config.behavior.bd_path.clone();
-            let column_defs = self.kanban_board_state.column_defs.clone();
-            self.kanban_board_state.begin_refresh();
-            self.dirty = true;
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
-                crate::modals::stream_board_data(&bd_path, &column_defs, tx);
+        let bd_path = self.config.behavior.bd_path.clone();
+        let bead_id = detail.id.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            crate::perf::record_subprocess_spawn();
+            let output = crate::bd_lock::with_lock(|| {
+                std::process::Command::new(&bd_path)
+                    .args(["show", &bead_id, "--json"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
             });
-            self.kanban_items_rx = Some(rx);
-        }
-
-        // Also refresh the detail modal if one is open
-        if should_fetch
-            && self.bead_detail_rx.is_none()
-            && let Some(ref detail) = self.kanban_board_state.preview_detail
-            && !detail.is_loading
-        {
-            let bd_path = self.config.behavior.bd_path.clone();
-            let bead_id = detail.id.clone();
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
-                crate::perf::record_subprocess_spawn();
-                let output = crate::bd_lock::with_lock(|| {
-                    std::process::Command::new(&bd_path)
-                        .args(["show", &bead_id, "--json"])
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped())
-                        .output()
-                });
-                let result = match output {
-                    Ok(out) if out.status.success() => {
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        serde_json::from_str::<serde_json::Value>(&stdout)
-                            .map(|val| {
-                                if let Some(arr) = val.as_array() {
-                                    arr.first().cloned().unwrap_or(val)
-                                } else {
-                                    val
-                                }
-                            })
-                            .map_err(|e| e.to_string())
-                    }
-                    Ok(out) => Err(String::from_utf8_lossy(&out.stderr).to_string()),
-                    Err(e) => Err(e.to_string()),
-                };
-                let _ = tx.send(result);
-            });
-            self.bead_detail_rx = Some(rx);
-        }
+            let result = match output {
+                Ok(out) if out.status.success() => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    serde_json::from_str::<serde_json::Value>(&stdout)
+                        .map(|val| {
+                            if let Some(arr) = val.as_array() {
+                                arr.first().cloned().unwrap_or(val)
+                            } else {
+                                val
+                            }
+                        })
+                        .map_err(|e| e.to_string())
+                }
+                Ok(out) => Err(String::from_utf8_lossy(&out.stderr).to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(result);
+        });
+        self.bead_detail_rx = Some(rx);
     }
 
     /// Poll for background bead picker data.
@@ -428,7 +409,6 @@ impl App {
             Some(d) => d,
             None => return,
         };
-        let bd_path = self.config.behavior.bd_path.clone();
         let (issue, depends_on) = match dep.direction {
             crate::modals::DepDirection::BlockedBy => (dep.bead_id, picked_id),
             crate::modals::DepDirection::Blocks => (picked_id, dep.bead_id),
@@ -438,24 +418,7 @@ impl App {
                 issue: issue.clone(),
                 depends_on: depends_on.clone(),
             });
-        std::thread::spawn(move || {
-            let _ = crate::bd_lock::with_lock(|| {
-                std::process::Command::new(&bd_path)
-                    .args(["dep", "add", &issue, &depends_on])
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-            });
-        });
-    }
-
-    /// Stop the kanban filesystem watcher.
-    pub fn stop_kanban_watcher(&mut self) {
-        if let Some(stop) = self.kanban_watcher_stop.take() {
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        self.kanban_fs_rx = None;
+        self.mutate_and_refresh_kanban(vec!["dep".into(), "add".into(), issue, depends_on]);
     }
 
     /// Clear all pending background work source operations.
@@ -583,57 +546,5 @@ impl App {
         } else {
             AppStatus::Stopped
         };
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn first_signal_fetches_immediately() {
-        let now = Instant::now();
-        let d = decide_kanban_fetch(true, false, None, now);
-        assert!(d.should_fetch);
-        assert!(!d.pending);
-        assert_eq!(d.last_fetch_at, Some(now));
-    }
-
-    #[test]
-    fn signal_within_interval_sets_pending() {
-        let now = Instant::now();
-        let last = now - Duration::from_millis(500);
-        let d = decide_kanban_fetch(true, false, Some(last), now);
-        assert!(!d.should_fetch);
-        assert!(d.pending);
-        assert_eq!(d.last_fetch_at, Some(last));
-    }
-
-    #[test]
-    fn pending_fires_after_interval() {
-        let now = Instant::now();
-        let last = now - Duration::from_secs(3);
-        let d = decide_kanban_fetch(false, true, Some(last), now);
-        assert!(d.should_fetch);
-        assert!(!d.pending);
-        assert_eq!(d.last_fetch_at, Some(now));
-    }
-
-    #[test]
-    fn no_signal_no_pending_does_nothing() {
-        let now = Instant::now();
-        let d = decide_kanban_fetch(false, false, Some(now), now);
-        assert!(!d.should_fetch);
-        assert!(!d.pending);
-    }
-
-    #[test]
-    fn signal_after_interval_fetches() {
-        let now = Instant::now();
-        let last = now - Duration::from_secs(3);
-        let d = decide_kanban_fetch(true, false, Some(last), now);
-        assert!(d.should_fetch);
-        assert!(!d.pending);
-        assert_eq!(d.last_fetch_at, Some(now));
     }
 }

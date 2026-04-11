@@ -67,6 +67,7 @@ pub fn content_for(ctx: HelpContext) -> Vec<Line<'static>> {
             lines.push(kv("k / \u{2191}", "Previous card"));
             lines.push(kv("j / \u{2193}", "Next card"));
             lines.push(kv("Enter", "Focus preview pane"));
+            lines.push(kv("r", "Refresh board"));
             lines.push(kv("X", "Close bead"));
             lines.push(kv("d", "Defer bead"));
             lines.push(kv("b", "Add dependency"));

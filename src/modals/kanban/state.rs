@@ -369,100 +369,91 @@ impl BoardAction {
         }
     }
 
-    /// Execute the forward (original) action via bd CLI.
-    pub(super) fn execute_forward(&self, bd_path: &str) {
-        let bd = bd_path.to_string();
-        match self.clone() {
+    /// Build the bd argv that performs this action forward.
+    pub fn forward_args(&self) -> Vec<String> {
+        match self {
             BoardAction::ToggleHumanLabel {
                 bead_id,
                 was_present,
             } => {
-                let flag = if was_present {
+                let flag = if *was_present {
                     "--remove-label=human"
                 } else {
                     "--add-label=human"
                 };
-                spawn_bd(&bd, &["update", &bead_id, flag]);
+                vec!["update".into(), bead_id.clone(), flag.into()]
             }
             BoardAction::Defer { bead_id, .. } => {
-                spawn_bd(&bd, &["update", &bead_id, "--status=deferred"]);
+                vec!["update".into(), bead_id.clone(), "--status=deferred".into()]
             }
-            BoardAction::Close { bead_id, .. } => {
-                spawn_bd(&bd, &["close", &bead_id]);
-            }
+            BoardAction::Close { bead_id, .. } => vec!["close".into(), bead_id.clone()],
             BoardAction::ChangePriority {
                 bead_id,
                 new_priority,
                 ..
-            } => {
-                let p = new_priority.to_string();
-                spawn_bd(&bd, &["update", &bead_id, "--priority", &p]);
-            }
-            BoardAction::AddDependency { issue, depends_on } => {
-                spawn_bd(&bd, &["dep", "add", &issue, &depends_on]);
-            }
+            } => vec![
+                "update".into(),
+                bead_id.clone(),
+                "--priority".into(),
+                new_priority.to_string(),
+            ],
+            BoardAction::AddDependency { issue, depends_on } => vec![
+                "dep".into(),
+                "add".into(),
+                issue.clone(),
+                depends_on.clone(),
+            ],
         }
     }
 
-    /// Execute the reverse (undo) action via bd CLI.
-    pub(super) fn execute_reverse(&self, bd_path: &str) {
-        let bd = bd_path.to_string();
-        match self.clone() {
+    /// Build the bd argv that reverses this action (for undo).
+    pub fn reverse_args(&self) -> Vec<String> {
+        match self {
             BoardAction::ToggleHumanLabel {
                 bead_id,
                 was_present,
             } => {
-                let flag = if was_present {
+                let flag = if *was_present {
                     "--add-label=human"
                 } else {
                     "--remove-label=human"
                 };
-                spawn_bd(&bd, &["update", &bead_id, flag]);
+                vec!["update".into(), bead_id.clone(), flag.into()]
             }
             BoardAction::Defer {
                 bead_id,
                 previous_status,
-            } => {
-                let status_flag = format!("--status={previous_status}");
-                spawn_bd(&bd, &["update", &bead_id, &status_flag]);
-            }
+            } => vec![
+                "update".into(),
+                bead_id.clone(),
+                format!("--status={previous_status}"),
+            ],
             BoardAction::Close {
                 bead_id,
                 previous_status,
-            } => {
-                let status_flag = format!("--status={previous_status}");
-                spawn_bd(&bd, &["update", &bead_id, &status_flag]);
-            }
+            } => vec![
+                "update".into(),
+                bead_id.clone(),
+                format!("--status={previous_status}"),
+            ],
             BoardAction::ChangePriority {
                 bead_id,
                 old_priority,
                 ..
-            } => {
-                let p = old_priority.to_string();
-                spawn_bd(&bd, &["update", &bead_id, "--priority", &p]);
-            }
-            BoardAction::AddDependency { issue, depends_on } => {
-                spawn_bd(&bd, &["dep", "remove", &issue, &depends_on]);
-            }
+            } => vec![
+                "update".into(),
+                bead_id.clone(),
+                "--priority".into(),
+                old_priority.to_string(),
+            ],
+            BoardAction::AddDependency { issue, depends_on } => vec![
+                "dep".into(),
+                "remove".into(),
+                issue.clone(),
+                depends_on.clone(),
+            ],
         }
     }
-}
-
-/// Spawn a fire-and-forget bd command in a background thread.
-pub(super) fn spawn_bd(bd_path: &str, args: &[&str]) {
-    let bd = bd_path.to_string();
-    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    std::thread::spawn(move || {
-        crate::bd_lock::with_lock(|| {
-            std::process::Command::new(&bd)
-                .args(&args)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .ok()
-        });
-    });
 }
 
 impl KanbanBoardState {

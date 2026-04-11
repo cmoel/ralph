@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -172,25 +171,10 @@ pub(crate) fn run_app(
         }
     }
 
-    // Start board data fetch and filesystem watcher
+    // Kick off the initial board fetch. After startup the board only
+    // refreshes via the `r` keybinding or user-initiated mutations.
     if app.board_config_error.is_none() {
-        let bd_path = app.config.behavior.bd_path.clone();
-        let column_defs = app.kanban_board_state.column_defs.clone();
-        app.kanban_board_state.begin_refresh();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            modals::stream_board_data(&bd_path, &column_defs, tx);
-        });
-        app.kanban_items_rx = Some(rx);
-
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (fs_tx, fs_rx) = mpsc::channel();
-        let stop_clone = std::sync::Arc::clone(&stop);
-        std::thread::spawn(move || {
-            modals::watch_beads_directory(fs_tx, stop_clone);
-        });
-        app.kanban_fs_rx = Some(fs_rx);
-        app.kanban_watcher_stop = Some(stop);
+        app.trigger_kanban_refresh();
     }
 
     // Register agent beads for all workers (worktrees created on first loop start)
@@ -223,7 +207,6 @@ pub(crate) fn run_app(
     let result = run_event_loop(&mut app, &mut terminal);
 
     // Always clean up resources, regardless of how we exited
-    app.stop_kanban_watcher();
     for w in 0..app.workers.len() {
         app.workers[w].kill_child();
     }

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::overlays::{CloseConfirmState, DeferState, DepDirectionState};
-use super::state::{BoardAction, BoardFocus, DepDirection, spawn_bd};
+use super::state::{BoardAction, BoardFocus, DepDirection};
 use crate::app::App;
 
 /// Handle keyboard input for the kanban board (primary view).
@@ -17,7 +17,6 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
             KeyCode::Enter => {
                 let bead_id = confirm.bead_id.clone();
                 let reason = confirm.reason.trim().to_string();
-                let bd_path = app.config.behavior.bd_path.clone();
                 let previous_status = state
                     .find_card(&bead_id)
                     .map(|c| c.status.clone())
@@ -27,20 +26,12 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                     bead_id: bead_id.clone(),
                     previous_status,
                 });
-                std::thread::spawn(move || {
-                    crate::bd_lock::with_lock(|| {
-                        let mut cmd = std::process::Command::new(&bd_path);
-                        cmd.arg("close").arg(&bead_id);
-                        if !reason.is_empty() {
-                            cmd.arg("--reason").arg(&reason);
-                        }
-                        cmd.stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .ok()
-                    });
-                });
+                let mut args = vec!["close".into(), bead_id];
+                if !reason.is_empty() {
+                    args.push("--reason".into());
+                    args.push(reason);
+                }
+                app.mutate_and_refresh_kanban(args);
             }
             KeyCode::Backspace => {
                 confirm.delete_char_before();
@@ -95,7 +86,6 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
             KeyCode::Enter => {
                 let bead_id = defer.bead_id.clone();
                 let until = defer.until.trim().to_string();
-                let bd_path = app.config.behavior.bd_path.clone();
                 let previous_status = state
                     .find_card(&bead_id)
                     .map(|c| c.status.clone())
@@ -105,21 +95,12 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                     bead_id: bead_id.clone(),
                     previous_status,
                 });
-                std::thread::spawn(move || {
-                    crate::bd_lock::with_lock(|| {
-                        let mut cmd = std::process::Command::new(&bd_path);
-                        if until.is_empty() {
-                            cmd.args(["update", &bead_id, "--status=deferred"]);
-                        } else {
-                            cmd.args(["defer", &bead_id, "--until"]).arg(&until);
-                        }
-                        cmd.stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .ok()
-                    });
-                });
+                let args = if until.is_empty() {
+                    vec!["update".into(), bead_id, "--status=deferred".into()]
+                } else {
+                    vec!["defer".into(), bead_id, "--until".into(), until]
+                };
+                app.mutate_and_refresh_kanban(args);
             }
             KeyCode::Backspace => {
                 defer.delete_char_before();
@@ -188,14 +169,14 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                 let bead_id = card.id.clone();
                 let old_priority = card.priority;
                 let new_priority = old_priority - 1;
-                let bd_path = app.config.behavior.bd_path.clone();
-                state.push_action(BoardAction::ChangePriority {
-                    bead_id: bead_id.clone(),
+                let action = BoardAction::ChangePriority {
+                    bead_id,
                     old_priority,
                     new_priority,
-                });
-                let p = new_priority.to_string();
-                spawn_bd(&bd_path, &["update", &bead_id, "--priority", &p]);
+                };
+                let args = action.forward_args();
+                state.push_action(action);
+                app.mutate_and_refresh_kanban(args);
             }
         }
         KeyCode::Char('-') => {
@@ -205,31 +186,27 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                 let bead_id = card.id.clone();
                 let old_priority = card.priority;
                 let new_priority = old_priority + 1;
-                let bd_path = app.config.behavior.bd_path.clone();
-                state.push_action(BoardAction::ChangePriority {
-                    bead_id: bead_id.clone(),
+                let action = BoardAction::ChangePriority {
+                    bead_id,
                     old_priority,
                     new_priority,
-                });
-                let p = new_priority.to_string();
-                spawn_bd(&bd_path, &["update", &bead_id, "--priority", &p]);
+                };
+                let args = action.forward_args();
+                state.push_action(action);
+                app.mutate_and_refresh_kanban(args);
             }
         }
         KeyCode::Char('H') => {
             if let Some(card) = state.selected_card() {
                 let bead_id = card.id.clone();
                 let has_human = card.labels.contains(&"human".to_string());
-                let bd_path = app.config.behavior.bd_path.clone();
-                state.push_action(BoardAction::ToggleHumanLabel {
-                    bead_id: bead_id.clone(),
+                let action = BoardAction::ToggleHumanLabel {
+                    bead_id,
                     was_present: has_human,
-                });
-                let flag = if has_human {
-                    "--remove-label=human"
-                } else {
-                    "--add-label=human"
                 };
-                spawn_bd(&bd_path, &["update", &bead_id, flag]);
+                let args = action.forward_args();
+                state.push_action(action);
+                app.mutate_and_refresh_kanban(args);
             }
         }
         KeyCode::Char('d') => {
@@ -250,19 +227,23 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
         }
         KeyCode::Char('u') => {
             if let Some(action) = state.undo_stack.pop() {
-                let bd_path = app.config.behavior.bd_path.clone();
-                action.execute_reverse(&bd_path);
+                let args = action.reverse_args();
                 state.set_status(format!("Undid: {}", action.describe()));
                 state.redo_stack.push(action);
+                app.mutate_and_refresh_kanban(args);
             }
         }
         KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some(action) = state.redo_stack.pop() {
-                let bd_path = app.config.behavior.bd_path.clone();
-                action.execute_forward(&bd_path);
+                let args = action.forward_args();
                 state.set_status(format!("Redid: {}", action.describe()));
                 state.undo_stack.push(action);
+                app.mutate_and_refresh_kanban(args);
             }
+        }
+        KeyCode::Char('r') => {
+            // Manual refresh — re-fetch the board from bd.
+            app.trigger_kanban_refresh();
         }
         KeyCode::Char('?') => {
             app.help_context = Some(crate::modals::HelpContext::Board);

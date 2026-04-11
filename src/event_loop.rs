@@ -56,7 +56,6 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
         app.poll_kanban_items();
         app.poll_bead_detail();
         app.poll_preview_fetch();
-        app.poll_kanban_watcher();
         app.poll_bead_picker();
         app.poll_pending_dep();
 

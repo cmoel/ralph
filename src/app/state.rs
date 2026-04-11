@@ -241,12 +241,6 @@ pub struct App {
     pub kanban_items_rx: Option<Receiver<crate::modals::KanbanFetchMsg>>,
     /// Receiver for background bd show --json result (bead detail drill-down).
     pub bead_detail_rx: Option<Receiver<Result<serde_json::Value, String>>>,
-    /// Receiver for filesystem change events on .beads/ directory (kanban auto-refresh).
-    pub kanban_fs_rx: Option<Receiver<()>>,
-    /// Stop signal for the kanban filesystem watcher thread.
-    pub kanban_watcher_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
-    pub last_kanban_fetch_at: Option<std::time::Instant>,
-    pub pending_kanban_fetch: bool,
     /// Cached visual line count (invalidated on content or width changes).
     pub cached_visual_line_count: Option<u16>,
     /// Error from parsing board_columns.toml (None = valid).
@@ -349,10 +343,6 @@ impl App {
             kanban_board_state,
             kanban_items_rx: None,
             bead_detail_rx: None,
-            kanban_fs_rx: None,
-            kanban_watcher_stop: None,
-            last_kanban_fetch_at: None,
-            pending_kanban_fetch: false,
             cached_visual_line_count: None,
             board_config_error: None,
             show_bead_picker: false,
