@@ -21,7 +21,6 @@ const BOARD_MUTATION_POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// Total wall time ~0.9s on a warm cache, <1KB payload. Returns `None` if
 /// either bd call fails — caller should skip the tick and retry next interval.
 fn compute_board_signature(bd_path: &str) -> Option<Vec<u8>> {
-    crate::perf::record_subprocess_spawn();
     let count_out = crate::bd_lock::with_lock(|| {
         std::process::Command::new(bd_path)
             .args(["count", "--json"])
@@ -35,7 +34,6 @@ fn compute_board_signature(bd_path: &str) -> Option<Vec<u8>> {
         return None;
     }
 
-    crate::perf::record_subprocess_spawn();
     let newest_out = crate::bd_lock::with_lock(|| {
         std::process::Command::new(bd_path)
             .args([
@@ -307,7 +305,6 @@ impl App {
             let bd_path = self.config.behavior.bd_path.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                crate::perf::record_subprocess_spawn();
                 let output = crate::bd_lock::with_lock(|| {
                     std::process::Command::new(&bd_path)
                         .args(["show", &pending_id, "--json"])
@@ -382,7 +379,6 @@ impl App {
         self.last_board_signature = None;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            crate::perf::record_subprocess_spawn();
             let _ = crate::bd_lock::with_lock(|| {
                 std::process::Command::new(&bd_path)
                     .args(&args)
@@ -413,7 +409,6 @@ impl App {
         let bead_id = detail.id.clone();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            crate::perf::record_subprocess_spawn();
             let output = crate::bd_lock::with_lock(|| {
                 std::process::Command::new(&bd_path)
                     .args(["show", &bead_id, "--json"])

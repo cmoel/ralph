@@ -61,7 +61,6 @@ fn poll_worker_output(app: &mut App, w: usize) {
 
     // Process collected messages
     if !messages.is_empty() {
-        crate::perf::record_output_msgs(messages.len() as u64);
         app.dirty = true;
     }
     for msg in messages {

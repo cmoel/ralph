@@ -84,7 +84,6 @@ pub fn start_heartbeat(
                 break;
             }
             let now = chrono_now_iso();
-            crate::perf::record_subprocess_spawn();
             let result = crate::bd_lock::with_lock(|| {
                 Command::new(&bd_path)
                     .args([

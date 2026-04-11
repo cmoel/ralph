@@ -49,7 +49,6 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
 }
 
 fn run_shell_pipeline(command: &str, bd_path: &str) -> Result<Vec<serde_json::Value>, String> {
-    crate::perf::record_subprocess_spawn();
     let mut cmd = std::process::Command::new("sh");
     cmd.args(["-c", command])
         .stdin(std::process::Stdio::null())
@@ -153,7 +152,6 @@ pub fn stream_board_data(
     }
 
     // Fetch stats serially — last so the earlier columns render first
-    crate::perf::record_subprocess_spawn();
     let stats_output = crate::bd_lock::with_lock(|| {
         std::process::Command::new(bd_path)
             .args(["stats", "--json"])

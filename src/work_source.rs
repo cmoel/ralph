@@ -54,7 +54,6 @@ impl BeadsWorkSource {
     /// Run a `bd` command with the given args, returning stdout on success.
     /// Kills the process if it exceeds the timeout.
     fn run_bd(&self, args: &[&str]) -> Result<String, String> {
-        crate::perf::record_subprocess_spawn();
         // Hold the global bd lock across spawn + try_wait + kill so we serialize
         // against every other ralph-initiated bd call. The guard drops when this
         // function returns (success, timeout, or error).
