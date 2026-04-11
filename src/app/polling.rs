@@ -11,6 +11,51 @@ use crate::work_source::BeadsWorkSource;
 
 use super::state::{App, AppStatus};
 
+/// How often to probe the beads DB for mutations.
+const BOARD_MUTATION_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Compute a compact byte signature of the current board state that changes
+/// on every mutation that bumps `updated_at`, plus creates and deletes.
+///
+/// Signal = bytes(`bd count --json`) ++ bytes(`bd list --all --sort updated -n 1 --json --flat`).
+/// Total wall time ~0.9s on a warm cache, <1KB payload. Returns `None` if
+/// either bd call fails — caller should skip the tick and retry next interval.
+fn compute_board_signature(bd_path: &str) -> Option<Vec<u8>> {
+    crate::perf::record_subprocess_spawn();
+    let count_out = crate::bd_lock::with_lock(|| {
+        std::process::Command::new(bd_path)
+            .args(["count", "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
+    if !count_out.status.success() {
+        return None;
+    }
+
+    crate::perf::record_subprocess_spawn();
+    let newest_out = crate::bd_lock::with_lock(|| {
+        std::process::Command::new(bd_path)
+            .args([
+                "list", "--all", "--sort", "updated", "-n", "1", "--json", "--flat",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
+    if !newest_out.status.success() {
+        return None;
+    }
+
+    let mut sig = count_out.stdout;
+    sig.extend_from_slice(&newest_out.stdout);
+    Some(sig)
+}
+
 impl App {
     pub fn poll_bead(&mut self) {
         // Check for completed background detect_current
@@ -273,6 +318,9 @@ impl App {
         let column_defs = self.kanban_board_state.column_defs.clone();
         self.kanban_board_state.begin_refresh();
         self.dirty = true;
+        // Invalidate the mutation signature so the next poll re-establishes a
+        // fresh baseline against the newly-fetched state.
+        self.last_board_signature = None;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             crate::modals::stream_board_data(&bd_path, &column_defs, tx);
@@ -296,6 +344,10 @@ impl App {
         let column_defs = self.kanban_board_state.column_defs.clone();
         self.kanban_board_state.begin_refresh();
         self.dirty = true;
+        // Invalidate the mutation signature — the mutation we're about to run
+        // will shift it, and we want the next poll to re-baseline from the
+        // post-mutation state instead of triggering a redundant refresh.
+        self.last_board_signature = None;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             crate::perf::record_subprocess_spawn();
@@ -357,6 +409,58 @@ impl App {
             let _ = tx.send(result);
         });
         self.bead_detail_rx = Some(rx);
+    }
+
+    /// Check the beads DB for mutations on a slow timer and trigger a full
+    /// refresh if anything changed. Drains the pending signature probe (if
+    /// any), then kicks off a new probe once per [`BOARD_MUTATION_POLL_INTERVAL`].
+    ///
+    /// Signal: bytes of `bd count --json` concatenated with
+    /// `bd list --all --sort updated -n 1 --json --flat`. Catches every field
+    /// mutation that bumps `updated_at` plus creates and deletes. Does NOT
+    /// catch pure `bd dep add/remove` from an external shell (bd doesn't
+    /// bump `updated_at` on dep edits as of v1.0) — user must press `r`.
+    pub fn poll_board_mutations(&mut self) {
+        if let Some(rx) = self.board_signature_rx.take() {
+            match rx.try_recv() {
+                Ok(Some(new_sig)) => {
+                    let changed = self
+                        .last_board_signature
+                        .as_ref()
+                        .is_some_and(|prev| *prev != new_sig);
+                    self.last_board_signature = Some(new_sig);
+                    if changed {
+                        self.trigger_kanban_refresh();
+                    }
+                }
+                Ok(None) => {
+                    // Probe failed (lock contention, bd error, etc.); skip
+                    // this tick and retry on the next interval.
+                }
+                Err(TryRecvError::Empty) => {
+                    self.board_signature_rx = Some(rx);
+                    return;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    // Thread died without sending — treat as a failed probe.
+                }
+            }
+        }
+
+        let ready_to_poll = self
+            .last_board_signature_check_at
+            .is_none_or(|t| t.elapsed() >= BOARD_MUTATION_POLL_INTERVAL);
+        if !ready_to_poll {
+            return;
+        }
+
+        self.last_board_signature_check_at = Some(Instant::now());
+        let bd_path = self.config.behavior.bd_path.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(compute_board_signature(&bd_path));
+        });
+        self.board_signature_rx = Some(rx);
     }
 
     /// Poll for background bead picker data.

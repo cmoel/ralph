@@ -241,6 +241,15 @@ pub struct App {
     pub kanban_items_rx: Option<Receiver<crate::modals::KanbanFetchMsg>>,
     /// Receiver for background bd show --json result (bead detail drill-down).
     pub bead_detail_rx: Option<Receiver<Result<serde_json::Value, String>>>,
+    /// Last observed board mutation signature — bytes of
+    /// `bd count --json` concatenated with
+    /// `bd list --all --sort updated -n 1 --json --flat`. `None` means we
+    /// haven't captured a baseline yet (or a refresh just invalidated it).
+    pub last_board_signature: Option<Vec<u8>>,
+    /// Receiver for the background signature probe.
+    pub board_signature_rx: Option<Receiver<Option<Vec<u8>>>>,
+    /// When the last signature probe was kicked off (for throttling).
+    pub last_board_signature_check_at: Option<Instant>,
     /// Cached visual line count (invalidated on content or width changes).
     pub cached_visual_line_count: Option<u16>,
     /// Error from parsing board_columns.toml (None = valid).
@@ -343,6 +352,9 @@ impl App {
             kanban_board_state,
             kanban_items_rx: None,
             bead_detail_rx: None,
+            last_board_signature: None,
+            board_signature_rx: None,
+            last_board_signature_check_at: None,
             cached_visual_line_count: None,
             board_config_error: None,
             show_bead_picker: false,
