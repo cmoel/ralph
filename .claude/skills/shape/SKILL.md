@@ -38,16 +38,7 @@ Your job is to do **one pass** of this sieve. Put the right amount of content at
 
 ## Setup
 
-**Detect mode** by reading the `.ralph` config file in the project root. Look for `mode = "beads"` or `mode = "specs"` under `[behavior]`.
-
-- **Beads mode**: Run `bd list --json` to see existing beads for context.
-- **Specs mode** (default): Read `specs/README.md` and `specs/TEMPLATE.md` before starting.
-
-**Announce the mode:** Tell the user which mode you detected. Example: *"I see this project uses beads mode, so I'll produce epics and beads. Let me know if you'd prefer specs instead."*
-
-**Never mix modes.** Beads mode produces epics and beads. Specs mode produces spec files. Never both in the same session.
-
-If the user wants to override the detected mode, respect their choice.
+Run `bd list --json` to see existing beads for context.
 
 ---
 
@@ -57,26 +48,21 @@ Support all three ways to start a shaping session:
 
 ### 1. Standalone
 
-The user specifies a bead ID or spec name directly (e.g., "shape ralph-a12" or "shape the auth spec").
+The user specifies a bead ID directly (e.g., "shape ralph-a12").
 
-- **Beads mode:** Run `bd show <id>` to load the item. If it's an epic, also run `bd children <id>` to see existing slices.
-- **Specs mode:** Read `specs/<name>.md` to load the item
+Run `bd show <id>` to load the item. If it's an epic, also run `bd children <id>` to see existing slices.
 
 ### 2. Continuation
 
 The user says something like "shape the beads I just dumped" or "shape what we just captured."
 
-- **Beads mode:** Run `bd list --label=human` and `bd blocked` to find items needing refinement
-- **Specs mode:** Read `specs/README.md` and look for items with "Needs Shaping" status
+Run `bd list --label=human` and `bd blocked` to find items needing refinement.
 
 Present the list and let the user pick which to shape, or shape them all if they're related.
 
 ### 3. Auto-discover
 
-If no item is specified, query for items that need shaping:
-
-- **Beads mode:** Run `bd list --label=human` and `bd blocked` to find items needing attention
-- **Specs mode:** Read `specs/README.md` and find "Needs Shaping" entries
+If no item is specified, query for items that need shaping: run `bd list --label=human` and `bd blocked` to find items needing attention.
 
 Present the list and ask which item(s) to shape. If only one exists, offer to start with it.
 
@@ -89,7 +75,7 @@ Load the item and assess where it is in its lifecycle:
 - **Raw idea** — vague, maybe just a sentence or voice dump. Needs exploring, expanding, or refining before it can become a bounded context.
 - **Partially refined** — has some shape but isn't yet a clear bounded context. Might need expanding, narrowing, clarifying, or some combination.
 - **Bounded context (epic)** — clear problem, rough solution shape, defined boundaries and no-gos. Ready to discover vertical slices.
-- **Epic with slices** — has child beads/specs but some slices may need more direction or the epic itself may need adjustment.
+- **Epic with slices** — has child beads but some slices may need more direction or the epic itself may need adjustment.
 - **Slice needing direction** — a vertical slice that needs light guidance about approach, relevant code, or constraints.
 
 Don't force the input into a category. Read what's actually there.
@@ -152,11 +138,7 @@ For slices that need guidance before autonomous execution. Point to relevant cod
 
 When the conversation converges, present what you plan to create and confirm with the user before writing. Show the artifacts, their content, and their labels/metadata.
 
-### Beads Mode
-
-**Always produce epics with child beads.** This is the one path.
-
-#### The Epic (Bounded Context)
+### The Epic (Bounded Context)
 
 Create or update an epic bead that holds:
 - **What problem this solves** and why it matters
@@ -186,7 +168,7 @@ bd update <id> --add-label=human
 
 If the epic already exists, use `bd update <id>` instead.
 
-#### Child Beads (Vertical Slices)
+### Child Beads (Vertical Slices)
 
 Child beads are what the autonomous loop actually executes. They must be self-contained — an agent working from a child bead cannot ask clarifying questions. If any of these sections have gaps, dig deep into the codebase to ground the spec in reality, and surface open questions to the user for their judgment.
 
@@ -223,25 +205,16 @@ After creating each child, flag for human if it still needs another shaping pass
 bd update <id> --add-label=human
 ```
 
-#### Readiness
+### Readiness
 
 - Flag items for human (`bd update <id> --add-label=human`) when they need another pass through the sieve
 - Unflag items from human (`bd update <id> --remove-label=human`) when they're ready for the Ralph Loop
 - Set appropriate priority, type, and any other relevant metadata
 - Set dependencies between child beads when order matters: `bd dep add <child> <depends-on>`
 
-#### If `bd` commands fail
+### If `bd` commands fail
 
 Surface the error immediately. Present all the shaped content to the user so nothing is lost. Don't silently retry.
-
-### Specs Mode
-
-Produce equivalent spec file artifacts with the same philosophy:
-- Epic-level spec holds the bounded context (problem, solution shape, boundaries)
-- Individual spec files for each vertical slice
-- Update `specs/README.md` with status: "Needs Shaping" or "Ready"
-
-Commit changes after getting user approval.
 
 ### Partial Passes
 
@@ -267,7 +240,7 @@ When shaping multiple items in one session:
 
 ## Error Handling
 
-- **Bead/spec not found:** Surface clearly, offer to list available items
+- **Bead not found:** Surface clearly, offer to list available items
 - **bd command failures:** Surface the error, present the shaped content to the user so nothing is lost
 - **Already-shaped items:** Note that the item appears already shaped, ask if the user wants to reshape it
 
@@ -287,12 +260,10 @@ When shaping multiple items in one session:
 
 ## Start
 
-1. Read `.ralph` to detect the mode
-2. **Beads mode:** Run `bd list --json` to see existing beads
-3. **Specs mode:** Read `specs/README.md` and `specs/TEMPLATE.md`
-4. Determine entry point:
+1. Run `bd list --json` to see existing beads
+2. Determine entry point:
    - If the user specified an item → load it (standalone)
    - If the user mentioned recent items → find human-flagged and blocked items (continuation)
    - If neither → query for human-flagged and blocked items and present the list (auto-discover)
-5. Announce the detected mode and what artifacts this session will produce
-6. Assess where the input is in its lifecycle, diagnose the pass, and begin the conversation
+3. Announce what artifacts this session will produce
+4. Assess where the input is in its lifecycle, diagnose the pass, and begin the conversation

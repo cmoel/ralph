@@ -305,4 +305,20 @@ mod tests {
             "shape skill should remove human label when ready"
         );
     }
+
+    #[test]
+    fn brain_dump_skill_has_no_specs_mode_refs() {
+        assert!(!BRAIN_DUMP_SKILL_MD.contains("specs mode"));
+        assert!(!BRAIN_DUMP_SKILL_MD.contains("Specs mode"));
+        assert!(!BRAIN_DUMP_SKILL_MD.contains("specs/README"));
+        assert!(!BRAIN_DUMP_SKILL_MD.contains(".ralph"));
+    }
+
+    #[test]
+    fn shape_skill_has_no_specs_mode_refs() {
+        assert!(!SHAPE_SKILL_MD.contains("specs mode"));
+        assert!(!SHAPE_SKILL_MD.contains("Specs mode"));
+        assert!(!SHAPE_SKILL_MD.contains("specs/README"));
+        assert!(!SHAPE_SKILL_MD.contains(".ralph"));
+    }
 }

@@ -9,14 +9,7 @@ Drain ideas from the user's head through intense, relentless questioning, then f
 
 ## Setup
 
-**Detect mode** by reading the `.ralph` config file in the project root. Look for `mode = "beads"` or `mode = "specs"` under `[behavior]`.
-
-- **Beads mode**: Run `bd list --json` to see existing beads for deduplication context.
-- **Specs mode** (default): Read `specs/README.md` to see existing specs for deduplication context.
-
-**Announce the mode:** Tell the user which mode you detected. Example: *"I see this project uses beads mode, so I'll file ideas as beads. Let me know if you'd prefer specs instead."*
-
-If the user wants to override the detected mode, respect their choice.
+Run `bd list --json` to see existing beads for deduplication context.
 
 ---
 
@@ -82,9 +75,7 @@ Don't do full shaping here — that's what /shape is for. Just enough structure 
 
 ### Deduplication
 
-Before filing, check against existing items:
-- **Beads mode:** Compare against `bd list --json` results from setup
-- **Specs mode:** Compare against `specs/README.md` entries
+Before filing, check against existing items by comparing against the `bd list --json` results from setup.
 
 If an idea overlaps with something existing, surface it: "This sounds similar to [existing item]. Should we merge them, keep them separate, or skip this one?"
 
@@ -105,7 +96,7 @@ Present the full list of items you're about to file. Group them logically. For e
 
 **Get confirmation before filing.** Use AskUserQuestion with only the positive action (e.g., "File these 5 beads"). The built-in Other text box already lets the user redirect — don't add filler options like "Adjustments needed."
 
-### Beads Mode
+### Filing
 
 Create beads using `bd create` for each item:
 
@@ -132,34 +123,11 @@ bd update <id> --add-label=human
 - Always flag for human — these items need /shape before implementation
 - For epics: create the epic bead noting it will need children, but don't prescribe what children should be
 
-### Specs Mode
-
-Create rough spec files for each item:
-
-1. **Create** `specs/[name].md` with rough content:
-
-```markdown
-# Item Title
-
-One-line description of what this solves.
-
-## Context
-Why this matters and what prompted it.
-
-## Open Questions
-- Things that need investigation during shaping
-```
-
-2. **Update** `specs/README.md`:
-   - Add each spec to the table
-   - Set status to **Needs Shaping**
-   - Write one-line summary
-
 ### Session End
 
 After filing, present a summary:
 - How many items filed
-- List of titles with their IDs (beads mode) or filenames (specs mode)
+- List of titles with their IDs
 - Any items flagged as epics or needing special attention
 - Suggest running /shape on the most important items next
 
@@ -178,8 +146,5 @@ After filing, present a summary:
 
 ## Start
 
-1. Read `.ralph` to detect the mode
-2. **Beads mode:** Run `bd list --json` to see existing beads
-3. **Specs mode:** Read `specs/README.md` to see existing specs
-4. Announce the detected mode to the user
-5. Ask: **"What's on your mind?"**
+1. Run `bd list --json` to see existing beads
+2. Ask: **"What's on your mind?"**
