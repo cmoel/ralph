@@ -17,6 +17,10 @@
           {
             "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/intercept-build.sh",
             "type": "command"
+          },
+          {
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/intercept-bd.sh",
+            "type": "command"
           }
         ],
         "matcher": "Bash"

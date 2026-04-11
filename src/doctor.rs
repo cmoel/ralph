@@ -150,6 +150,65 @@ fn settings_has_bd_prime_hook(contents: &str) -> bool {
     false
 }
 
+/// Check that the `bd` retry hook is fully installed: both scripts exist and
+/// the PreToolUse entry is registered in `.claude/settings.json`.
+pub fn check_bd_retry_hook() -> CheckResult {
+    let retry = std::path::Path::new("scripts/bd-retry.sh");
+    let intercept = std::path::Path::new("scripts/intercept-bd.sh");
+    if !retry.exists() || !intercept.exists() {
+        return CheckResult::fail("bd retry hook scripts missing — run `ralph init` to install");
+    }
+
+    let settings_path = std::path::PathBuf::from(".claude/settings.json");
+    let contents = match std::fs::read_to_string(&settings_path) {
+        Ok(c) => c,
+        Err(_) => {
+            return CheckResult::fail(
+                "bd retry hook not registered — run `ralph init` to register in .claude/settings.json",
+            );
+        }
+    };
+
+    if settings_has_intercept_bd_hook(&contents) {
+        CheckResult::pass("bd retry hook installed (scripts + PreToolUse registration)")
+    } else {
+        CheckResult::fail(
+            "bd retry hook not registered — run `ralph init` to register in .claude/settings.json",
+        )
+    }
+}
+
+fn settings_has_intercept_bd_hook(contents: &str) -> bool {
+    let json: serde_json::Value = match serde_json::from_str(contents) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let pre_tool_use = match json.get("hooks").and_then(|h| h.get("PreToolUse")) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    let entries = match pre_tool_use.as_array() {
+        Some(a) => a,
+        None => return false,
+    };
+
+    for entry in entries {
+        if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            for hook in hooks {
+                if let Some(cmd) = hook.get("command").and_then(|c| c.as_str())
+                    && cmd.contains("intercept-bd.sh")
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 /// Check that scaffolded skill files are present and match compiled-in templates.
 pub fn check_scaffolding_drift(config: &Config) -> CheckResult {
     let state = crate::modals::InitModalState::new(config);
@@ -322,6 +381,62 @@ mod tests {
     #[test]
     fn bd_prime_hook_handles_invalid_json() {
         assert!(!settings_has_bd_prime_hook("not json"));
+    }
+
+    #[test]
+    fn intercept_bd_hook_detected_in_settings() {
+        let settings = r#"{
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/intercept-bd.sh"
+                    }]
+                }]
+            }
+        }"#;
+        assert!(settings_has_intercept_bd_hook(settings));
+    }
+
+    #[test]
+    fn intercept_bd_hook_missing_when_no_hooks() {
+        let settings = r#"{"permissions": {"allow": []}}"#;
+        assert!(!settings_has_intercept_bd_hook(settings));
+    }
+
+    #[test]
+    fn intercept_bd_hook_detected_among_multiple_hooks() {
+        let settings = r#"{
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/intercept-build.sh"},
+                        {"type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/intercept-bd.sh"}
+                    ]
+                }]
+            }
+        }"#;
+        assert!(settings_has_intercept_bd_hook(settings));
+    }
+
+    #[test]
+    fn intercept_bd_hook_missing_when_only_build_intercept() {
+        let settings = r#"{
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/intercept-build.sh"}]
+                }]
+            }
+        }"#;
+        assert!(!settings_has_intercept_bd_hook(settings));
+    }
+
+    #[test]
+    fn intercept_bd_hook_handles_invalid_json() {
+        assert!(!settings_has_intercept_bd_hook("not json"));
     }
 
     #[test]

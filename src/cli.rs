@@ -334,6 +334,7 @@ pub fn run_doctor() -> Result<()> {
 
     checks.push(doctor::check_bd(cfg));
     checks.push(doctor::check_bd_prime_hook());
+    checks.push(doctor::check_bd_retry_hook());
     checks.push(doctor::check_scaffolding_drift(cfg));
     checks.push(doctor::check_board_toml());
     checks.push(doctor::check_work_items(cfg));

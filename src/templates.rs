@@ -181,6 +181,12 @@ pub const SHAPE_SKILL_MD: &str = include_str!("../.claude/skills/shape/SKILL.md"
 /// Capture skill (with YAML frontmatter).
 pub const CAPTURE_SKILL_MD: &str = include_str!("../.claude/skills/capture/SKILL.md");
 
+/// `bd` retry wrapper — loops on transient embedded-Dolt lock errors.
+pub const BD_RETRY_SH: &str = include_str!("../scripts/bd-retry.sh");
+
+/// PreToolUse hook that routes `bd` commands through `bd-retry.sh`.
+pub const INTERCEPT_BD_SH: &str = include_str!("../scripts/intercept-bd.sh");
+
 #[cfg(test)]
 mod tests {
     use super::*;
