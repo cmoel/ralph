@@ -3,7 +3,7 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use tracing::info;
+use tracing::{info, warn};
 
 /// State of the Dolt SQL server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,7 +151,19 @@ impl DoltManager {
                 let (tx, rx) = mpsc::channel();
                 let bd_path = bd_path.to_string();
                 std::thread::spawn(move || {
-                    let _ = tx.send(run_dolt_command(&bd_path, "stop"));
+                    let success = run_dolt_command(&bd_path, "stop");
+                    if success {
+                        match truncate_server_log_if_large(DOLT_LOG_TRUNCATE_THRESHOLD) {
+                            Ok(true) => {
+                                info!("truncated .beads/dolt-server.log after dolt stop")
+                            }
+                            Ok(false) => {}
+                            Err(e) => {
+                                warn!(error = %e, "failed to truncate dolt-server.log after stop")
+                            }
+                        }
+                    }
+                    let _ = tx.send(success);
                 });
                 self.toggle_rx = Some(rx);
             }
@@ -197,4 +209,114 @@ fn run_dolt_command(bd_path: &str, subcmd: &str) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+pub const DOLT_LOG_TRUNCATE_THRESHOLD: u64 = 50 * 1024 * 1024;
+
+const DOLT_SERVER_LOG_PATH: &str = ".beads/dolt-server.log";
+const DOLT_SERVER_PID_PATH: &str = ".beads/dolt-server.pid";
+
+pub fn truncate_server_log_if_large(threshold_bytes: u64) -> std::io::Result<bool> {
+    truncate_log_if_large(std::path::Path::new(DOLT_SERVER_LOG_PATH), threshold_bytes)
+}
+
+fn truncate_log_if_large(path: &std::path::Path, threshold_bytes: u64) -> std::io::Result<bool> {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() > threshold_bytes => {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(path)?;
+            Ok(true)
+        }
+        Ok(_) => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn is_dolt_server_alive() -> bool {
+    is_pid_alive(std::path::Path::new(DOLT_SERVER_PID_PATH))
+}
+
+fn is_pid_alive(pid_path: &std::path::Path) -> bool {
+    let pid_str = match std::fs::read_to_string(pid_path) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let pid: i32 = match pid_str.trim().parse() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn truncate_large_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.log");
+        let mut f = std::fs::File::create(&path).unwrap();
+        let buf = vec![0u8; 1024];
+        for _ in 0..200 {
+            f.write_all(&buf).unwrap();
+        }
+        drop(f);
+        assert!(std::fs::metadata(&path).unwrap().len() > 100_000);
+
+        let result = truncate_log_if_large(&path, 100_000).unwrap();
+        assert!(result);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn truncate_small_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("small.log");
+        std::fs::write(&path, "hello").unwrap();
+        let original_len = std::fs::metadata(&path).unwrap().len();
+
+        let result = truncate_log_if_large(&path, 100_000).unwrap();
+        assert!(!result);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), original_len);
+    }
+
+    #[test]
+    fn truncate_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.log");
+
+        let result = truncate_log_if_large(&path, 100_000).unwrap();
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_pid_alive_no_pid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.pid");
+
+        assert!(!is_pid_alive(&path));
+    }
+
+    #[test]
+    fn is_pid_alive_stale_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stale.pid");
+        std::fs::write(&path, "99999999").unwrap();
+
+        assert!(!is_pid_alive(&path));
+    }
+
+    #[test]
+    fn is_pid_alive_current_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current.pid");
+        std::fs::write(&path, std::process::id().to_string()).unwrap();
+
+        assert!(is_pid_alive(&path));
+    }
 }
