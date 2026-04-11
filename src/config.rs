@@ -50,9 +50,8 @@ pub struct BehaviorConfig {
     /// - Zero (0): Stopped mode, pressing 's' has no effect
     /// - Positive (N): Runs exactly N iterations then stops
     pub iterations: i32,
-    /// Whether to acquire a wake lock to prevent system idle sleep.
-    /// When true, the system won't sleep while claude is running.
-    /// Display may still sleep. Default: true.
+    /// Whether to acquire a wake lock to prevent display and system idle sleep.
+    /// When true, the system won't sleep while claude is running. Default: true.
     pub keep_awake: bool,
     /// Path to the `bd` CLI binary. Default: "bd".
     pub bd_path: String,
