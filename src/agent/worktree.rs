@@ -386,17 +386,36 @@ fn symlink_settings_local(worktree_path: &std::path::Path) {
         return;
     }
 
-    match std::os::unix::fs::symlink(&source, &target) {
-        Ok(()) => info!(
-            source = %source.display(),
-            target = %target.display(),
-            "settings_local_symlinked"
-        ),
-        Err(e) => warn!(
-            error = %e,
-            source = %source.display(),
-            target = %target.display(),
-            "settings_local_symlink_failed"
-        ),
+    #[cfg(unix)]
+    {
+        match std::os::unix::fs::symlink(&source, &target) {
+            Ok(()) => info!(
+                source = %source.display(),
+                target = %target.display(),
+                "settings_local_symlinked"
+            ),
+            Err(e) => warn!(
+                error = %e,
+                source = %source.display(),
+                target = %target.display(),
+                "settings_local_symlink_failed"
+            ),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match std::fs::copy(&source, &target) {
+            Ok(_) => info!(
+                source = %source.display(),
+                target = %target.display(),
+                "settings_local_copied"
+            ),
+            Err(e) => warn!(
+                error = %e,
+                source = %source.display(),
+                target = %target.display(),
+                "settings_local_copy_failed"
+            ),
+        }
     }
 }
