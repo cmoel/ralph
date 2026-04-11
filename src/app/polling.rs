@@ -417,9 +417,10 @@ impl App {
     ///
     /// Signal: bytes of `bd count --json` concatenated with
     /// `bd list --all --sort updated -n 1 --json --flat`. Catches every field
-    /// mutation that bumps `updated_at` plus creates and deletes. Does NOT
-    /// catch pure `bd dep add/remove` from an external shell (bd doesn't
-    /// bump `updated_at` on dep edits as of v1.0) — user must press `r`.
+    /// mutation that bumps `updated_at` plus creates, deletes, and dep
+    /// add/remove (bd rewrites the newest bead's JSON when its dep graph
+    /// changes, even though `updated_at` itself isn't touched — verified
+    /// empirically against a pair of real beads).
     pub fn poll_board_mutations(&mut self) {
         if let Some(rx) = self.board_signature_rx.take() {
             match rx.try_recv() {
