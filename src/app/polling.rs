@@ -551,7 +551,7 @@ impl App {
     /// Update app status based on aggregate worker state.
     /// Does not override Error state (auto-clears via timeout).
     pub fn update_derived_status(&mut self) {
-        if self.status == AppStatus::Error {
+        if self.status == AppStatus::Error || self.status == AppStatus::Starting {
             return;
         }
         self.status = if self.any_worker_active() {

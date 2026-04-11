@@ -98,7 +98,7 @@ pub(crate) fn ensure_worktree(app: &mut App) -> bool {
 }
 
 /// Check if an epic has ready children.
-fn has_ready_children(bd_path: &str, epic_id: &str) -> bool {
+pub(crate) fn has_ready_children(bd_path: &str, epic_id: &str) -> bool {
     let output = std::process::Command::new(bd_path)
         .args(["ready", "--parent", epic_id, "--json"])
         .stdin(std::process::Stdio::null())

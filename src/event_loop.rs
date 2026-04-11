@@ -26,6 +26,9 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
         // Poll for output from child process
         output::poll_output(app);
 
+        // Poll for background worker startup completion
+        app.poll_worker_start();
+
         // Handle auto-continue for all workers
         for w_idx in 0..app.workers.len() {
             if app.workers[w_idx].auto_continue_pending {
@@ -85,11 +88,10 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
             app.dirty = false;
         }
 
-        // State-dependent poll timeout: fast when running, slow when idle
-        let poll_timeout = if app.status == AppStatus::Running {
-            Duration::from_millis(50)
-        } else {
-            Duration::from_millis(250)
+        // State-dependent poll timeout: fast when running/starting, slow when idle
+        let poll_timeout = match app.status {
+            AppStatus::Running | AppStatus::Starting => Duration::from_millis(50),
+            _ => Duration::from_millis(250),
         };
         if crossterm::event::poll(poll_timeout)? {
             let event = crossterm::event::read()?;
@@ -160,29 +162,13 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
                         KeyCode::Char('S') => match app.status {
                             AppStatus::Stopped | AppStatus::Error => {
                                 app.help_context = None;
-                                if app.start_iteration_run() {
-                                    let worker_count = app.workers.len();
-                                    for w in 0..worker_count {
-                                        app.selected_worker = w;
-                                        if !merge_and_refresh_worktree(app) {
-                                            continue;
-                                        }
-                                        execution::claim_before_start(app);
-                                        if !ensure_worktree(app) {
-                                            continue;
-                                        }
-                                        execution::start_command(app)?;
-                                    }
-                                    app.selected_worker = 0;
-                                    if app.any_worker_active() {
-                                        app.status = AppStatus::Running;
-                                    }
-                                }
+                                app.begin_starting_workers();
                             }
                             AppStatus::Running => {
                                 app.help_context = None;
                                 app.stop_command();
                             }
+                            AppStatus::Starting => {}
                         },
                         KeyCode::Char('q') => {
                             app.help_context = None;
@@ -226,28 +212,12 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
                     }
                     KeyCode::Char('S') => match app.status {
                         AppStatus::Stopped | AppStatus::Error => {
-                            if app.start_iteration_run() {
-                                let worker_count = app.workers.len();
-                                for w in 0..worker_count {
-                                    app.selected_worker = w;
-                                    if !merge_and_refresh_worktree(app) {
-                                        continue;
-                                    }
-                                    execution::claim_before_start(app);
-                                    if !ensure_worktree(app) {
-                                        continue;
-                                    }
-                                    execution::start_command(app)?;
-                                }
-                                app.selected_worker = 0;
-                                if app.any_worker_active() {
-                                    app.status = AppStatus::Running;
-                                }
-                            }
+                            app.begin_starting_workers();
                         }
                         AppStatus::Running => {
                             app.stop_command();
                         }
+                        AppStatus::Starting => {}
                     },
                     KeyCode::Char('c') => {
                         app.show_config_modal = true;

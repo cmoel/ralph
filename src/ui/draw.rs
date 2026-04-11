@@ -53,6 +53,7 @@ pub fn draw_ui(f: &mut Frame, app: &mut App) {
     let status_dot = "● ";
     let status_text = match app.status {
         AppStatus::Stopped => "IDLE".to_string(),
+        AppStatus::Starting => "STARTING".to_string(),
         AppStatus::Running => {
             if let Some(start_time) = app.workers[w].run_start_time {
                 format_elapsed(start_time.elapsed())

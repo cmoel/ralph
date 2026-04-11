@@ -28,6 +28,7 @@ use crate::work_source::{BeadsWorkSource, WorkRemaining};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppStatus {
     Stopped,
+    Starting,
     Running,
     Error,
 }
@@ -35,7 +36,7 @@ pub enum AppStatus {
 impl AppStatus {
     pub fn border_type(&self) -> BorderType {
         match self {
-            AppStatus::Stopped => BorderType::Rounded,
+            AppStatus::Stopped | AppStatus::Starting => BorderType::Rounded,
             AppStatus::Running | AppStatus::Error => BorderType::Double,
         }
     }
@@ -44,6 +45,7 @@ impl AppStatus {
     pub fn status_color(&self) -> Color {
         match self {
             AppStatus::Stopped => Color::Cyan,
+            AppStatus::Starting => Color::Yellow,
             AppStatus::Running => Color::Green,
             AppStatus::Error => Color::Red,
         }
@@ -269,6 +271,8 @@ pub struct App {
     pub workers: Vec<Worker>,
     /// Index into `workers` for the currently selected/active worker.
     pub selected_worker: usize,
+    /// Receiver for background worker startup results.
+    pub start_workers_rx: Option<Receiver<Vec<crate::work_start::WorkerStartResult>>>,
 }
 
 /// Tracks a pending dependency addition while the bead picker is open.
@@ -363,6 +367,7 @@ impl App {
             workers_stream_state: None,
             workers: (0..worker_count).map(Worker::new).collect(),
             selected_worker: 0,
+            start_workers_rx: None,
         }
     }
 
