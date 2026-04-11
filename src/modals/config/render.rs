@@ -5,10 +5,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tracing::debug;
 
+use std::sync::Arc;
+
 use crate::app::App;
 use crate::config::save_partial_config;
 use crate::startup::get_file_mtime;
 use crate::ui::centered_rect;
+use crate::work_source::BeadsWorkSource;
 
 use super::ConfigModalField;
 
@@ -60,6 +63,10 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
                     Ok(()) => {
                         // Re-merge and update app config
                         let new_merged = state.to_config();
+                        if new_merged.behavior.bd_path != app.config.behavior.bd_path {
+                            app.work_source =
+                                Arc::new(BeadsWorkSource::new(new_merged.behavior.bd_path.clone()));
+                        }
                         app.config = new_merged;
                         // Update mtime so we don't trigger a reload
                         if let Some(ref path) = state.project_config_path {
@@ -88,7 +95,10 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
 
         // Text input handling
         KeyCode::Char(c) => {
-            if matches!(state.focus, ConfigModalField::ClaudePath) {
+            if matches!(
+                state.focus,
+                ConfigModalField::ClaudePath | ConfigModalField::BdPath
+            ) {
                 state.insert_char(c);
             } else if c == '?' {
                 app.help_context = Some(crate::modals::HelpContext::Config);
@@ -107,6 +117,8 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Left => match state.focus {
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_decrement(),
+            ConfigModalField::HeartbeatInterval => state.heartbeat_decrement(),
+            ConfigModalField::StaleThreshold => state.stale_decrement(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             _ => state.cursor_left(),
         },
@@ -114,6 +126,8 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Right => match state.focus {
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_increment(),
+            ConfigModalField::HeartbeatInterval => state.heartbeat_increment(),
+            ConfigModalField::StaleThreshold => state.stale_increment(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             _ => state.cursor_right(),
         },
@@ -130,6 +144,8 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Up => match state.focus {
             ConfigModalField::LogLevel => state.log_level_prev(),
             ConfigModalField::Iterations => state.iterations_increment(),
+            ConfigModalField::HeartbeatInterval => state.heartbeat_increment(),
+            ConfigModalField::StaleThreshold => state.stale_increment(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_prev(),
             _ => {}
@@ -138,6 +154,8 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
         KeyCode::Down => match state.focus {
             ConfigModalField::LogLevel => state.log_level_next(),
             ConfigModalField::Iterations => state.iterations_decrement(),
+            ConfigModalField::HeartbeatInterval => state.heartbeat_decrement(),
+            ConfigModalField::StaleThreshold => state.stale_decrement(),
             ConfigModalField::KeepAwake => state.toggle_keep_awake(),
             ConfigModalField::SaveButton | ConfigModalField::CancelButton => state.focus_next(),
             _ => {}
@@ -150,7 +168,7 @@ pub fn handle_config_modal_input(app: &mut App, key_code: KeyCode, modifiers: Ke
 /// Draw the configuration modal.
 pub fn draw_config_modal(f: &mut Frame, app: &App) {
     let modal_width = 70;
-    let modal_height = 28;
+    let modal_height = 32;
     let modal_area = centered_rect(modal_width, modal_height, f.area());
 
     // Clear the area behind the modal
@@ -247,10 +265,24 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
 
     // Get active form values
     let form = state.map(|s| s.active_form());
-    let (claude_path, log_level, iterations, keep_awake, cursor_pos, focus, has_errors): (
+    let (
+        claude_path,
+        bd_path,
+        log_level,
+        iterations,
+        heartbeat_interval,
+        stale_threshold,
+        keep_awake,
+        cursor_pos,
+        focus,
+        has_errors,
+    ): (
+        &str,
         &str,
         &str,
         i32,
+        u64,
+        u64,
         bool,
         usize,
         Option<ConfigModalField>,
@@ -259,8 +291,11 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         let f = s.active_form();
         (
             f.claude_path.as_str(),
+            f.bd_path.as_str(),
             f.selected_log_level(),
             f.iterations,
+            f.heartbeat_interval,
+            f.stale_threshold,
             f.keep_awake,
             f.cursor_pos,
             Some(s.focus),
@@ -269,8 +304,11 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     } else {
         (
             app.config.claude.path.as_str(),
+            app.config.behavior.bd_path.as_str(),
             app.config.logging.level.as_str(),
             app.config.behavior.iterations,
+            app.config.behavior.heartbeat_interval,
+            app.config.behavior.stale_threshold,
             app.config.behavior.keep_awake,
             0,
             None,
@@ -324,6 +362,27 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
     }
     content.push(Line::from(path_line));
     if let Some(error) = get_field_error(ConfigModalField::ClaudePath) {
+        content.push(Line::from(Span::styled(
+            format!("                     \u{26a0} {}", error),
+            error_style,
+        )));
+    }
+
+    // bd path field
+    let bd_focused = focus == Some(ConfigModalField::BdPath);
+    let bd_inherited = is_inherited(ConfigModalField::BdPath);
+    let bd_label_style = if bd_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let mut bd_line = vec![Span::styled("  bd path:          ", bd_label_style)];
+    bd_line.extend(render_field(bd_path, bd_focused, cursor_pos, bd_inherited));
+    if bd_inherited && !bd_focused {
+        bd_line.push(Span::styled(" (inherited)", label_style));
+    }
+    content.push(Line::from(bd_line));
+    if let Some(error) = get_field_error(ConfigModalField::BdPath) {
         content.push(Line::from(Span::styled(
             format!("                     \u{26a0} {}", error),
             error_style,
@@ -392,6 +451,72 @@ pub fn draw_config_modal(f: &mut Frame, app: &App) {
         iter_line.push(Span::styled(" (inherited)", label_style));
     }
     content.push(Line::from(iter_line));
+
+    // Heartbeat interval field
+    let hb_focused = focus == Some(ConfigModalField::HeartbeatInterval);
+    let hb_inherited = is_inherited(ConfigModalField::HeartbeatInterval);
+    let hb_label_style = if hb_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let hb_display = if hb_focused {
+        format!("< {} >", heartbeat_interval)
+    } else {
+        heartbeat_interval.to_string()
+    };
+    let hb_value_style = if hb_focused {
+        Style::default().fg(Color::Cyan)
+    } else if hb_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut hb_line = vec![
+        Span::styled("  Heartbeat (s):   ", hb_label_style),
+        Span::styled(hb_display, hb_value_style),
+    ];
+    if hb_inherited && !hb_focused {
+        hb_line.push(Span::styled(" (inherited)", label_style));
+    }
+    hb_line.push(Span::styled(
+        " (applies at next relaunch)",
+        Style::default().fg(Color::DarkGray),
+    ));
+    content.push(Line::from(hb_line));
+
+    // Stale threshold field
+    let st_focused = focus == Some(ConfigModalField::StaleThreshold);
+    let st_inherited = is_inherited(ConfigModalField::StaleThreshold);
+    let st_label_style = if st_focused {
+        focused_label_style
+    } else {
+        label_style
+    };
+    let st_display = if st_focused {
+        format!("< {} >", stale_threshold)
+    } else {
+        stale_threshold.to_string()
+    };
+    let st_value_style = if st_focused {
+        Style::default().fg(Color::Cyan)
+    } else if st_inherited {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mut st_line = vec![
+        Span::styled("  Stale (s):       ", st_label_style),
+        Span::styled(st_display, st_value_style),
+    ];
+    if st_inherited && !st_focused {
+        st_line.push(Span::styled(" (inherited)", label_style));
+    }
+    st_line.push(Span::styled(
+        " (applies at next loop start)",
+        Style::default().fg(Color::DarkGray),
+    ));
+    content.push(Line::from(st_line));
 
     // Keep awake toggle
     let keep_awake_focused = focus == Some(ConfigModalField::KeepAwake);
@@ -486,9 +611,15 @@ mod tests {
     fn test_config_modal_field_next_full_cycle() {
         let field = ConfigModalField::ClaudePath;
         let field = field.next();
+        assert_eq!(field, ConfigModalField::BdPath);
+        let field = field.next();
         assert_eq!(field, ConfigModalField::LogLevel);
         let field = field.next();
         assert_eq!(field, ConfigModalField::Iterations);
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::HeartbeatInterval);
+        let field = field.next();
+        assert_eq!(field, ConfigModalField::StaleThreshold);
         let field = field.next();
         assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.next();
@@ -518,9 +649,15 @@ mod tests {
         let field = field.prev();
         assert_eq!(field, ConfigModalField::KeepAwake);
         let field = field.prev();
+        assert_eq!(field, ConfigModalField::StaleThreshold);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::HeartbeatInterval);
+        let field = field.prev();
         assert_eq!(field, ConfigModalField::Iterations);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::LogLevel);
+        let field = field.prev();
+        assert_eq!(field, ConfigModalField::BdPath);
         let field = field.prev();
         assert_eq!(field, ConfigModalField::ClaudePath);
     }
@@ -533,13 +670,15 @@ mod tests {
         );
     }
 
-    // next() and prev() are inverses of each other
     #[test]
     fn test_config_modal_field_next_prev_inverse() {
         let all_fields = [
             ConfigModalField::ClaudePath,
+            ConfigModalField::BdPath,
             ConfigModalField::LogLevel,
             ConfigModalField::Iterations,
+            ConfigModalField::HeartbeatInterval,
+            ConfigModalField::StaleThreshold,
             ConfigModalField::KeepAwake,
             ConfigModalField::SaveButton,
             ConfigModalField::CancelButton,

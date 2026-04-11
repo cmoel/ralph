@@ -7,12 +7,20 @@ use crate::validators::validate_executable_path;
 /// Log level options for the dropdown.
 pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
+const HEARTBEAT_MIN: u64 = 1;
+const HEARTBEAT_MAX: u64 = 9999;
+const STALE_MIN: u64 = 1;
+const STALE_MAX: u64 = 9999;
+
 /// Per-tab form state storing field values and validation state.
 #[derive(Debug, Clone)]
 pub struct TabFormState {
     pub claude_path: String,
+    pub bd_path: String,
     pub log_level_index: usize,
     pub iterations: i32,
+    pub heartbeat_interval: u64,
+    pub stale_threshold: u64,
     pub keep_awake: bool,
     pub cursor_pos: usize,
     pub error: Option<String>,
@@ -25,8 +33,11 @@ pub struct TabFormState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfigModalField {
     ClaudePath,
+    BdPath,
     LogLevel,
     Iterations,
+    HeartbeatInterval,
+    StaleThreshold,
     KeepAwake,
     SaveButton,
     CancelButton,
@@ -35,9 +46,12 @@ pub enum ConfigModalField {
 impl ConfigModalField {
     pub fn next(self) -> Self {
         match self {
-            Self::ClaudePath => Self::LogLevel,
+            Self::ClaudePath => Self::BdPath,
+            Self::BdPath => Self::LogLevel,
             Self::LogLevel => Self::Iterations,
-            Self::Iterations => Self::KeepAwake,
+            Self::Iterations => Self::HeartbeatInterval,
+            Self::HeartbeatInterval => Self::StaleThreshold,
+            Self::StaleThreshold => Self::KeepAwake,
             Self::KeepAwake => Self::SaveButton,
             Self::SaveButton => Self::CancelButton,
             Self::CancelButton => Self::ClaudePath,
@@ -47,9 +61,12 @@ impl ConfigModalField {
     pub fn prev(self) -> Self {
         match self {
             Self::ClaudePath => Self::CancelButton,
-            Self::LogLevel => Self::ClaudePath,
+            Self::BdPath => Self::ClaudePath,
+            Self::LogLevel => Self::BdPath,
             Self::Iterations => Self::LogLevel,
-            Self::KeepAwake => Self::Iterations,
+            Self::HeartbeatInterval => Self::Iterations,
+            Self::StaleThreshold => Self::HeartbeatInterval,
+            Self::KeepAwake => Self::StaleThreshold,
             Self::SaveButton => Self::KeepAwake,
             Self::CancelButton => Self::SaveButton,
         }
@@ -85,6 +102,15 @@ impl TabFormState {
         if partial.behavior.keep_awake.is_some() {
             explicit_fields.insert(ConfigModalField::KeepAwake);
         }
+        if partial.behavior.bd_path.is_some() {
+            explicit_fields.insert(ConfigModalField::BdPath);
+        }
+        if partial.behavior.heartbeat_interval.is_some() {
+            explicit_fields.insert(ConfigModalField::HeartbeatInterval);
+        }
+        if partial.behavior.stale_threshold.is_some() {
+            explicit_fields.insert(ConfigModalField::StaleThreshold);
+        }
 
         // Display merged values (so inherited fields show their effective value)
         let log_level_index = LOG_LEVELS
@@ -94,8 +120,11 @@ impl TabFormState {
 
         Self {
             claude_path: merged.claude.path.clone(),
+            bd_path: merged.behavior.bd_path.clone(),
             log_level_index,
             iterations: merged.behavior.iterations,
+            heartbeat_interval: merged.behavior.heartbeat_interval,
+            stale_threshold: merged.behavior.stale_threshold,
             keep_awake: merged.behavior.keep_awake,
             cursor_pos: merged.claude.path.len(),
             error: None,
@@ -118,6 +147,9 @@ impl TabFormState {
         };
         config.behavior.iterations = self.iterations;
         config.behavior.keep_awake = self.keep_awake;
+        config.behavior.bd_path = self.bd_path.clone();
+        config.behavior.heartbeat_interval = self.heartbeat_interval;
+        config.behavior.stale_threshold = self.stale_threshold;
         config
     }
 
@@ -149,9 +181,27 @@ impl TabFormState {
                 } else {
                     None
                 },
-                bd_path: None,
-                heartbeat_interval: None,
-                stale_threshold: None,
+                bd_path: if self.explicit_fields.contains(&ConfigModalField::BdPath) {
+                    Some(self.bd_path.clone())
+                } else {
+                    None
+                },
+                heartbeat_interval: if self
+                    .explicit_fields
+                    .contains(&ConfigModalField::HeartbeatInterval)
+                {
+                    Some(self.heartbeat_interval)
+                } else {
+                    None
+                },
+                stale_threshold: if self
+                    .explicit_fields
+                    .contains(&ConfigModalField::StaleThreshold)
+                {
+                    Some(self.stale_threshold)
+                } else {
+                    None
+                },
                 workers: None,
             },
         }
@@ -196,6 +246,7 @@ impl ConfigModalState {
         let form = self.active_form();
         match self.focus {
             ConfigModalField::ClaudePath => Some(&form.claude_path),
+            ConfigModalField::BdPath => Some(&form.bd_path),
             _ => None,
         }
     }
@@ -238,12 +289,18 @@ impl ConfigModalState {
     pub fn insert_char(&mut self, c: char) {
         let cursor = self.active_form().cursor_pos;
         let field_changed = match self.focus {
-            ConfigModalField::ClaudePath => {
+            ConfigModalField::ClaudePath | ConfigModalField::BdPath => {
+                let focus = self.focus;
                 let form = self.active_form_mut();
-                if cursor >= form.claude_path.len() {
-                    form.claude_path.push(c);
+                let field = if focus == ConfigModalField::ClaudePath {
+                    &mut form.claude_path
                 } else {
-                    form.claude_path.insert(cursor, c);
+                    &mut form.bd_path
+                };
+                if cursor >= field.len() {
+                    field.push(c);
+                } else {
+                    field.insert(cursor, c);
                 }
                 form.cursor_pos += 1;
                 true
@@ -263,9 +320,15 @@ impl ConfigModalState {
         }
         let cursor = self.active_form().cursor_pos;
         let field_changed = match self.focus {
-            ConfigModalField::ClaudePath => {
+            ConfigModalField::ClaudePath | ConfigModalField::BdPath => {
+                let focus = self.focus;
                 let form = self.active_form_mut();
-                form.claude_path.remove(cursor - 1);
+                let field = if focus == ConfigModalField::ClaudePath {
+                    &mut form.claude_path
+                } else {
+                    &mut form.bd_path
+                };
+                field.remove(cursor - 1);
                 form.cursor_pos -= 1;
                 true
             }
@@ -281,10 +344,16 @@ impl ConfigModalState {
     pub fn delete_char_at(&mut self) {
         let cursor = self.active_form().cursor_pos;
         let field_changed = match self.focus {
-            ConfigModalField::ClaudePath => {
+            ConfigModalField::ClaudePath | ConfigModalField::BdPath => {
+                let focus = self.focus;
                 let form = self.active_form_mut();
-                if cursor < form.claude_path.len() {
-                    form.claude_path.remove(cursor);
+                let field = if focus == ConfigModalField::ClaudePath {
+                    &mut form.claude_path
+                } else {
+                    &mut form.bd_path
+                };
+                if cursor < field.len() {
+                    field.remove(cursor);
                     true
                 } else {
                     false
@@ -370,6 +439,38 @@ impl ConfigModalState {
         self.mark_explicit();
     }
 
+    pub fn heartbeat_increment(&mut self) {
+        let form = self.active_form_mut();
+        if form.heartbeat_interval < HEARTBEAT_MAX {
+            form.heartbeat_interval += 1;
+        }
+        self.mark_explicit();
+    }
+
+    pub fn heartbeat_decrement(&mut self) {
+        let form = self.active_form_mut();
+        if form.heartbeat_interval > HEARTBEAT_MIN {
+            form.heartbeat_interval -= 1;
+        }
+        self.mark_explicit();
+    }
+
+    pub fn stale_increment(&mut self) {
+        let form = self.active_form_mut();
+        if form.stale_threshold < STALE_MAX {
+            form.stale_threshold += 1;
+        }
+        self.mark_explicit();
+    }
+
+    pub fn stale_decrement(&mut self) {
+        let form = self.active_form_mut();
+        if form.stale_threshold > STALE_MIN {
+            form.stale_threshold -= 1;
+        }
+        self.mark_explicit();
+    }
+
     /// Check if there are any validation errors.
     pub fn has_validation_errors(&self) -> bool {
         self.active_form().has_validation_errors()
@@ -385,6 +486,13 @@ impl ConfigModalState {
         let form = self.active_form();
         let error = match field {
             ConfigModalField::ClaudePath => validate_executable_path(&form.claude_path),
+            ConfigModalField::BdPath => {
+                if form.bd_path.trim().is_empty() {
+                    Some("Path cannot be empty".to_string())
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
 
@@ -427,5 +535,174 @@ impl ConfigModalState {
         let form = self.active_form_mut();
         form.keep_awake = !form.keep_awake;
         self.mark_explicit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, PartialConfig};
+
+    fn make_state(partial: &PartialConfig, merged: &Config) -> ConfigModalState {
+        ConfigModalState::from_config(partial, merged, None)
+    }
+
+    fn default_state() -> ConfigModalState {
+        make_state(&PartialConfig::default(), &Config::default())
+    }
+
+    // -- BdPath round-trip tests --
+
+    #[test]
+    fn bd_path_round_trips_through_partial() {
+        let mut partial = PartialConfig::default();
+        partial.behavior.bd_path = Some("/usr/local/bin/bd".to_string());
+        let mut merged = Config::default();
+        merged.behavior.bd_path = "/usr/local/bin/bd".to_string();
+
+        let state = make_state(&partial, &merged);
+        let out = state.to_partial_config();
+        assert_eq!(out.behavior.bd_path, Some("/usr/local/bin/bd".to_string()));
+    }
+
+    #[test]
+    fn bd_path_not_in_partial_when_not_explicit() {
+        let state = default_state();
+        let out = state.to_partial_config();
+        assert_eq!(out.behavior.bd_path, None);
+    }
+
+    #[test]
+    fn bd_path_in_partial_when_explicit() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::BdPath;
+        state.insert_char('x');
+        let out = state.to_partial_config();
+        assert!(out.behavior.bd_path.is_some());
+    }
+
+    #[test]
+    fn bd_path_empty_validation() {
+        let mut state = default_state();
+        // Navigate to BdPath (updates cursor position)
+        state.focus_next(); // ClaudePath -> BdPath
+        assert_eq!(state.focus, ConfigModalField::BdPath);
+
+        let default_len = state.active_form().bd_path.len();
+        for _ in 0..default_len {
+            state.delete_char_before();
+        }
+        state.validate_field(ConfigModalField::BdPath);
+        assert!(
+            state
+                .active_form()
+                .validation_errors
+                .contains_key(&ConfigModalField::BdPath)
+        );
+
+        // Typing something clears the error
+        state.insert_char('b');
+        assert!(
+            !state
+                .active_form()
+                .validation_errors
+                .contains_key(&ConfigModalField::BdPath)
+        );
+    }
+
+    // -- HeartbeatInterval tests --
+
+    #[test]
+    fn heartbeat_interval_round_trips_through_partial() {
+        let mut partial = PartialConfig::default();
+        partial.behavior.heartbeat_interval = Some(60);
+        let mut merged = Config::default();
+        merged.behavior.heartbeat_interval = 60;
+
+        let state = make_state(&partial, &merged);
+        let out = state.to_partial_config();
+        assert_eq!(out.behavior.heartbeat_interval, Some(60));
+    }
+
+    #[test]
+    fn heartbeat_interval_clamps_min() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::HeartbeatInterval;
+        state.active_form_mut().heartbeat_interval = 1;
+        state.heartbeat_decrement();
+        assert_eq!(state.active_form().heartbeat_interval, 1);
+    }
+
+    #[test]
+    fn heartbeat_interval_clamps_max() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::HeartbeatInterval;
+        state.active_form_mut().heartbeat_interval = 9999;
+        state.heartbeat_increment();
+        assert_eq!(state.active_form().heartbeat_interval, 9999);
+    }
+
+    #[test]
+    fn heartbeat_interval_not_in_partial_when_not_explicit() {
+        let state = default_state();
+        let out = state.to_partial_config();
+        assert_eq!(out.behavior.heartbeat_interval, None);
+    }
+
+    #[test]
+    fn heartbeat_interval_in_partial_when_explicit() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::HeartbeatInterval;
+        state.heartbeat_increment();
+        let out = state.to_partial_config();
+        assert!(out.behavior.heartbeat_interval.is_some());
+    }
+
+    // -- StaleThreshold tests --
+
+    #[test]
+    fn stale_threshold_round_trips_through_partial() {
+        let mut partial = PartialConfig::default();
+        partial.behavior.stale_threshold = Some(300);
+        let mut merged = Config::default();
+        merged.behavior.stale_threshold = 300;
+
+        let state = make_state(&partial, &merged);
+        let out = state.to_partial_config();
+        assert_eq!(out.behavior.stale_threshold, Some(300));
+    }
+
+    #[test]
+    fn stale_threshold_clamps_min() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::StaleThreshold;
+        state.active_form_mut().stale_threshold = 1;
+        state.stale_decrement();
+        assert_eq!(state.active_form().stale_threshold, 1);
+    }
+
+    #[test]
+    fn stale_threshold_clamps_max() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::StaleThreshold;
+        state.active_form_mut().stale_threshold = 9999;
+        state.stale_increment();
+        assert_eq!(state.active_form().stale_threshold, 9999);
+    }
+
+    #[test]
+    fn stale_threshold_not_in_partial_when_not_explicit() {
+        let state = default_state();
+        let out = state.to_partial_config();
+        assert_eq!(out.behavior.stale_threshold, None);
+    }
+
+    #[test]
+    fn stale_threshold_in_partial_when_explicit() {
+        let mut state = default_state();
+        state.focus = ConfigModalField::StaleThreshold;
+        state.stale_increment();
+        let out = state.to_partial_config();
+        assert!(out.behavior.stale_threshold.is_some());
     }
 }
