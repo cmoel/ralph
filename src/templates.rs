@@ -1,6 +1,6 @@
 //! File templates for project initialization.
 
-/// Mode-agnostic agent workflow prompt template.
+/// Agent workflow prompt template.
 pub const PROMPT_MD: &str = r#"# Agent Workflow
 
 Complete ONE vertical slice per session. A vertical slice delivers observable value — never build infrastructure without connecting it to user-facing behavior.
@@ -24,13 +24,13 @@ When in doubt, spawn a subagent. A clean context beats a complete one.
 
 ## 1. Discover
 
-Find available work using the mode-specific instructions below. Pick ONE item to work on.
+Find available work using the instructions below. Pick ONE item to work on.
 
 If the work is under-specified (unclear acceptance criteria, vague scope), flag it and exit immediately.
 
 If the work is too big for a single session (multiple unrelated concerns, would touch many files across different domains), flag it and exit immediately.
 
-**Immediately after selecting work:** mark it in progress using the mode-specific instructions.
+**Immediately after selecting work:** mark it in progress using the instructions below.
 
 ## 2. Understand
 
@@ -60,7 +60,7 @@ Build the vertical slice. Prefer TDD — write tests first, then implement. Use 
 
 **Making scripts executable:** Use `git add --chmod=+x <file>` to set the executable bit. Don't run `chmod`, which is sandbox-blocked.
 
-**If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using mode-specific instructions and exit.
+**If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using the instructions below and exit.
 
 ## 5. Validate
 
@@ -87,9 +87,9 @@ After committing ONE vertical slice, exit immediately. Do not start another task
 This workflow follows Shape Up methodology — appetite-driven, vertically-sliced, with clear boundaries. For deeper context, see https://www.ryansinger.co/posts/
 "#;
 
-/// Generate beads-mode prompt content based on claim state.
+/// Generate the beads workflow instructions appended after `PROMPT_MD`.
 /// Command reference is provided by `bd prime` — this only covers Ralph-specific workflow.
-pub fn beads_mode_content(claimed_bead_id: Option<&str>) -> String {
+pub fn beads_workflow(claimed_bead_id: Option<&str>) -> String {
     let work_section = match claimed_bead_id {
         Some(id) => format!(
             r#"## Your Work
@@ -131,8 +131,6 @@ Research the codebase and the bead before committing to build it.
 
     format!(
         r#"
-# Beads Mode
-
 {work_section}
 
 ## Confidence Protocol
@@ -188,21 +186,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompt_md_contains_hill_enforcement() {
-        let content = beads_mode_content(Some("test-123"));
+    fn beads_workflow_contains_hill_enforcement() {
+        let content = beads_workflow(Some("test-123"));
         assert!(
             content.contains("## Hill: Shaped"),
-            "beads mode should reference Hill: Shaped check"
+            "beads workflow should reference Hill: Shaped check"
         );
         assert!(
             content.contains("NOT present"),
-            "beads mode should instruct what to do when hill status is missing"
+            "beads workflow should instruct what to do when hill status is missing"
         );
     }
 
     #[test]
-    fn beads_mode_admin_includes_hill_for_new_beads() {
-        let content = beads_mode_content(Some("test-123"));
+    fn beads_workflow_admin_includes_hill_for_new_beads() {
+        let content = beads_workflow(Some("test-123"));
         assert!(
             content.contains("## Hill: Pending"),
             "admin section should instruct adding Hill: Pending to new beads"
@@ -214,12 +212,11 @@ mod tests {
     }
 
     #[test]
-    fn beads_mode_unclaimed_includes_hill_for_new_beads() {
-        let content = beads_mode_content(None);
+    fn beads_workflow_unclaimed_includes_hill_for_new_beads() {
+        let content = beads_workflow(None);
         assert!(
             content.contains("## Hill: Pending"),
             "unclaimed admin section should instruct adding Hill: Pending to new beads"
         );
     }
-
 }

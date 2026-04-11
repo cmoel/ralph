@@ -1,11 +1,11 @@
-//! Dolt SQL server state machine (beads mode only).
+//! Dolt SQL server state machine.
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use tracing::info;
 
-/// State of the Dolt SQL server (beads mode only).
+/// State of the Dolt SQL server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoltServerState {
     /// Haven't checked yet.

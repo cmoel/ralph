@@ -52,10 +52,10 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
         app.poll_bead_picker();
         app.poll_pending_dep();
 
-        // Poll for current spec (throttled to every 2 seconds)
+        // Poll for current bead (throttled to every 2 seconds)
         app.poll_bead();
 
-        // Poll for Dolt server state (beads mode only)
+        // Poll for Dolt server state
         // Process toggle results first so stale status polls don't override
         app.poll_dolt_toggle();
         app.poll_dolt_status();

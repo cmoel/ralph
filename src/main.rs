@@ -325,13 +325,13 @@ mod tests {
     }
 
     #[test]
-    fn assemble_prompt_default_mode_includes_prompt_and_mode_file() {
+    fn assemble_prompt_includes_prompt_and_workflow_file() {
         let config = crate::config::Config::default();
         let command = execution::assemble_prompt(&config, None, None).unwrap();
 
-        // Should pipe prompt and mode content through Claude CLI
+        // Should pipe prompt and beads workflow content through Claude CLI
         assert!(command.contains("ralph-prompt.md") || command.contains("PROMPT.md"));
-        assert!(command.contains("ralph-mode.md"));
+        assert!(command.contains("ralph-beads.md"));
         assert!(command.contains("--output-format=stream-json"));
         assert!(command.contains("--print"));
     }

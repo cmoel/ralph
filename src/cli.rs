@@ -20,7 +20,7 @@ pub enum Commands {
     Init,
     /// Check environment health and report pass/fail for each check
     Doctor,
-    /// List implementable beads (beads mode only)
+    /// List implementable beads
     Ready {
         /// Annotate each item with include/exclude reason
         #[arg(long)]

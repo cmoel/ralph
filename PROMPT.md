@@ -21,13 +21,13 @@ When in doubt, spawn a subagent. A clean context beats a complete one.
 
 ## 1. Discover
 
-Find available work using the mode-specific instructions below. Pick ONE item to work on.
+Find available work using the instructions below. Pick ONE item to work on.
 
 If the work is under-specified (unclear acceptance criteria, vague scope), flag it and exit immediately.
 
 If the work is too big for a single session (multiple unrelated concerns, would touch many files across different domains), flag it and exit immediately.
 
-**Immediately after selecting work:** mark it in progress using the mode-specific instructions.
+**Immediately after selecting work:** mark it in progress using the instructions below.
 
 ## 2. Understand
 
@@ -57,7 +57,7 @@ Build the vertical slice. Prefer TDD — write tests first, then implement. Use 
 
 **Making scripts executable:** Use `git add --chmod=+x <file>` to set the executable bit. Don't run `chmod`, which is sandbox-blocked.
 
-**If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using mode-specific instructions and exit.
+**If blocked:** Document what failed, why it's blocking, and options to resolve. Then flag it using the instructions below and exit.
 
 ## 5. Validate
 

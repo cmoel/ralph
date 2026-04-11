@@ -50,7 +50,7 @@ pub fn check_claude(config: &Config) -> CheckResult {
     }
 }
 
-/// Check that the bd CLI binary works (beads mode only).
+/// Check that the bd CLI binary works.
 pub fn check_bd(config: &Config) -> CheckResult {
     let path = &config.behavior.bd_path;
     match Command::new(path).arg("--version").output() {
@@ -77,7 +77,7 @@ pub fn check_prompt(_config: &Config) -> CheckResult {
     }
 }
 
-/// Check that the Dolt server is running (beads mode only).
+/// Check that the Dolt server is running.
 pub fn check_dolt_status(config: &Config) -> CheckResult {
     let path = &config.behavior.bd_path;
     match Command::new(path).args(["dolt", "status"]).output() {

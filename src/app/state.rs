@@ -60,11 +60,11 @@ pub struct Worker {
     pub child_process: Option<Child>,
     /// Channel receiving stdout/stderr from child process.
     pub output_receiver: Option<Receiver<OutputMessage>>,
-    /// Git worktree name for this worker (beads mode only).
+    /// Git worktree name for this worker.
     pub worktree_name: Option<String>,
-    /// Git worktree path for this worker (beads mode only).
+    /// Git worktree path for this worker.
     pub worktree_path: Option<PathBuf>,
-    /// Agent bead ID for this worker (beads mode only).
+    /// Agent bead ID for this worker.
     pub agent_bead_id: Option<String>,
     /// Currently hooked bead ID (the bead this worker is working on).
     pub hooked_bead_id: Option<String>,

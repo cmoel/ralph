@@ -408,7 +408,7 @@ impl App {
         }
     }
 
-    /// Toggle Dolt server on/off (beads mode only).
+    /// Toggle Dolt server on/off.
     pub fn toggle_dolt_server(&mut self) {
         self.dolt.toggle(&self.config.behavior.bd_path);
     }
@@ -463,7 +463,7 @@ impl App {
         }
     }
 
-    /// Clean up agent resources on quit (beads mode only).
+    /// Clean up agent resources on quit.
     /// Full teardown: release bead, stop heartbeat, remove worktree, close agent.
     pub fn cleanup_agent(&mut self) {
         for w in 0..self.workers.len() {

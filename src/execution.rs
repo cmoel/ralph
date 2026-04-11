@@ -15,8 +15,8 @@ use crate::wake_lock;
 /// Assemble the prompt content and build the shell command string for Claude CLI.
 ///
 /// Resolves PROMPT.md from the per-project config dir, falling back to the compiled-in
-/// default. Appends mode-specific content and optional dirty context, writes temp files,
-/// and returns the full shell command to pipe into Claude.
+/// default. Appends the beads workflow content and optional dirty context, writes temp
+/// files, and returns the full shell command to pipe into Claude.
 pub fn assemble_prompt(
     config: &crate::config::Config,
     claimed_bead_id: Option<&str>,
@@ -35,13 +35,13 @@ pub fn assemble_prompt(
         path
     };
 
-    let mode_path = {
-        let mut content = templates::beads_mode_content(claimed_bead_id);
+    let workflow_path = {
+        let mut content = templates::beads_workflow(claimed_bead_id);
         if let Some(dirty) = dirty_context {
             content.push('\n');
             content.push_str(&dirty);
         }
-        let path = std::env::temp_dir().join("ralph-mode.md");
+        let path = std::env::temp_dir().join("ralph-beads.md");
         std::fs::write(&path, &content)?;
         path
     };
@@ -49,7 +49,7 @@ pub fn assemble_prompt(
     let command = format!(
         "cat {} {} | {} {}",
         prompt_path.display(),
-        mode_path.display(),
+        workflow_path.display(),
         claude_path.display(),
         CLAUDE_ARGS
     );
@@ -201,7 +201,7 @@ pub fn start_command(app: &mut App) -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // In beads mode, run claude in the worktree directory
+    // Run claude in the worktree directory
     if let Some(ref wt_path) = app.workers[w].worktree_path {
         cmd.current_dir(wt_path);
     }
