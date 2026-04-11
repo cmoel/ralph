@@ -270,6 +270,12 @@ pub struct KanbanBoardState {
     pub focus: BoardFocus,
     /// Preview pane detail state (loaded on cursor movement).
     pub preview_detail: Option<BeadDetailState>,
+    /// Snapshot of the preview detail saved when the cursor moves to a new
+    /// bead, before the fresh fetch lands. If the fetch fails with a transient
+    /// embedded-Dolt lock contention, the snapshot is swapped back in so the
+    /// user keeps seeing the previous bead's content instead of a blank
+    /// loading placeholder.
+    pub previous_preview_detail: Option<BeadDetailState>,
     /// Bead ID currently shown in the preview pane.
     pub preview_bead_id: Option<String>,
     /// When the cursor last moved — used to debounce preview fetches.
@@ -471,6 +477,7 @@ impl KanbanBoardState {
             error: None,
             focus: BoardFocus::Board,
             preview_detail: None,
+            previous_preview_detail: None,
             preview_bead_id: None,
             preview_cursor_moved: None,
             preview_pending_id: None,

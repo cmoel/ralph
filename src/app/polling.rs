@@ -236,14 +236,20 @@ impl App {
                 // Absorb transient external-lock contention: an external bd
                 // process (e.g. `bd list` from another shell) held the
                 // embedded-Dolt file lock while we tried to fetch the bead
-                // detail. Keep the existing preview visible and let the next
-                // cursor movement or refresh retry — much better UX than
-                // flashing bd's JSON error blob into the preview pane.
+                // detail. Restore the snapshot captured in
+                // `poll_preview_fetch` so the user keeps seeing the previous
+                // bead's content instead of a blank loading placeholder.
                 if let Err(ref e) = result
                     && crate::bd_lock::is_transient_lock_error(e.as_bytes())
                 {
+                    if let Some(prev) = self.kanban_board_state.previous_preview_detail.take() {
+                        self.kanban_board_state.preview_detail = Some(prev);
+                        self.dirty = true;
+                    }
                     return;
                 }
+                // Non-transient outcome — snapshot has served its purpose.
+                self.kanban_board_state.previous_preview_detail = None;
                 self.dirty = true;
                 if let Some(ref mut detail) = self.kanban_board_state.preview_detail {
                     detail.populate(result);
@@ -272,15 +278,30 @@ impl App {
         {
             state.preview_cursor_moved = None;
             state.preview_bead_id = Some(pending_id.clone());
-            match state.preview_detail.as_mut() {
-                Some(detail) if detail.id == pending_id => {
+            let is_same_bead = state
+                .preview_detail
+                .as_ref()
+                .is_some_and(|d| d.id == pending_id);
+            if is_same_bead {
+                // Same-bead refresh — mark loading but keep the existing
+                // content in place.
+                if let Some(ref mut detail) = state.preview_detail {
                     detail.is_loading = true;
                 }
-                _ => {
-                    state.preview_detail = Some(crate::modals::BeadDetailState::new_loading(
-                        pending_id.clone(),
-                    ));
+            } else {
+                // Cross-bead navigation — stash the currently-displayed
+                // detail (if it's populated, not another placeholder) so
+                // we can restore it if the fresh fetch hits transient
+                // lock contention.
+                if let Some(prev) = state.preview_detail.take()
+                    && !prev.is_loading
+                    && prev.error.is_none()
+                {
+                    state.previous_preview_detail = Some(prev);
                 }
+                state.preview_detail = Some(crate::modals::BeadDetailState::new_loading(
+                    pending_id.clone(),
+                ));
             }
 
             let bd_path = self.config.behavior.bd_path.clone();
