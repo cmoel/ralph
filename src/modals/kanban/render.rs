@@ -58,13 +58,7 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App, board_area: Rect) {
 
     let mut content: Vec<Line> = Vec::new();
 
-    if state.is_loading {
-        content.push(Line::from(""));
-        content.push(Line::from(Span::styled(
-            "  Loading...",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else if let Some(error) = &state.error {
+    if let Some(error) = &state.error {
         content.push(Line::from(""));
         content.push(Line::from(Span::styled(
             format!("  Error: {error}"),
@@ -109,14 +103,20 @@ pub fn draw_kanban_board(f: &mut Frame, app: &App, board_area: Rect) {
         let mut header_spans: Vec<Span> = Vec::new();
         for (i, col_def) in state.column_defs.iter().enumerate() {
             let is_selected = i == state.selected_column;
+            let is_refreshing = state.refreshing_columns.get(i).copied().unwrap_or(false);
             let w = col_widths[i];
-            let label = format!("{} ({})", col_def.name, card_counts[i]);
+            let suffix = if is_refreshing { " \u{27f3}" } else { "" };
+            let label = format!("{} ({}){}", col_def.name, card_counts[i], suffix);
             let padded = format!("{:^width$}", label, width = w);
 
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Black)
                     .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_refreshing {
+                Style::default()
+                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()

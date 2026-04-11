@@ -20,8 +20,8 @@ pub use config::{ConfigModalState, draw_config_modal, handle_config_modal_input}
 pub use help::{HelpContext, draw_help_modal};
 pub use init::{InitModalState, draw_init_modal, handle_init_modal_input};
 pub use kanban::{
-    BeadDetailState, BoardAction, BoardConfig, DepDirection, KanbanBoardData, KanbanBoardState,
-    draw_kanban_board, fetch_board_data, handle_kanban_input, load_board_config,
+    BeadDetailState, BoardAction, BoardConfig, DepDirection, KanbanBoardState, KanbanFetchMsg,
+    draw_kanban_board, handle_kanban_input, load_board_config, stream_board_data,
     watch_beads_directory,
 };
 pub use quit::draw_quit_modal;

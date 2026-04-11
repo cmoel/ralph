@@ -155,12 +155,14 @@ pub fn run_ready(verbose: bool) -> Result<()> {
     let loaded_config = config::load_config();
     let cfg = &loaded_config.config;
 
-    let output = Command::new(&cfg.behavior.bd_path)
-        .args(["ready", "--json"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(&cfg.behavior.bd_path)
+            .args(["ready", "--json"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+    });
 
     let output = match output {
         Ok(o) => o,

@@ -179,26 +179,48 @@ impl App {
         }
     }
 
-    /// Poll for background kanban board data.
+    /// Poll for background kanban board data — drains all pending streamed
+    /// messages in one tick, applying column updates and the finalize message
+    /// as they arrive.
     pub fn poll_kanban_items(&mut self) {
+        use crate::modals::KanbanFetchMsg;
+
         let rx = match self.kanban_items_rx.take() {
             Some(rx) => rx,
             None => return,
         };
 
-        match rx.try_recv() {
-            Ok(result) => {
-                self.dirty = true;
-                self.kanban_board_state.populate(result);
+        let mut received_any = false;
+        let mut disconnected = false;
+
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    received_any = true;
+                    match msg {
+                        KanbanFetchMsg::Column { col_idx, update } => {
+                            self.kanban_board_state.populate_column(col_idx, update);
+                        }
+                        KanbanFetchMsg::Finalized(finalized) => {
+                            self.kanban_board_state.populate_finalized(finalized);
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
             }
-            Err(TryRecvError::Empty) => {
-                self.kanban_items_rx = Some(rx); // still running
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.dirty = true;
-                self.kanban_board_state
-                    .populate(Err("Background fetch failed".to_string()));
-            }
+        }
+
+        if received_any {
+            self.dirty = true;
+        }
+
+        // Keep the receiver alive while the fetcher might still send more.
+        if !disconnected {
+            self.kanban_items_rx = Some(rx);
         }
     }
 
@@ -254,12 +276,14 @@ impl App {
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 crate::perf::record_subprocess_spawn();
-                let output = std::process::Command::new(&bd_path)
-                    .args(["show", &pending_id, "--json"])
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .output();
+                let output = crate::bd_lock::with_lock(|| {
+                    std::process::Command::new(&bd_path)
+                        .args(["show", &pending_id, "--json"])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .output()
+                });
                 let result = match output {
                     Ok(out) if out.status.success() => {
                         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -310,10 +334,11 @@ impl App {
         if should_fetch && self.kanban_items_rx.is_none() {
             let bd_path = self.config.behavior.bd_path.clone();
             let column_defs = self.kanban_board_state.column_defs.clone();
+            self.kanban_board_state.begin_refresh();
+            self.dirty = true;
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
-                let result = crate::modals::fetch_board_data(&bd_path, &column_defs);
-                let _ = tx.send(result);
+                crate::modals::stream_board_data(&bd_path, &column_defs, tx);
             });
             self.kanban_items_rx = Some(rx);
         }
@@ -329,12 +354,14 @@ impl App {
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
                 crate::perf::record_subprocess_spawn();
-                let output = std::process::Command::new(&bd_path)
-                    .args(["show", &bead_id, "--json"])
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .output();
+                let output = crate::bd_lock::with_lock(|| {
+                    std::process::Command::new(&bd_path)
+                        .args(["show", &bead_id, "--json"])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .output()
+                });
                 let result = match output {
                     Ok(out) if out.status.success() => {
                         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -418,13 +445,14 @@ impl App {
                 depends_on: depends_on.clone(),
             });
         std::thread::spawn(move || {
-            std::process::Command::new(&bd_path)
-                .args(["dep", "add", &issue, &depends_on])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .ok();
+            let _ = crate::bd_lock::with_lock(|| {
+                std::process::Command::new(&bd_path)
+                    .args(["dep", "add", &issue, &depends_on])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+            });
         });
     }
 

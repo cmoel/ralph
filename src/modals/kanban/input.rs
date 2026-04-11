@@ -28,16 +28,18 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                     previous_status,
                 });
                 std::thread::spawn(move || {
-                    let mut cmd = std::process::Command::new(&bd_path);
-                    cmd.arg("close").arg(&bead_id);
-                    if !reason.is_empty() {
-                        cmd.arg("--reason").arg(&reason);
-                    }
-                    cmd.stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .ok();
+                    crate::bd_lock::with_lock(|| {
+                        let mut cmd = std::process::Command::new(&bd_path);
+                        cmd.arg("close").arg(&bead_id);
+                        if !reason.is_empty() {
+                            cmd.arg("--reason").arg(&reason);
+                        }
+                        cmd.stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .ok()
+                    });
                 });
             }
             KeyCode::Backspace => {
@@ -104,17 +106,19 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
                     previous_status,
                 });
                 std::thread::spawn(move || {
-                    let mut cmd = std::process::Command::new(&bd_path);
-                    if until.is_empty() {
-                        cmd.args(["update", &bead_id, "--status=deferred"]);
-                    } else {
-                        cmd.args(["defer", &bead_id, "--until"]).arg(&until);
-                    }
-                    cmd.stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .ok();
+                    crate::bd_lock::with_lock(|| {
+                        let mut cmd = std::process::Command::new(&bd_path);
+                        if until.is_empty() {
+                            cmd.args(["update", &bead_id, "--status=deferred"]);
+                        } else {
+                            cmd.args(["defer", &bead_id, "--until"]).arg(&until);
+                        }
+                        cmd.stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .ok()
+                    });
                 });
             }
             KeyCode::Backspace => {

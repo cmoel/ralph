@@ -127,13 +127,15 @@ If the changes are unclear or problematic, escalate via `bd human <bead>` with a
 
 /// Select and claim the best epic, then claim its first child bead.
 pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicClaim> {
-    let output = Command::new(bd_path)
-        .args(["ready", "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["ready", "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -198,12 +200,14 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
     let best_epic_id = select_best_epic(&scored)?.to_string();
 
     // Claim the epic
-    let claim_result = Command::new(bd_path)
-        .args(["update", &best_epic_id, "--claim"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let claim_result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["update", &best_epic_id, "--claim"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     match claim_result {
         Ok(o) if o.status.success() => {
@@ -222,12 +226,14 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
 
     // Record epic on agent state
     let epic_arg = format!("epic={}", best_epic_id);
-    let _ = Command::new(bd_path)
-        .args(["set-state", agent_bead_id, &epic_arg])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let _ = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["set-state", agent_bead_id, &epic_arg])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     // Claim first child within the epic
     match claim_next_child(bd_path, agent_bead_id, &best_epic_id) {
@@ -239,12 +245,14 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
         None => {
             warn!(epic_id = %best_epic_id, "epic_claimed_but_no_children_ready");
             // Release the epic so another agent can pick it up
-            let _ = Command::new(bd_path)
-                .args(["update", &best_epic_id, "--status=open", "--assignee="])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output();
+            let _ = crate::bd_lock::with_lock(|| {
+                Command::new(bd_path)
+                    .args(["update", &best_epic_id, "--status=open", "--assignee="])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+            });
             None
         }
     }
@@ -278,13 +286,15 @@ fn wrap_standalone_bead(
     bead_priority: i64,
 ) -> Option<String> {
     let create_args = wrap_create_args(bead_title, bead_priority);
-    let output = Command::new(bd_path)
-        .args(&create_args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(&create_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -297,12 +307,14 @@ fn wrap_standalone_bead(
 
     // Reparent the standalone bead under the new epic
     let reparent_args = wrap_reparent_args(bead_id, &epic_id);
-    let result = Command::new(bd_path)
-        .args(&reparent_args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(&reparent_args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     match result {
         Ok(o) if o.status.success() => {
@@ -327,13 +339,15 @@ pub fn claim_next_child(
     agent_bead_id: &str,
     epic_id: &str,
 ) -> Option<(String, String)> {
-    let output = Command::new(bd_path)
-        .args(["ready", "--parent", epic_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["ready", "--parent", epic_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -353,23 +367,27 @@ pub fn claim_next_child(
         let title = bead.get("title").and_then(|t| t.as_str()).unwrap_or("");
 
         // Atomic claim
-        let claim = Command::new(bd_path)
-            .args(["update", id, "--claim"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output();
+        let claim = crate::bd_lock::with_lock(|| {
+            Command::new(bd_path)
+                .args(["update", id, "--claim"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .output()
+        });
 
         match claim {
             Ok(o) if o.status.success() => {
                 // Record hook on agent bead
                 let hook_arg = format!("hook={}", id);
-                let _ = Command::new(bd_path)
-                    .args(["set-state", agent_bead_id, &hook_arg])
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .output();
+                let _ = crate::bd_lock::with_lock(|| {
+                    Command::new(bd_path)
+                        .args(["set-state", agent_bead_id, &hook_arg])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output()
+                });
 
                 // Assess specification
                 if !super::lifecycle::assess_bead_specification(bd_path, id, agent_bead_id) {
@@ -396,12 +414,14 @@ pub fn claim_next_child(
 
 /// Complete an epic: close it if eligible.
 pub fn complete_epic(bd_path: &str, epic_id: &str) -> bool {
-    let result = Command::new(bd_path)
-        .args(["epic", "close-eligible"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["epic", "close-eligible"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     match result {
         Ok(o) if o.status.success() => {
@@ -422,12 +442,14 @@ pub fn complete_epic(bd_path: &str, epic_id: &str) -> bool {
 
 /// Get a bead's priority via bd show. Returns 2 (medium) if not found.
 fn get_bead_priority(bd_path: &str, bead_id: &str) -> i64 {
-    let output = Command::new(bd_path)
-        .args(["show", bead_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["show", bead_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     match output {
         Ok(o) if o.status.success() => {
@@ -474,13 +496,15 @@ pub fn check_worktree_dirty(worktree_path: &std::path::Path) -> Option<(String, 
 
 /// Get the epic ID from an agent bead's state labels.
 pub fn get_epic_from_state(bd_path: &str, agent_id: &str) -> Option<String> {
-    let output = Command::new(bd_path)
-        .args(["show", agent_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["show", agent_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         return None;

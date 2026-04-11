@@ -76,14 +76,30 @@ pub struct KanbanCard {
     pub status: String,
 }
 
-/// Data fetched from pipeline sources for board population.
-pub struct KanbanBoardData {
-    pub columns: Vec<Vec<KanbanCard>>,
+/// A single column's worth of freshly-fetched cards, streamed from the background fetcher.
+pub struct KanbanColumnUpdate {
+    pub cards: Vec<KanbanCard>,
+}
+
+/// Global board metadata delivered after every column has been fetched.
+pub struct KanbanFinalized {
     pub open_count: u64,
     pub closed_count: u64,
     pub dep_neighbors: HashMap<String, HashSet<String>>,
-    /// Bead IDs with status=blocked but no actual blocking dependencies.
     pub manual_blocked_ids: HashSet<String>,
+    /// IDs of beads that are parents of other beads (rendered with bold/epic style).
+    pub epic_ids: HashSet<String>,
+}
+
+/// A streaming message from the background board fetcher.
+pub enum KanbanFetchMsg {
+    /// One column's cards have finished loading.
+    Column {
+        col_idx: usize,
+        update: KanbanColumnUpdate,
+    },
+    /// All columns + stats are in; here are the globally-derived fields.
+    Finalized(KanbanFinalized),
 }
 
 /// Strip the project prefix from a bead ID, returning just the short suffix.
@@ -245,8 +261,9 @@ pub struct KanbanBoardState {
     pub selected_column: usize,
     /// Currently selected card index within each column (skipping error cards).
     pub selected_row: Vec<usize>,
-    /// Whether data is still loading.
-    pub is_loading: bool,
+    /// Per-column flag: true while a refresh for that column is in flight. Drives the
+    /// ⟳ marker in the column header.
+    pub refreshing_columns: Vec<bool>,
     /// Error message if loading failed.
     pub error: Option<String>,
     /// Which pane has keyboard focus (board columns or preview pane).
@@ -436,13 +453,15 @@ pub(super) fn spawn_bd(bd_path: &str, args: &[&str]) {
     let bd = bd_path.to_string();
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     std::thread::spawn(move || {
-        std::process::Command::new(&bd)
-            .args(&args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .ok();
+        crate::bd_lock::with_lock(|| {
+            std::process::Command::new(&bd)
+                .args(&args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .ok()
+        });
     });
 }
 
@@ -457,7 +476,7 @@ impl KanbanBoardState {
             columns: vec![Vec::new(); col_count],
             selected_column: default_col,
             selected_row: vec![0; col_count],
-            is_loading: true,
+            refreshing_columns: vec![true; col_count],
             error: None,
             focus: BoardFocus::Board,
             preview_detail: None,
@@ -490,37 +509,66 @@ impl KanbanBoardState {
         if card.is_error { None } else { Some(card) }
     }
 
-    pub fn populate(&mut self, result: Result<KanbanBoardData, String>) {
-        self.is_loading = false;
-        match result {
-            Ok(data) => {
-                self.open_count = data.open_count;
-                self.closed_count = data.closed_count;
-                self.dep_neighbors = data.dep_neighbors;
-                self.manual_blocked_ids = data.manual_blocked_ids;
-                self.columns = data.columns;
-
-                // Preserve cursor positions across refreshes, clamping to new bounds
-                let col_count = self.col_count();
-                if self.selected_row.len() != col_count {
-                    self.selected_row = vec![0; col_count];
-                }
-                for col_idx in 0..col_count {
-                    let len = self.columns[col_idx].len();
-                    if len == 0 {
-                        self.selected_row[col_idx] = 0;
-                    } else if self.selected_row[col_idx] >= len {
-                        self.selected_row[col_idx] = len - 1;
-                    }
-                    self.advance_to_card(col_idx);
-                }
-
-                // Schedule preview fetch for initially selected card
-                self.schedule_preview_fetch();
+    /// Mark every column as refreshing. Call this right before kicking off a new
+    /// background fetch so the UI shows loading indicators immediately.
+    pub fn begin_refresh(&mut self) {
+        let col_count = self.col_count();
+        if self.refreshing_columns.len() != col_count {
+            self.refreshing_columns = vec![true; col_count];
+        } else {
+            for flag in self.refreshing_columns.iter_mut() {
+                *flag = true;
             }
-            Err(e) => {
-                self.error = Some(e);
+        }
+        // A fresh refresh attempt clears any prior top-level error
+        self.error = None;
+    }
+
+    /// Apply a single column's streamed update, clearing that column's refreshing flag.
+    pub fn populate_column(&mut self, col_idx: usize, update: KanbanColumnUpdate) {
+        if col_idx >= self.columns.len() {
+            return;
+        }
+        self.columns[col_idx] = update.cards;
+
+        // Clamp cursor for this column
+        let len = self.columns[col_idx].len();
+        if col_idx < self.selected_row.len() {
+            if len == 0 {
+                self.selected_row[col_idx] = 0;
+            } else if self.selected_row[col_idx] >= len {
+                self.selected_row[col_idx] = len - 1;
             }
+            self.advance_to_card(col_idx);
+        }
+
+        if col_idx < self.refreshing_columns.len() {
+            self.refreshing_columns[col_idx] = false;
+        }
+
+        // If the selected card lives in this column, refresh the preview pane
+        if col_idx == self.selected_column {
+            self.schedule_preview_fetch();
+        }
+    }
+
+    /// Apply globally-derived board metadata after all columns have loaded.
+    pub fn populate_finalized(&mut self, finalized: KanbanFinalized) {
+        self.open_count = finalized.open_count;
+        self.closed_count = finalized.closed_count;
+        self.dep_neighbors = finalized.dep_neighbors;
+        self.manual_blocked_ids = finalized.manual_blocked_ids;
+
+        // Patch epic flags based on accumulated parent references
+        for column in self.columns.iter_mut() {
+            for card in column.iter_mut() {
+                card.is_epic = finalized.epic_ids.contains(&card.id);
+            }
+        }
+
+        // Clear any remaining refresh flags — finalized implies all columns done
+        for flag in self.refreshing_columns.iter_mut() {
+            *flag = false;
         }
     }
 

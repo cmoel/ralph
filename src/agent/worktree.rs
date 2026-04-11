@@ -30,13 +30,15 @@ fn get_changed_files(worktree_name: &str) -> Vec<String> {
 /// Search for an existing open merge-conflict bead for this branch.
 /// Returns the bead ID if found.
 pub fn find_merge_conflict_bead(bd_path: &str, worktree_name: &str) -> Option<String> {
-    let output = Command::new(bd_path)
-        .args(["list", "--json", "--status=open", "--limit=0"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["list", "--json", "--status=open", "--limit=0"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         return None;
@@ -75,20 +77,22 @@ pub fn file_merge_conflict_bead(bd_path: &str, worktree_name: &str) -> Option<St
         worktree_name, files_display
     );
 
-    let output = Command::new(bd_path)
-        .args([
-            "create",
-            &format!("--title={}", title),
-            &format!("--description={}", description),
-            "--type=task",
-            "--priority=0",
-            "--json",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args([
+                "create",
+                &format!("--title={}", title),
+                &format!("--description={}", description),
+                "--type=task",
+                "--priority=0",
+                "--json",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -111,16 +115,18 @@ pub fn escalate_merge_conflict(
     existing_bead_id: &str,
 ) -> Option<String> {
     // Close the existing merge-conflict bead
-    let _ = Command::new(bd_path)
-        .args([
-            "close",
-            existing_bead_id,
-            "--reason=Claude could not resolve",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let _ = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args([
+                "close",
+                existing_bead_id,
+                "--reason=Claude could not resolve",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     let files = get_changed_files(worktree_name);
     let files_display = if files.is_empty() {
@@ -139,21 +145,23 @@ pub fn escalate_merge_conflict(
         worktree_name, files_display, existing_bead_id
     );
 
-    let output = Command::new(bd_path)
-        .args([
-            "create",
-            &format!("--title={}", title),
-            &format!("--description={}", description),
-            "--type=bug",
-            "--priority=0",
-            "--labels=human",
-            "--json",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args([
+                "create",
+                &format!("--title={}", title),
+                &format!("--description={}", description),
+                "--type=bug",
+                "--priority=0",
+                "--labels=human",
+                "--json",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -216,13 +224,15 @@ pub fn remove_merged_worktree(bd_path: &str, worktree_name: &str) {
     let repo_root = repo_root();
 
     // Remove the worktree directory (--force handles untracked files like target/)
-    match Command::new(bd_path)
-        .args(["worktree", "remove", "--force", worktree_name])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output()
-    {
+    let remove_result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["worktree", "remove", "--force", worktree_name])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
+    match remove_result {
         Ok(o) if !o.status.success() => {
             let stderr = String::from_utf8_lossy(&o.stderr);
             warn!(stderr = %stderr.trim(), "worktree_remove_failed");
@@ -283,12 +293,14 @@ pub fn create_or_reuse_worktree(bd_path: &str, worktree_name: &str) -> Option<(S
     }
 
     // Create new worktree
-    let wt_output = Command::new(bd_path)
-        .args(["worktree", "create", worktree_name])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let wt_output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["worktree", "create", worktree_name])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     let wt_output = match wt_output {
         Ok(o) => o,

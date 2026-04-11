@@ -46,24 +46,26 @@ pub fn find_stale_agents(
     };
 
     // Find in_progress agent beads updated before cutoff
-    let output = Command::new(bd_path)
-        .args([
-            "list",
-            "--json",
-            "--label",
-            "rig:ralph",
-            "--status",
-            "in_progress",
-            "--include-infra",
-            "--updated-before",
-            &cutoff,
-            "--limit",
-            "0",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args([
+                "list",
+                "--json",
+                "--label",
+                "rig:ralph",
+                "--status",
+                "in_progress",
+                "--include-infra",
+                "--updated-before",
+                &cutoff,
+                "--limit",
+                "0",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     let output = match output {
         Ok(o) if o.status.success() => o,
@@ -104,12 +106,14 @@ pub fn find_stale_agents(
                 // No hook — agent finished work but session ended without cleanup.
                 // Close the agent bead and remove its worktree.
                 super::lifecycle::cleanup_agent_bead(bd_path, agent_id);
-                let _ = Command::new(bd_path)
-                    .args(["worktree", "remove", "--force", agent_id])
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .output();
+                let _ = crate::bd_lock::with_lock(|| {
+                    Command::new(bd_path)
+                        .args(["worktree", "remove", "--force", agent_id])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output()
+                });
                 info!(agent_id = %agent_id, "hookless_stale_agent_cleaned_up");
                 continue;
             }
@@ -153,12 +157,14 @@ pub fn resume_stale_bead(bd_path: &str, new_agent_id: &str, stale: &StaleAgent) 
 
     // Set hook on our agent for the stale bead
     let hook_arg = format!("hook={}", stale.hooked_bead_id);
-    let result = Command::new(bd_path)
-        .args(["set-state", new_agent_id, &hook_arg])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["set-state", new_agent_id, &hook_arg])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     let hooked = match result {
         Ok(o) if o.status.success() => true,
@@ -179,27 +185,31 @@ pub fn resume_stale_bead(bd_path: &str, new_agent_id: &str, stale: &StaleAgent) 
     // Only remove worktree for non-epic agents. Epic worktrees are reused
     // by the next worker who picks up the same epic.
     if !stale.has_epic {
-        let _ = Command::new(bd_path)
-            .args(["worktree", "remove", &stale.worktree_name])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        let _ = crate::bd_lock::with_lock(|| {
+            Command::new(bd_path)
+                .args(["worktree", "remove", &stale.worktree_name])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+        });
     }
 
     if hooked {
         // Mark retry:1 so next stale detection escalates to human
-        let _ = Command::new(bd_path)
-            .args([
-                "set-state",
-                &stale.hooked_bead_id,
-                "retry=1",
-                "--reason=auto-reclaimed from stale agent",
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        let _ = crate::bd_lock::with_lock(|| {
+            Command::new(bd_path)
+                .args([
+                    "set-state",
+                    &stale.hooked_bead_id,
+                    "retry=1",
+                    "--reason=auto-reclaimed from stale agent",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+        });
 
         info!(
             new_agent = %new_agent_id,
@@ -223,12 +233,14 @@ pub fn release_stale_bead(bd_path: &str, stale: &StaleAgent) {
 
     // Only remove worktree for non-epic agents
     if !stale.has_epic {
-        let _ = Command::new(bd_path)
-            .args(["worktree", "remove", &stale.worktree_name])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        let _ = crate::bd_lock::with_lock(|| {
+            Command::new(bd_path)
+                .args(["worktree", "remove", &stale.worktree_name])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+        });
     }
 
     info!(
@@ -240,12 +252,14 @@ pub fn release_stale_bead(bd_path: &str, stale: &StaleAgent) {
 
 /// Check if a bead has a specific label (e.g. "retry:1", "human").
 fn has_label(bd_path: &str, bead_id: &str, target: &str) -> bool {
-    let output = Command::new(bd_path)
-        .args(["show", bead_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["show", bead_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     let Ok(o) = output else { return false };
     if !o.status.success() {
@@ -279,21 +293,25 @@ fn escalate_to_human(bd_path: &str, stale: &StaleAgent) {
 
     // Only remove worktree for non-epic agents
     if !stale.has_epic {
-        let _ = Command::new(bd_path)
-            .args(["worktree", "remove", &stale.worktree_name])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        let _ = crate::bd_lock::with_lock(|| {
+            Command::new(bd_path)
+                .args(["worktree", "remove", &stale.worktree_name])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+        });
     }
 
     // Flag for human review
-    let _ = Command::new(bd_path)
-        .args(["label", "add", &stale.hooked_bead_id, "human"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let _ = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["label", "add", &stale.hooked_bead_id, "human"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     // Add comment explaining why
     let comment = format!(
@@ -301,12 +319,14 @@ fn escalate_to_human(bd_path: &str, stale: &StaleAgent) {
          Last stale agent: {}",
         stale.agent_bead_id,
     );
-    let _ = Command::new(bd_path)
-        .args(["comments", "add", &stale.hooked_bead_id, &comment])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let _ = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["comments", "add", &stale.hooked_bead_id, &comment])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     info!(
         stale_agent = %stale.agent_bead_id,
@@ -318,13 +338,15 @@ fn escalate_to_human(bd_path: &str, stale: &StaleAgent) {
 /// Get the hook value from an agent bead's labels.
 /// Returns None if no hook is set or hook is "none".
 fn get_hook_from_labels(bd_path: &str, agent_id: &str) -> Option<String> {
-    let output = Command::new(bd_path)
-        .args(["show", agent_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["show", agent_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    })
+    .ok()?;
 
     if !output.status.success() {
         return None;
@@ -348,12 +370,14 @@ fn get_hook_from_labels(bd_path: &str, agent_id: &str) -> Option<String> {
 
 /// Get a bead's title via bd show.
 fn get_bead_title(bd_path: &str, bead_id: &str) -> String {
-    let output = Command::new(bd_path)
-        .args(["show", bead_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["show", bead_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     match output {
         Ok(o) if o.status.success() => {

@@ -16,20 +16,22 @@ pub struct AgentSetup {
 /// Returns None if any step fails (logs warnings).
 pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
     // Create ephemeral agent bead with rig:ralph label
-    let output = Command::new(bd_path)
-        .args([
-            "create",
-            "--type=task",
-            "--labels=rig:ralph",
-            "--ephemeral",
-            "--json",
-            "--description=Ephemeral ralph agent bead",
-            &format!("--title=ralph agent {}", session_id),
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args([
+                "create",
+                "--type=task",
+                "--labels=rig:ralph",
+                "--ephemeral",
+                "--json",
+                "--description=Ephemeral ralph agent bead",
+                &format!("--title=ralph agent {}", session_id),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     let output = match output {
         Ok(o) => o,
@@ -50,12 +52,14 @@ pub fn register(bd_path: &str, session_id: &str) -> Option<AgentSetup> {
     info!(agent_bead_id = %agent_bead_id, "agent_bead_created");
 
     // Set agent to in_progress
-    let _ = Command::new(bd_path)
-        .args(["update", &agent_bead_id, "--status=in_progress"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let _ = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["update", &agent_bead_id, "--status=in_progress"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     info!(agent_bead_id = %agent_bead_id, "agent_registered");
 
@@ -81,16 +85,18 @@ pub fn start_heartbeat(
             }
             let now = chrono_now_iso();
             crate::perf::record_subprocess_spawn();
-            let result = Command::new(&bd_path)
-                .args([
-                    "update",
-                    &agent_bead_id,
-                    &format!("--set-metadata=last_heartbeat={}", now),
-                ])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .output();
+            let result = crate::bd_lock::with_lock(|| {
+                Command::new(&bd_path)
+                    .args([
+                        "update",
+                        &agent_bead_id,
+                        &format!("--set-metadata=last_heartbeat={}", now),
+                    ])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+            });
 
             match result {
                 Ok(o) if o.status.success() => {
@@ -154,12 +160,14 @@ pub fn check_bead_specification(bead: &serde_json::Value) -> Option<String> {
 /// If under-specified, flags for human review, resets to open, releases the hook, and returns false.
 /// Returns true if the bead is ready for implementation.
 pub(crate) fn assess_bead_specification(bd_path: &str, bead_id: &str, agent_bead_id: &str) -> bool {
-    let output = Command::new(bd_path)
-        .args(["show", bead_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["show", bead_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     let output = match output {
         Ok(o) if o.status.success() => o,
@@ -182,19 +190,23 @@ pub(crate) fn assess_bead_specification(bd_path: &str, bead_id: &str, agent_bead
 
     if let Some(reason) = check_bead_specification(&bead) {
         let notes = format!("Flagged by Ralph: {}", reason);
-        let _ = Command::new(bd_path)
-            .args(["update", bead_id, "--notes", &notes])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        let _ = crate::bd_lock::with_lock(|| {
+            Command::new(bd_path)
+                .args(["update", bead_id, "--notes", &notes])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+        });
 
-        let _ = Command::new(bd_path)
-            .args(["human", bead_id])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        let _ = crate::bd_lock::with_lock(|| {
+            Command::new(bd_path)
+                .args(["human", bead_id])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+        });
 
         reset_bead_to_open(bd_path, bead_id);
         release_hook(bd_path, agent_bead_id);
@@ -208,17 +220,19 @@ pub(crate) fn assess_bead_specification(bd_path: &str, bead_id: &str, agent_bead
 
 /// Release the hook on this agent (clear the hook state dimension).
 pub fn release_hook(bd_path: &str, agent_bead_id: &str) {
-    let result = Command::new(bd_path)
-        .args([
-            "set-state",
-            agent_bead_id,
-            "hook=none",
-            "--reason=work complete",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args([
+                "set-state",
+                agent_bead_id,
+                "hook=none",
+                "--reason=work complete",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     match result {
         Ok(o) if o.status.success() => {
@@ -245,20 +259,21 @@ pub fn release_bead(bd_path: &str, agent_bead_id: &str, bead_id: &str) {
 /// Skips the reset if the bead was already closed (e.g. by Claude during the iteration).
 fn reset_bead_to_open(bd_path: &str, bead_id: &str) {
     // Check current status — don't reopen beads that Claude already closed
-    if let Ok(o) = Command::new(bd_path)
-        .args(["show", bead_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .and_then(|o| {
-            if o.status.success() {
-                Ok(o)
-            } else {
-                Err(std::io::ErrorKind::Other.into())
-            }
-        })
-    {
+    let show = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["show", bead_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
+    if let Ok(o) = show.and_then(|o| {
+        if o.status.success() {
+            Ok(o)
+        } else {
+            Err(std::io::ErrorKind::Other.into())
+        }
+    }) {
         let stdout = String::from_utf8_lossy(&o.stdout);
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
             let status = val
@@ -274,12 +289,14 @@ fn reset_bead_to_open(bd_path: &str, bead_id: &str) {
         }
     }
 
-    let result = Command::new(bd_path)
-        .args(["update", bead_id, "--status=open", "--assignee="])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["update", bead_id, "--status=open", "--assignee="])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     match result {
         Ok(o) if o.status.success() => {
@@ -316,12 +333,14 @@ pub fn cleanup(bd_path: &str, agent_bead_id: &str, worktree_name: &str) {
 
 /// Close an agent bead (used during cleanup or when worktree creation fails).
 pub(crate) fn cleanup_agent_bead(bd_path: &str, agent_bead_id: &str) {
-    let result = Command::new(bd_path)
-        .args(["close", agent_bead_id, "--reason=ralph session ended"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .output();
+    let result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["close", agent_bead_id, "--reason=ralph session ended"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
 
     match result {
         Ok(o) if o.status.success() => {

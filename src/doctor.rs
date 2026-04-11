@@ -38,7 +38,7 @@ pub fn check_config(loaded: &LoadedConfig) -> CheckResult {
 /// Check that the Claude CLI binary works.
 pub fn check_claude(config: &Config) -> CheckResult {
     let path = config.claude_path();
-    match Command::new(&path).arg("--version").output() {
+    match crate::bd_lock::with_lock(|| Command::new(&path).arg("--version").output()) {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
             CheckResult::pass(format!("Claude CLI ({})", version.trim()))
@@ -53,7 +53,7 @@ pub fn check_claude(config: &Config) -> CheckResult {
 /// Check that the bd CLI binary works.
 pub fn check_bd(config: &Config) -> CheckResult {
     let path = &config.behavior.bd_path;
-    match Command::new(path).arg("--version").output() {
+    match crate::bd_lock::with_lock(|| Command::new(path).arg("--version").output()) {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
             CheckResult::pass(format!("Beads CLI ({})", version.trim()))
@@ -80,7 +80,7 @@ pub fn check_prompt(_config: &Config) -> CheckResult {
 /// Check that the Dolt server is running.
 pub fn check_dolt_status(config: &Config) -> CheckResult {
     let path = &config.behavior.bd_path;
-    match Command::new(path).args(["dolt", "status"]).output() {
+    match crate::bd_lock::with_lock(|| Command::new(path).args(["dolt", "status"]).output()) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.contains("server: running") {

@@ -192,23 +192,27 @@ impl DoltManager {
 
 /// Check if the Dolt server is running by calling `bd dolt status`.
 fn check_dolt_running(bd_path: &str) -> bool {
-    std::process::Command::new(bd_path)
-        .args(["dolt", "status"])
-        .output()
-        .map(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains("server: running")
-        })
-        .unwrap_or(false)
+    crate::bd_lock::with_lock(|| {
+        std::process::Command::new(bd_path)
+            .args(["dolt", "status"])
+            .output()
+    })
+    .map(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).contains("server: running")
+    })
+    .unwrap_or(false)
 }
 
 /// Run a `bd dolt` subcommand (start/stop) and return whether it succeeded.
 fn run_dolt_command(bd_path: &str, subcmd: &str) -> bool {
-    std::process::Command::new(bd_path)
-        .args(["dolt", subcmd])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    crate::bd_lock::with_lock(|| {
+        std::process::Command::new(bd_path)
+            .args(["dolt", subcmd])
+            .output()
+    })
+    .map(|output| output.status.success())
+    .unwrap_or(false)
 }
 
 pub const DOLT_LOG_TRUNCATE_THRESHOLD: u64 = 50 * 1024 * 1024;

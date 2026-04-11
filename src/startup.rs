@@ -40,12 +40,14 @@ pub(crate) fn merge_and_refresh_worktree(app: &mut App) -> bool {
             agent::complete_epic(&bd_path, &epic_id);
             app.workers[w].claimed_epic_id = None;
 
-            let _ = std::process::Command::new(&bd_path)
-                .args(["set-state", &agent_id, "epic=none"])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output();
+            let _ = crate::bd_lock::with_lock(|| {
+                std::process::Command::new(&bd_path)
+                    .args(["set-state", &agent_id, "epic=none"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+            });
         }
         agent::IterationAction::MergeOnly => {}
     }
@@ -99,12 +101,14 @@ pub(crate) fn ensure_worktree(app: &mut App) -> bool {
 
 /// Check if an epic has ready children.
 pub(crate) fn has_ready_children(bd_path: &str, epic_id: &str) -> bool {
-    let output = std::process::Command::new(bd_path)
-        .args(["ready", "--parent", epic_id, "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
+    let output = crate::bd_lock::with_lock(|| {
+        std::process::Command::new(bd_path)
+            .args(["ready", "--parent", epic_id, "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+    });
 
     match output {
         Ok(o) if o.status.success() => {
@@ -177,10 +181,10 @@ pub(crate) fn run_app(
     if app.board_config_error.is_none() {
         let bd_path = app.config.behavior.bd_path.clone();
         let column_defs = app.kanban_board_state.column_defs.clone();
+        app.kanban_board_state.begin_refresh();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = modals::fetch_board_data(&bd_path, &column_defs);
-            let _ = tx.send(result);
+            modals::stream_board_data(&bd_path, &column_defs, tx);
         });
         app.kanban_items_rx = Some(rx);
 

@@ -239,8 +239,9 @@ pub struct App {
     pub repo_path: String,
     /// State for the kanban board (primary view, always present).
     pub kanban_board_state: KanbanBoardState,
-    /// Receiver for background kanban board data (multiple bd commands).
-    pub kanban_items_rx: Option<Receiver<Result<crate::modals::KanbanBoardData, String>>>,
+    /// Receiver for background kanban board data — streams per-column updates
+    /// followed by a single `Finalized` message.
+    pub kanban_items_rx: Option<Receiver<crate::modals::KanbanFetchMsg>>,
     /// Receiver for background bd show --json result (bead detail drill-down).
     pub bead_detail_rx: Option<Receiver<Result<serde_json::Value, String>>>,
     /// Receiver for filesystem change events on .beads/ directory (kanban auto-refresh).

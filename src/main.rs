@@ -2,6 +2,7 @@
 
 mod agent;
 mod app;
+mod bd_lock;
 mod cli;
 mod config;
 mod db;

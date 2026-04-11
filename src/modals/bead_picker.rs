@@ -165,13 +165,15 @@ impl BeadPickerState {
 
 /// Fetch bead list data by running `bd list --json`.
 pub fn fetch_bead_picker_data(bd_path: &str) -> Result<Vec<BeadPickerItem>, String> {
-    let output = std::process::Command::new(bd_path)
-        .args(["list", "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("Failed to run bd list: {e}"))?;
+    let output = crate::bd_lock::with_lock(|| {
+        std::process::Command::new(bd_path)
+            .args(["list", "--json"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .map_err(|e| format!("Failed to run bd list: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -98,12 +98,14 @@ fn merge_and_refresh_bg(snapshot: &WorkerStartSnapshot, result: &mut WorkerStart
                 .push(format!("[Completing epic: {}]", epic_id));
             agent::complete_epic(bd_path, &epic_id);
             result.claimed_epic_id = None;
-            let _ = Command::new(bd_path)
-                .args(["set-state", &agent_id, "epic=none"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .output();
+            let _ = crate::bd_lock::with_lock(|| {
+                Command::new(bd_path)
+                    .args(["set-state", &agent_id, "epic=none"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .output()
+            });
         }
         agent::IterationAction::MergeOnly => {}
     }
