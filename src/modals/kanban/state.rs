@@ -608,8 +608,9 @@ impl KanbanBoardState {
             }
             self.preview_pending_id = Some(id);
             self.preview_cursor_moved = Some(Instant::now());
-            // Reset scroll when selecting a different bead
-            if let Some(ref mut detail) = self.preview_detail {
+            if let Some(ref mut detail) = self.preview_detail
+                && self.preview_pending_id.as_deref() != Some(&detail.id)
+            {
                 detail.scroll_offset = 0;
             }
         } else {
@@ -677,5 +678,69 @@ emoji = "✓"
         let bad_toml = "this is not valid TOML [[[";
         let result = toml::from_str::<BoardConfig>(bad_toml);
         assert!(result.is_err());
+    }
+
+    fn test_board_with_card(card_id: &str) -> KanbanBoardState {
+        let column_defs = vec![ColumnDef {
+            name: "Ready".to_string(),
+            sources: vec![SourceDef {
+                command: "test".to_string(),
+                emoji: "○".to_string(),
+            }],
+        }];
+        let mut state = KanbanBoardState::new_loading(column_defs);
+        state.columns[0] = vec![KanbanCard {
+            id: card_id.to_string(),
+            title: "Test Card".to_string(),
+            priority: 1,
+            blockers: vec![],
+            emoji: "○".to_string(),
+            is_epic: false,
+            is_error: false,
+            labels: vec![],
+            status: "open".to_string(),
+        }];
+        state
+    }
+
+    #[test]
+    fn schedule_preview_fetch_preserves_scroll_on_same_bead() {
+        let mut state = test_board_with_card("X");
+        let mut detail = BeadDetailState::new_loading("X".to_string());
+        detail.scroll_offset = 5;
+        state.preview_detail = Some(detail);
+        state.preview_bead_id = Some("X".to_string());
+        state.preview_pending_id = Some("X".to_string());
+
+        state.schedule_preview_fetch();
+
+        assert_eq!(state.preview_detail.unwrap().scroll_offset, 5);
+    }
+
+    #[test]
+    fn schedule_preview_fetch_resets_scroll_on_different_bead() {
+        let mut state = test_board_with_card("Y");
+        let mut detail = BeadDetailState::new_loading("X".to_string());
+        detail.scroll_offset = 5;
+        state.preview_detail = Some(detail);
+        state.preview_bead_id = Some("X".to_string());
+
+        state.schedule_preview_fetch();
+
+        assert_eq!(state.preview_detail.unwrap().scroll_offset, 0);
+    }
+
+    #[test]
+    fn schedule_preview_fetch_preserves_scroll_when_pending_fetch_for_same_bead() {
+        let mut state = test_board_with_card("X");
+        let mut detail = BeadDetailState::new_loading("X".to_string());
+        detail.scroll_offset = 5;
+        state.preview_detail = Some(detail);
+        state.preview_bead_id = Some("X".to_string());
+        state.preview_pending_id = Some("X".to_string());
+
+        state.schedule_preview_fetch();
+
+        assert_eq!(state.preview_detail.unwrap().scroll_offset, 5);
     }
 }
