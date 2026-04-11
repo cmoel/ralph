@@ -233,6 +233,17 @@ impl App {
 
         match rx.try_recv() {
             Ok(result) => {
+                // Absorb transient external-lock contention: an external bd
+                // process (e.g. `bd list` from another shell) held the
+                // embedded-Dolt file lock while we tried to fetch the bead
+                // detail. Keep the existing preview visible and let the next
+                // cursor movement or refresh retry — much better UX than
+                // flashing bd's JSON error blob into the preview pane.
+                if let Err(ref e) = result
+                    && crate::bd_lock::is_transient_lock_error(e.as_bytes())
+                {
+                    return;
+                }
                 self.dirty = true;
                 if let Some(ref mut detail) = self.kanban_board_state.preview_detail {
                     detail.populate(result);

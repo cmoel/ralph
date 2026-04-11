@@ -51,6 +51,25 @@ where
     f()
 }
 
+/// Returns true if a bd subprocess's stderr payload indicates the embedded
+/// Dolt backend's single-writer lock was held by an *external* process (e.g.
+/// `bd list` fired from another shell while ralph was mid-fetch).
+///
+/// The internal [`acquire`]/[`with_lock`] mutex serializes ralph's own bd
+/// calls, but it can't arbitrate against external processes — the OS-level
+/// embedded-Dolt file lock does that, and it arbitrates by failing one side
+/// outright. Call sites that would otherwise surface this error to the user
+/// (the preview pane, board pipeline error cards) should check this predicate
+/// and treat a match as transient: keep the previous state visible, skip
+/// this update, and let the next tick retry.
+pub fn is_transient_lock_error(stderr: &[u8]) -> bool {
+    // bd emits this phrase in a JSON error blob on stderr when the
+    // embedded-Dolt file lock is contended. The wording has been stable
+    // across the bd v1.0.x line.
+    const NEEDLE: &[u8] = b"another process holds the exclusive lock";
+    stderr.windows(NEEDLE.len()).any(|w| w == NEEDLE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,6 +78,30 @@ mod tests {
     fn with_lock_runs_closure_and_returns_value() {
         assert_eq!(with_lock(|| 42), 42);
         assert_eq!(with_lock(|| "hello".to_string()), "hello");
+    }
+
+    #[test]
+    fn is_transient_lock_error_matches_bd_v1_blob() {
+        let stderr = br#"{  "error": "failed to open database: embeddeddolt: another process holds the exclusive lock on /Users/cmoel/Code/personal/ralph/.beads/embeddeddolt; the embedded backend supports only one writer at a time - use the dolt server backend for concurrent access"}"#;
+        assert!(is_transient_lock_error(stderr));
+    }
+
+    #[test]
+    fn is_transient_lock_error_rejects_unrelated_errors() {
+        assert!(!is_transient_lock_error(b""));
+        assert!(!is_transient_lock_error(b"Error: bead not found"));
+        assert!(!is_transient_lock_error(b"permission denied"));
+        assert!(!is_transient_lock_error(
+            b"failed to parse: unexpected token"
+        ));
+    }
+
+    #[test]
+    fn is_transient_lock_error_matches_substring_anywhere() {
+        // The phrase might be embedded in a larger log or wrapped error.
+        assert!(is_transient_lock_error(
+            b"WARN: another process holds the exclusive lock (retrying...)"
+        ));
     }
 
     /// Grep-based guardrail: every `Command::new(...)` site under `src/` must

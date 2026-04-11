@@ -112,6 +112,15 @@ pub fn stream_board_data(
                     col_items.extend(items);
                 }
                 Err(err) => {
+                    // Absorb transient external-lock contention: an external
+                    // bd process held the embedded-Dolt file lock while this
+                    // pipeline was running. Skip this source for the current
+                    // refresh rather than landing a red error card — the
+                    // next signature poll or manual `r` will retry and the
+                    // column fills in correctly.
+                    if crate::bd_lock::is_transient_lock_error(err.as_bytes()) {
+                        continue;
+                    }
                     col_cards.push(KanbanCard {
                         id: String::new(),
                         title: format!("Error: {err}"),
