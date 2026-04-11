@@ -192,6 +192,7 @@ impl App {
             let bd_path = self.config.behavior.bd_path.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
+                crate::perf::record_subprocess_spawn();
                 let output = std::process::Command::new(&bd_path)
                     .args(["show", &pending_id, "--json"])
                     .stdin(std::process::Stdio::null())
@@ -256,6 +257,7 @@ impl App {
             let bead_id = detail.id.clone();
             let (tx, rx) = mpsc::channel();
             std::thread::spawn(move || {
+                crate::perf::record_subprocess_spawn();
                 let output = std::process::Command::new(&bd_path)
                     .args(["show", &bead_id, "--json"])
                     .stdin(std::process::Stdio::null())

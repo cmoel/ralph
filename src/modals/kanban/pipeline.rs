@@ -47,6 +47,7 @@ fn parse_card(item: &serde_json::Value, emoji: &str) -> Option<KanbanCard> {
 }
 
 fn run_shell_pipeline(command: &str, bd_path: &str) -> Result<Vec<serde_json::Value>, String> {
+    crate::perf::record_subprocess_spawn();
     let mut cmd = std::process::Command::new("sh");
     cmd.args(["-c", command])
         .stdin(std::process::Stdio::null())
@@ -164,6 +165,7 @@ pub fn fetch_board_data(
     // Also fetch stats in parallel
     let p = bd_path.to_string();
     let h_stats = thread::spawn(move || {
+        crate::perf::record_subprocess_spawn();
         let output = std::process::Command::new(&p)
             .args(["stats", "--json"])
             .stdin(std::process::Stdio::null())

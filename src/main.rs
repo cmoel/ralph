@@ -13,6 +13,7 @@ mod execution;
 mod logging;
 mod modals;
 mod output;
+mod perf;
 mod startup;
 mod templates;
 mod tool_history;

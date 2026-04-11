@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
@@ -13,11 +13,16 @@ use crate::modals::{
     handle_tool_allow_modal_input, handle_workers_stream_input,
 };
 use crate::output;
+use crate::perf::{self, PerfReporter};
 use crate::startup::{ensure_worktree, merge_and_refresh_worktree};
 use crate::ui::draw_ui;
 
 pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> Result<()> {
+    let mut reporter = PerfReporter::new();
     loop {
+        perf::record_loop_iter();
+        reporter.maybe_flush();
+
         // Poll for output from child process
         output::poll_output(app);
 
@@ -74,7 +79,9 @@ pub(crate) fn run_event_loop(app: &mut App, terminal: &mut DefaultTerminal) -> R
 
         // Draw UI only when state changed
         if app.dirty {
+            let draw_start = Instant::now();
             terminal.draw(|f| draw_ui(f, app))?;
+            perf::record_redraw(draw_start.elapsed());
             app.dirty = false;
         }
 

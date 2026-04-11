@@ -54,6 +54,7 @@ impl BeadsWorkSource {
     /// Run a `bd` command with the given args, returning stdout on success.
     /// Kills the process if it exceeds the timeout.
     fn run_bd(&self, args: &[&str]) -> Result<String, String> {
+        crate::perf::record_subprocess_spawn();
         let mut child = match Command::new(&self.bd_path)
             .args(args)
             .stdin(std::process::Stdio::null())

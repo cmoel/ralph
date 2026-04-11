@@ -86,6 +86,7 @@ impl DoltManager {
         let (tx, rx) = mpsc::channel();
         let bd_path = bd_path.to_string();
         std::thread::spawn(move || {
+            crate::perf::record_subprocess_spawn();
             let _ = tx.send(check_dolt_running(&bd_path));
         });
         self.status_rx = Some(rx);
