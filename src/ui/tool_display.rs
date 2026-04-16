@@ -43,7 +43,11 @@ pub fn truncate_str(s: &str, max_len: usize) -> String {
     if single_line.len() <= max_len {
         single_line
     } else {
-        format!("{}...", &single_line[..max_len.saturating_sub(3)])
+        let mut end = max_len.saturating_sub(3);
+        while end > 0 && !single_line.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &single_line[..end])
     }
 }
 
@@ -480,6 +484,42 @@ mod tests {
         assert_eq!(truncate_str("hello", 2), "...");
         assert_eq!(truncate_str("hello", 3), "...");
         assert_eq!(truncate_str("hello", 4), "h...");
+    }
+
+    #[test]
+    fn test_truncate_str_em_dash_at_panic_boundary() {
+        // Original repro: byte 47 lands mid-codepoint of em dash → panic before fix.
+        let input = "bd update pitchy-5bo --title=\"[epic] Setlists — core\"";
+        let result = truncate_str(input, 50);
+        assert!(result.is_char_boundary(result.len()));
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_str_emoji_near_boundary() {
+        // 4-byte emoji straddling the truncation point.
+        let input = "abcdefghij🎉klmnop";
+        let result = truncate_str(input, 14);
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_str_cjk_near_boundary() {
+        // 3-byte CJK characters at every position past max_len-3.
+        let input = "abc日本語テキスト";
+        let result = truncate_str(input, 8);
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_str_multibyte_on_char_boundary() {
+        // max_len-3 lands exactly on a char boundary — no walk-back needed.
+        // "abc—" is 6 bytes (3 ASCII + 3-byte em dash). max_len=9 → end=6, on boundary.
+        let input = "abc—defghij";
+        let result = truncate_str(input, 9);
+        assert_eq!(result, "abc—...");
     }
 
     // format_tool_result tests
