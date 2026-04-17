@@ -9,3 +9,5 @@ IMPLEMENTATION_PLAN.md
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
 .beads/issues.jsonl
+# bd worktree+redirect bug stages this at the repo root; ignore both paths
+/issues.jsonl

@@ -147,11 +147,8 @@ pub fn handle_kanban_input(app: &mut App, key_code: KeyCode, modifiers: KeyModif
         KeyCode::Esc => {
             // Board is the primary view — Esc is a no-op
         }
-        KeyCode::Enter => {
-            // Move focus to preview pane if there's a selected card
-            if state.selected_card().is_some() && state.preview_detail.is_some() {
-                state.focus = BoardFocus::Preview;
-            }
+        KeyCode::Enter if state.selected_card().is_some() && state.preview_detail.is_some() => {
+            state.focus = BoardFocus::Preview;
         }
         KeyCode::Char('X') => {
             if let Some(card) = state.selected_card() {
