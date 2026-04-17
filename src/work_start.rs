@@ -212,14 +212,20 @@ fn claim_before_start_bg(snapshot: &WorkerStartSnapshot, result: &mut WorkerStar
         }
     }
 
-    match agent::select_and_claim_epic(bd_path, &agent_id) {
+    match agent::select_and_claim_work(bd_path, &agent_id) {
         Some(claim) => {
-            result.output_lines.push(format!(
-                "[Claimed epic: {} → child: {} {}]",
-                claim.epic_id, claim.child_bead_id, claim.child_title
-            ));
-            result.claimed_epic_id = Some(claim.epic_id);
-            result.hooked_bead_id = Some(claim.child_bead_id);
+            match &claim.epic_id {
+                Some(epic_id) => result.output_lines.push(format!(
+                    "[Claimed epic: {} → child: {} {}]",
+                    epic_id, claim.bead_id, claim.bead_title
+                )),
+                None => result.output_lines.push(format!(
+                    "[Claimed standalone: {} {}]",
+                    claim.bead_id, claim.bead_title
+                )),
+            }
+            result.claimed_epic_id = claim.epic_id;
+            result.hooked_bead_id = Some(claim.bead_id);
         }
         None => {
             result
@@ -234,12 +240,13 @@ fn ensure_worktree_bg(snapshot: &WorkerStartSnapshot, result: &mut WorkerStartRe
         return true;
     }
 
-    let worktree_name = if let Some(ref epic_id) = result.claimed_epic_id {
-        epic_id.clone()
-    } else if let Some(ref agent_id) = snapshot.agent_bead_id {
-        agent_id.clone()
-    } else {
-        return true;
+    let worktree_name = match agent::resolve_worktree_name(
+        result.claimed_epic_id.as_deref(),
+        result.hooked_bead_id.as_deref(),
+        snapshot.agent_bead_id.as_deref(),
+    ) {
+        Some(name) => name,
+        None => return true,
     };
 
     let bd_path = &snapshot.bd_path;

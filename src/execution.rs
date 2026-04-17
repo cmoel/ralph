@@ -144,15 +144,21 @@ pub fn claim_before_start(app: &mut App) {
         }
     }
 
-    // Select a new epic and claim its first child
-    match agent::select_and_claim_epic(&bd_path, &agent_id) {
+    // Select a new work item (standalone bead or epic's first child)
+    match agent::select_and_claim_work(&bd_path, &agent_id) {
         Some(claim) => {
-            app.add_text_line(format!(
-                "[Claimed epic: {} → child: {} {}]",
-                claim.epic_id, claim.child_bead_id, claim.child_title
-            ));
-            app.workers[w].claimed_epic_id = Some(claim.epic_id);
-            app.workers[w].hooked_bead_id = Some(claim.child_bead_id);
+            match &claim.epic_id {
+                Some(epic_id) => app.add_text_line(format!(
+                    "[Claimed epic: {} → child: {} {}]",
+                    epic_id, claim.bead_id, claim.bead_title
+                )),
+                None => app.add_text_line(format!(
+                    "[Claimed standalone: {} {}]",
+                    claim.bead_id, claim.bead_title
+                )),
+            }
+            app.workers[w].claimed_epic_id = claim.epic_id;
+            app.workers[w].hooked_bead_id = Some(claim.bead_id);
         }
         None => {
             app.add_text_line("[No beads available to claim — starting claimless]".to_string());

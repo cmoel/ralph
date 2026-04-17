@@ -77,12 +77,13 @@ pub(crate) fn ensure_worktree(app: &mut App) -> bool {
         return true;
     }
 
-    let worktree_name = if let Some(ref epic_id) = app.workers[w].claimed_epic_id {
-        epic_id.clone()
-    } else if let Some(ref agent_id) = app.workers[w].agent_bead_id {
-        agent_id.clone()
-    } else {
-        return true;
+    let worktree_name = match agent::resolve_worktree_name(
+        app.workers[w].claimed_epic_id.as_deref(),
+        app.workers[w].hooked_bead_id.as_deref(),
+        app.workers[w].agent_bead_id.as_deref(),
+    ) {
+        Some(name) => name,
+        None => return true,
     };
 
     let bd_path = app.config.behavior.bd_path.clone();

@@ -5,18 +5,25 @@ use std::process::Command;
 
 use tracing::{info, warn};
 
-/// Result of selecting and claiming an epic.
-pub struct EpicClaim {
-    pub epic_id: String,
-    pub child_bead_id: String,
-    pub child_title: String,
+/// Result of selecting and claiming work — either a standalone bead or a child of an epic.
+pub struct Claim {
+    pub bead_id: String,
+    pub bead_title: String,
+    /// None when this is a standalone bead; Some(epic_id) when it's a child of an epic.
+    pub epic_id: Option<String>,
 }
 
-/// Scored epic for selection ranking.
-pub(crate) struct ScoredEpic {
-    pub epic_id: String,
+/// Scored candidate for selection ranking. Can be a standalone bead or an epic.
+pub(crate) struct ScoredCandidate {
+    pub kind: CandidateKind,
     pub priority: i64,
-    pub ready_children: usize,
+    pub ready_count: usize,
+}
+
+#[derive(Clone)]
+pub(crate) enum CandidateKind {
+    Standalone { bead_id: String, bead_title: String },
+    Epic { epic_id: String },
 }
 
 // --- Pure functions (testable, no I/O) ---
@@ -73,12 +80,22 @@ pub fn score_epic(priority: i64, ready_children: usize) -> i64 {
     priority * 100 - ready_children as i64 * 10
 }
 
-/// Select the best epic from scored candidates. Returns the epic ID with lowest score.
-pub fn select_best_epic(scored: &[ScoredEpic]) -> Option<&str> {
-    scored
-        .iter()
-        .min_by_key(|e| score_epic(e.priority, e.ready_children))
-        .map(|e| e.epic_id.as_str())
+/// Select the best work candidate. Returns the candidate with lowest score.
+pub(crate) fn select_best_candidate(candidates: Vec<ScoredCandidate>) -> Option<ScoredCandidate> {
+    candidates
+        .into_iter()
+        .min_by_key(|c| score_epic(c.priority, c.ready_count))
+}
+
+/// Resolve the worktree name for a running worker.
+/// Prefers epic_id (for children of epics), falls back to bead_id (for standalone beads),
+/// then to agent_id (for claimless admin work).
+pub fn resolve_worktree_name(
+    epic_id: Option<&str>,
+    bead_id: Option<&str>,
+    agent_id: Option<&str>,
+) -> Option<String> {
+    epic_id.or(bead_id).or(agent_id).map(String::from)
 }
 
 /// What to do between iterations when an epic is active.
@@ -123,10 +140,10 @@ If the changes are unclear or problematic, escalate via `bd human <bead>` with a
     )
 }
 
-// --- I/O functions for epic-scoped workflow ---
+// --- I/O functions for work selection ---
 
-/// Select and claim the best epic, then claim its first child bead.
-pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicClaim> {
+/// Select and claim the best available work — either a standalone bead or an epic's first child.
+pub fn select_and_claim_work(bd_path: &str, agent_bead_id: &str) -> Option<Claim> {
     let output = crate::bd_lock::with_lock(|| {
         Command::new(bd_path)
             .args(["ready", "--json"])
@@ -139,7 +156,7 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(stderr = %stderr.trim(), "epic_ready_list_failed");
+        warn!(stderr = %stderr.trim(), "work_ready_list_failed");
         return None;
     }
 
@@ -148,61 +165,77 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
     let claimable = filter_claimable_beads(&items);
 
     if claimable.is_empty() {
-        info!("no_claimable_beads_for_epic_selection");
+        info!("no_claimable_beads_for_work_selection");
         return None;
     }
 
-    let mut groups = group_beads_by_parent(&claimable);
+    let groups = group_beads_by_parent(&claimable);
 
-    // Wrap standalone beads in auto-generated epics
-    if let Some(standalone) = groups.remove(&None) {
-        for bead in standalone {
-            let bead_id = match bead.get("id").and_then(|v| v.as_str()) {
-                Some(id) => id,
-                None => continue,
-            };
-            let bead_title = bead.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let bead_priority = bead.get("priority").and_then(|v| v.as_i64()).unwrap_or(2);
-
-            if let Some(epic_id) = wrap_standalone_bead(bd_path, bead_id, bead_title, bead_priority)
-            {
-                groups.entry(Some(epic_id)).or_default().push(bead);
-            } else {
-                warn!(bead_id = %bead_id, "standalone_wrap_failed_skipping");
+    // Build candidates: each standalone bead is its own candidate; each parent epic is one candidate.
+    let mut candidates: Vec<ScoredCandidate> = Vec::new();
+    for (parent_id, children) in &groups {
+        match parent_id {
+            None => {
+                for bead in children {
+                    let Some(bead_id) = bead.get("id").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let bead_title = bead.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let priority = bead.get("priority").and_then(|v| v.as_i64()).unwrap_or(2);
+                    candidates.push(ScoredCandidate {
+                        kind: CandidateKind::Standalone {
+                            bead_id: bead_id.to_string(),
+                            bead_title: bead_title.to_string(),
+                        },
+                        priority,
+                        ready_count: 1,
+                    });
+                }
+            }
+            Some(epic_id) => {
+                if children.is_empty() {
+                    continue;
+                }
+                let priority = get_bead_priority(bd_path, epic_id);
+                candidates.push(ScoredCandidate {
+                    kind: CandidateKind::Epic {
+                        epic_id: epic_id.clone(),
+                    },
+                    priority,
+                    ready_count: children.len(),
+                });
             }
         }
     }
 
-    // Score epics by priority and ready children count, skipping stuck epics
-    let scored: Vec<ScoredEpic> = groups
-        .iter()
-        .filter_map(
-            |(parent_id, children): (&Option<String>, &Vec<&serde_json::Value>)| {
-                let epic_id = parent_id.as_ref()?;
-                if children.is_empty() {
-                    return None;
-                }
-                let priority = get_bead_priority(bd_path, epic_id);
-                Some(ScoredEpic {
-                    epic_id: epic_id.clone(),
-                    priority,
-                    ready_children: children.len(),
-                })
-            },
-        )
-        .collect();
-
-    if scored.is_empty() {
-        info!("no_epics_to_score");
+    if candidates.is_empty() {
+        info!("no_work_candidates_to_score");
         return None;
     }
 
-    let best_epic_id = select_best_epic(&scored)?.to_string();
+    let best = select_best_candidate(candidates)?;
 
-    // Claim the epic
+    match best.kind {
+        CandidateKind::Standalone {
+            bead_id,
+            bead_title,
+        } => claim_standalone_bead(bd_path, agent_bead_id, bead_id, bead_title),
+        CandidateKind::Epic { epic_id } => {
+            claim_epic_and_first_child(bd_path, agent_bead_id, epic_id)
+        }
+    }
+}
+
+/// Atomically claim a standalone bead, record the hook, and assess its specification.
+fn claim_standalone_bead(
+    bd_path: &str,
+    agent_bead_id: &str,
+    bead_id: String,
+    bead_title: String,
+) -> Option<Claim> {
     let claim_result = crate::bd_lock::with_lock(|| {
         Command::new(bd_path)
-            .args(["update", &best_epic_id, "--claim"])
+            .args(["update", &bead_id, "--claim"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
@@ -211,21 +244,71 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
 
     match claim_result {
         Ok(o) if o.status.success() => {
-            info!(epic_id = %best_epic_id, "epic_claimed");
+            let hook_arg = format!("hook={}", bead_id);
+            let _ = crate::bd_lock::with_lock(|| {
+                Command::new(bd_path)
+                    .args(["set-state", agent_bead_id, &hook_arg])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+            });
+
+            if !super::lifecycle::assess_bead_specification(bd_path, &bead_id, agent_bead_id) {
+                info!(bead_id = %bead_id, "standalone_rejected_assessment");
+                return None;
+            }
+
+            info!(bead_id = %bead_id, title = %bead_title, "standalone_claimed");
+            Some(Claim {
+                bead_id,
+                bead_title,
+                epic_id: None,
+            })
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            info!(epic_id = %best_epic_id, stderr = %stderr.trim(), "epic_claim_failed");
+            info!(bead_id = %bead_id, stderr = %stderr.trim(), "standalone_claim_failed");
+            None
+        }
+        Err(e) => {
+            warn!(bead_id = %bead_id, error = %e, "standalone_claim_command_failed");
+            None
+        }
+    }
+}
+
+/// Claim an epic, record it on agent state, and claim its first ready child.
+fn claim_epic_and_first_child(
+    bd_path: &str,
+    agent_bead_id: &str,
+    epic_id: String,
+) -> Option<Claim> {
+    let claim_result = crate::bd_lock::with_lock(|| {
+        Command::new(bd_path)
+            .args(["update", &epic_id, "--claim"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    });
+
+    match claim_result {
+        Ok(o) if o.status.success() => {
+            info!(epic_id = %epic_id, "epic_claimed");
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            info!(epic_id = %epic_id, stderr = %stderr.trim(), "epic_claim_failed");
             return None;
         }
         Err(e) => {
-            warn!(epic_id = %best_epic_id, error = %e, "epic_claim_command_failed");
+            warn!(epic_id = %epic_id, error = %e, "epic_claim_command_failed");
             return None;
         }
     }
 
-    // Record epic on agent state
-    let epic_arg = format!("epic={}", best_epic_id);
+    let epic_arg = format!("epic={}", epic_id);
     let _ = crate::bd_lock::with_lock(|| {
         Command::new(bd_path)
             .args(["set-state", agent_bead_id, &epic_arg])
@@ -235,99 +318,22 @@ pub fn select_and_claim_epic(bd_path: &str, agent_bead_id: &str) -> Option<EpicC
             .output()
     });
 
-    // Claim first child within the epic
-    match claim_next_child(bd_path, agent_bead_id, &best_epic_id) {
-        Some((child_id, child_title)) => Some(EpicClaim {
-            epic_id: best_epic_id,
-            child_bead_id: child_id,
-            child_title,
+    match claim_next_child(bd_path, agent_bead_id, &epic_id) {
+        Some((child_id, child_title)) => Some(Claim {
+            bead_id: child_id,
+            bead_title: child_title,
+            epic_id: Some(epic_id),
         }),
         None => {
-            warn!(epic_id = %best_epic_id, "epic_claimed_but_no_children_ready");
-            // Release the epic so another agent can pick it up
+            warn!(epic_id = %epic_id, "epic_claimed_but_no_children_ready");
             let _ = crate::bd_lock::with_lock(|| {
                 Command::new(bd_path)
-                    .args(["update", &best_epic_id, "--status=open", "--assignee="])
+                    .args(["update", &epic_id, "--status=open", "--assignee="])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .output()
             });
-            None
-        }
-    }
-}
-
-/// Build the `bd create` args for wrapping a standalone bead in an epic.
-fn wrap_create_args(title: &str, priority: i64) -> Vec<String> {
-    vec![
-        "create".into(),
-        "--type=epic".into(),
-        format!("--title={}", title),
-        format!("--priority={}", priority),
-        "--json".into(),
-    ]
-}
-
-/// Build the `bd update` args for reparenting a bead under an epic.
-fn wrap_reparent_args(bead_id: &str, epic_id: &str) -> Vec<String> {
-    vec![
-        "update".into(),
-        bead_id.into(),
-        format!("--parent={}", epic_id),
-    ]
-}
-
-/// Create a wrapper epic for a standalone bead, reparenting it.
-fn wrap_standalone_bead(
-    bd_path: &str,
-    bead_id: &str,
-    bead_title: &str,
-    bead_priority: i64,
-) -> Option<String> {
-    let create_args = wrap_create_args(bead_title, bead_priority);
-    let output = crate::bd_lock::with_lock(|| {
-        Command::new(bd_path)
-            .args(&create_args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-    })
-    .ok()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(bead_id = %bead_id, stderr = %stderr.trim(), "wrap_epic_create_failed");
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let epic_id = super::lifecycle::parse_bead_id(&stdout)?;
-
-    // Reparent the standalone bead under the new epic
-    let reparent_args = wrap_reparent_args(bead_id, &epic_id);
-    let result = crate::bd_lock::with_lock(|| {
-        Command::new(bd_path)
-            .args(&reparent_args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .output()
-    });
-
-    match result {
-        Ok(o) if o.status.success() => {
-            info!(bead_id = %bead_id, epic_id = %epic_id, "standalone_bead_wrapped");
-            Some(epic_id)
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            warn!(bead_id = %bead_id, stderr = %stderr.trim(), "wrap_reparent_failed");
-            None
-        }
-        Err(e) => {
-            warn!(bead_id = %bead_id, error = %e, "wrap_reparent_command_failed");
             None
         }
     }
@@ -593,29 +599,6 @@ mod tests {
         assert_eq!(ids, vec!["b2", "b3"]);
     }
 
-    // --- Standalone bead wrapping command tests ---
-
-    #[test]
-    fn wrap_create_args_produces_epic_create_command() {
-        let args = wrap_create_args("Fix login bug", 1);
-        assert_eq!(
-            args,
-            vec![
-                "create",
-                "--type=epic",
-                "--title=Fix login bug",
-                "--priority=1",
-                "--json"
-            ]
-        );
-    }
-
-    #[test]
-    fn wrap_reparent_args_produces_update_parent_command() {
-        let args = wrap_reparent_args("beads-abc", "beads-xyz");
-        assert_eq!(args, vec!["update", "beads-abc", "--parent=beads-xyz"]);
-    }
-
     #[test]
     fn score_epic_lower_priority_wins() {
         assert!(score_epic(0, 1) < score_epic(2, 1));
@@ -627,31 +610,96 @@ mod tests {
     }
 
     #[test]
-    fn select_best_epic_picks_lowest_score() {
-        let scored = vec![
-            ScoredEpic {
-                epic_id: "epic-a".into(),
+    fn select_best_candidate_picks_lowest_score() {
+        let candidates = vec![
+            ScoredCandidate {
+                kind: CandidateKind::Epic {
+                    epic_id: "epic-a".into(),
+                },
                 priority: 2,
-                ready_children: 3,
+                ready_count: 3,
             },
-            ScoredEpic {
-                epic_id: "epic-b".into(),
+            ScoredCandidate {
+                kind: CandidateKind::Epic {
+                    epic_id: "epic-b".into(),
+                },
                 priority: 0,
-                ready_children: 1,
+                ready_count: 1,
             },
-            ScoredEpic {
-                epic_id: "epic-c".into(),
+            ScoredCandidate {
+                kind: CandidateKind::Standalone {
+                    bead_id: "bead-c".into(),
+                    bead_title: "c".into(),
+                },
                 priority: 1,
-                ready_children: 2,
+                ready_count: 1,
             },
         ];
-        assert_eq!(select_best_epic(&scored), Some("epic-b"));
+        let best = select_best_candidate(candidates).unwrap();
+        match best.kind {
+            CandidateKind::Epic { epic_id } => assert_eq!(epic_id, "epic-b"),
+            CandidateKind::Standalone { .. } => panic!("expected Epic"),
+        }
     }
 
     #[test]
-    fn select_best_epic_returns_none_for_empty() {
-        let scored: Vec<ScoredEpic> = vec![];
-        assert_eq!(select_best_epic(&scored), None);
+    fn select_best_candidate_prefers_standalone_over_epic_when_higher_priority() {
+        let candidates = vec![
+            ScoredCandidate {
+                kind: CandidateKind::Epic {
+                    epic_id: "epic-a".into(),
+                },
+                priority: 2,
+                ready_count: 3,
+            },
+            ScoredCandidate {
+                kind: CandidateKind::Standalone {
+                    bead_id: "bead-b".into(),
+                    bead_title: "b".into(),
+                },
+                priority: 0,
+                ready_count: 1,
+            },
+        ];
+        let best = select_best_candidate(candidates).unwrap();
+        match best.kind {
+            CandidateKind::Standalone { bead_id, .. } => assert_eq!(bead_id, "bead-b"),
+            CandidateKind::Epic { .. } => panic!("expected Standalone"),
+        }
+    }
+
+    #[test]
+    fn select_best_candidate_returns_none_for_empty() {
+        assert!(select_best_candidate(Vec::new()).is_none());
+    }
+
+    #[test]
+    fn resolve_worktree_name_prefers_epic() {
+        assert_eq!(
+            resolve_worktree_name(Some("epic-1"), Some("bead-1"), Some("agent-1")),
+            Some("epic-1".into())
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_name_falls_back_to_bead_id_for_standalone() {
+        assert_eq!(
+            resolve_worktree_name(None, Some("bead-1"), Some("agent-1")),
+            Some("bead-1".into())
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_name_falls_back_to_agent_id_for_claimless() {
+        assert_eq!(
+            resolve_worktree_name(None, None, Some("agent-1")),
+            Some("agent-1".into())
+        );
+    }
+
+    #[test]
+    fn resolve_worktree_name_returns_none_when_nothing_known() {
+        assert_eq!(resolve_worktree_name(None, None, None), None);
     }
 
     #[test]

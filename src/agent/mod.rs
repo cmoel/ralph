@@ -7,7 +7,7 @@ mod worktree;
 
 pub use epic::{
     IterationAction, build_dirty_worktree_context, check_worktree_dirty, claim_next_child,
-    complete_epic, decide_iteration_action, select_and_claim_epic,
+    complete_epic, decide_iteration_action, resolve_worktree_name, select_and_claim_work,
 };
 pub use lifecycle::{cleanup, register, release_bead, start_heartbeat};
 pub use stale::{ResumeResult, find_stale_agents, release_stale_bead, resume_stale_bead};
