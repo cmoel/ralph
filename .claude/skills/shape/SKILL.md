@@ -199,10 +199,14 @@ EOF
 )" --priority=2
 ```
 
-After creating each child, flag for human if it still needs another shaping pass:
+After creating each child, **explicitly set its `human` label**. Children inherit labels from `--parent` by default — if the parent had `human` (typical during shaping), every fresh child does too. "I didn't add it" does NOT mean "it isn't there."
 
 ```bash
+# Still needs another shaping pass:
 bd update <id> --add-label=human
+
+# Fully shaped, ready for Ralph Loop (must remove inherited label):
+bd update <id> --remove-label=human
 ```
 
 ### Readiness
@@ -211,6 +215,7 @@ bd update <id> --add-label=human
 - Unflag items from human (`bd update <id> --remove-label=human`) when they're ready for the Ralph Loop
 - Set appropriate priority, type, and any other relevant metadata
 - Set dependencies between child beads when order matters: `bd dep add <child> <depends-on>`
+- **Before ending the session, audit final label state:** run `bd list --label=human` and confirm every fully-shaped item you produced is *not* in the list. Inherited labels bite silently. This is the final cut of the sieve.
 
 ### If `bd` commands fail
 
