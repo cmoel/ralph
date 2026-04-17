@@ -284,6 +284,7 @@ pub fn create_or_reuse_worktree(bd_path: &str, worktree_name: &str) -> Option<(S
     // Check if worktree already exists — reuse it
     if worktree_path.exists() {
         symlink_settings_local(&worktree_path);
+        ensure_beads_redirect(&worktree_path);
         info!(
             worktree_name = %worktree_name,
             worktree_path = %worktree_path.display(),
@@ -317,6 +318,7 @@ pub fn create_or_reuse_worktree(bd_path: &str, worktree_name: &str) -> Option<(S
     }
 
     symlink_settings_local(&worktree_path);
+    ensure_beads_redirect(&worktree_path);
 
     info!(
         worktree_name = %worktree_name,
@@ -325,6 +327,32 @@ pub fn create_or_reuse_worktree(bd_path: &str, worktree_name: &str) -> Option<(S
     );
 
     Some((worktree_name.to_string(), worktree_path))
+}
+
+/// Write `<worktree>/.beads/redirect` pointing at the main repo's `.beads/`
+/// so bd commands inside the worktree use the shared database.
+///
+/// Why: the main repo tracks `.beads/metadata.json`, `.beads/config.yaml`,
+/// and `.beads/hooks/*` in git. On branch checkout those files reappear in
+/// the worktree's `.beads/`, which fools bd into treating it as a valid
+/// local beads setup — it initializes a fresh `embeddeddolt/` there instead
+/// of discovering the main repo's database. The redirect file (documented
+/// in bd's `.beads/.gitignore`) forces bd to read from the given path.
+fn ensure_beads_redirect(worktree_path: &std::path::Path) {
+    let beads_dir = worktree_path.join(".beads");
+    if !beads_dir.exists() {
+        return;
+    }
+    let redirect = beads_dir.join("redirect");
+    if redirect.exists() {
+        return;
+    }
+    // Relative to <worktree>/.beads/, the main repo's .beads/ is at ../../.beads
+    // (worktrees live at <repo-root>/<worktree-name>/).
+    match std::fs::write(&redirect, "../../.beads") {
+        Ok(()) => info!(redirect = %redirect.display(), "beads_redirect_written"),
+        Err(e) => warn!(error = %e, redirect = %redirect.display(), "beads_redirect_write_failed"),
+    }
 }
 
 /// Get the repo root path.
