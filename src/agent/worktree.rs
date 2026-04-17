@@ -344,12 +344,16 @@ fn ensure_beads_redirect(worktree_path: &std::path::Path) {
         return;
     }
     let redirect = beads_dir.join("redirect");
-    if redirect.exists() {
+    // bd resolves the redirect path from the worktree root, not from .beads/.
+    // Worktrees live at <repo-root>/<worktree-name>/, so the main repo's
+    // .beads/ is at ../.beads from the worktree root.
+    let target = "../.beads";
+    if let Ok(existing) = std::fs::read_to_string(&redirect)
+        && existing == target
+    {
         return;
     }
-    // Relative to <worktree>/.beads/, the main repo's .beads/ is at ../../.beads
-    // (worktrees live at <repo-root>/<worktree-name>/).
-    match std::fs::write(&redirect, "../../.beads") {
+    match std::fs::write(&redirect, target) {
         Ok(()) => info!(redirect = %redirect.display(), "beads_redirect_written"),
         Err(e) => warn!(error = %e, redirect = %redirect.display(), "beads_redirect_write_failed"),
     }
@@ -445,5 +449,49 @@ fn symlink_settings_local(worktree_path: &std::path::Path) {
                 "settings_local_copy_failed"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn ensure_beads_redirect_writes_correct_path() {
+        let tmp = TempDir::new().unwrap();
+        let worktree = tmp.path().join("my-worktree");
+        let beads = worktree.join(".beads");
+        std::fs::create_dir_all(&beads).unwrap();
+
+        ensure_beads_redirect(&worktree);
+
+        let content = std::fs::read_to_string(beads.join("redirect")).unwrap();
+        assert_eq!(content, "../.beads");
+    }
+
+    #[test]
+    fn ensure_beads_redirect_heals_stale_content() {
+        let tmp = TempDir::new().unwrap();
+        let worktree = tmp.path().join("my-worktree");
+        let beads = worktree.join(".beads");
+        std::fs::create_dir_all(&beads).unwrap();
+        std::fs::write(beads.join("redirect"), "../../.beads").unwrap();
+
+        ensure_beads_redirect(&worktree);
+
+        let content = std::fs::read_to_string(beads.join("redirect")).unwrap();
+        assert_eq!(content, "../.beads");
+    }
+
+    #[test]
+    fn ensure_beads_redirect_noop_when_beads_dir_missing() {
+        let tmp = TempDir::new().unwrap();
+        let worktree = tmp.path().join("my-worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        ensure_beads_redirect(&worktree);
+
+        assert!(!worktree.join(".beads").exists());
     }
 }
